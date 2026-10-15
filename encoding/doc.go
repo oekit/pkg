@@ -1,6 +1,8 @@
 // Package encoding 提供常用的编码和哈希工具函数。
 //
-// 当前能力：JSON 编解码包装（MarshalJSON/UnmarshalJSON 等）、非加密哈希
+// 当前能力：JSON 编解码包装（MarshalJSON/UnmarshalJSON 等，UseNumber 语义
+// 有显式入口 UnmarshalUseNumber/UnmarshalFromStringUseNumber——数字保留为
+// json.Number，防 >2^53 float 精度丢失）、非加密哈希
 // （Fnv1a64）、加密级摘要（Sha256/Sha256Hex）、Base64（标准/URL 安全）。
 //
 // 历史说明：曾提供 Md5/Md5Hex/Md5Bytes/Sha1 弱哈希包装，2026-09-15 治理轮

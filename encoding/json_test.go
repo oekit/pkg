@@ -1,6 +1,7 @@
 package encoding
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -185,5 +186,79 @@ func TestUnmarshal_ErrorExcerptTruncated(t *testing.T) {
 	}
 	if len(err.Error()) > 1024 {
 		t.Errorf("error message should be truncated, got %d bytes", len(err.Error()))
+	}
+}
+
+// TestUnmarshalUseNumber_PreservesLargeInt 钉住核心契约：>2^53 的整数
+// （9007199254740993 = 2^53+1，float64 无法精确表示）必须以 json.Number
+// 原文保留，而不是经 float64 中转后静默变成 9007199254740992。
+func TestUnmarshalUseNumber_PreservesLargeInt(t *testing.T) {
+	var v any
+	if err := UnmarshalUseNumber([]byte(`{"id":9007199254740993}`), &v); err != nil {
+		t.Fatal(err)
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("UnmarshalUseNumber() type = %T, want map[string]any", v)
+	}
+	num, ok := m["id"].(json.Number)
+	if !ok {
+		t.Fatalf("number type = %T, want json.Number", m["id"])
+	}
+	if num.String() != "9007199254740993" {
+		t.Errorf("json.Number = %s, want 9007199254740993", num.String())
+	}
+}
+
+func TestUnmarshalFromStringUseNumber_PreservesLargeInt(t *testing.T) {
+	var v any
+	if err := UnmarshalFromStringUseNumber(`{"id":9007199254740993,"neg":-9007199254740993}`, &v); err != nil {
+		t.Fatal(err)
+	}
+	m := v.(map[string]any)
+	for key, want := range map[string]string{
+		"id":  "9007199254740993",
+		"neg": "-9007199254740993",
+	} {
+		num, ok := m[key].(json.Number)
+		if !ok {
+			t.Fatalf("%s type = %T, want json.Number", key, m[key])
+		}
+		if num.String() != want {
+			t.Errorf("json.Number(%s) = %s, want %s", key, num.String(), want)
+		}
+	}
+}
+
+// TestUnmarshalUseNumber_TypedFields 类型化字段不受影响：json.Number 也可
+// 直接落到声明为 json.Number 的字段；已声明的基础类型按原类型解析。
+func TestUnmarshalUseNumber_TypedFields(t *testing.T) {
+	var v struct {
+		N json.Number `json:"n"`
+		S string      `json:"s"`
+	}
+	if err := UnmarshalUseNumber([]byte(`{"n":9007199254740993,"s":"x"}`), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.N.String() != "9007199254740993" {
+		t.Errorf("N = %s, want 9007199254740993", v.N.String())
+	}
+	if v.S != "x" {
+		t.Errorf("S = %q, want %q", v.S, "x")
+	}
+}
+
+// TestUnmarshalUseNumber_TrailingData 新入口与 Unmarshal 同源：尾部残留
+// 数据必须报错，不因 UseNumber 变体引入宽松路径。
+func TestUnmarshalUseNumber_TrailingData(t *testing.T) {
+	var v map[string]any
+	if err := UnmarshalUseNumber([]byte(`{"a":1} garbage`), &v); err == nil {
+		t.Error("trailing garbage should be rejected")
+	}
+	if err := UnmarshalFromStringUseNumber(`{"a":1} trailing`, &v); err == nil {
+		t.Error("UnmarshalFromStringUseNumber trailing garbage should be rejected")
+	}
+	if err := UnmarshalUseNumber([]byte(`{"a":1}`), &v); err != nil {
+		t.Errorf("clean input should succeed: %v", err)
 	}
 }

@@ -45,6 +45,29 @@ func UnmarshalFromString(str string, v any) error {
 	return nil
 }
 
+// UnmarshalUseNumber 将 JSON 字节反序列化到 v，数字显式解析为 json.Number
+// （而非 float64）。js 数值只有 53 位整数精度，金额/雪花 ID 等 >2^53 的整数
+// 经 float64 中转会静默丢失精度；json.Number 保留原文字面量，由业务按需
+// 转 int64/string。目标字段为 any 时生效最明显；已声明类型的字段仍按
+// 该类型解析。尾部残留数据视为错误（同 Unmarshal）。
+func UnmarshalUseNumber(b []byte, v any) error {
+	decoder := json.NewDecoder(bytes.NewReader(b))
+	if err := unmarshalStrict(decoder, v); err != nil {
+		return formatError(string(b), err)
+	}
+	return nil
+}
+
+// UnmarshalFromStringUseNumber 将 JSON 字符串反序列化到 v。
+// 语义同 UnmarshalUseNumber：数字保留为 json.Number，防 >2^53 精度丢失。
+func UnmarshalFromStringUseNumber(s string, v any) error {
+	decoder := json.NewDecoder(strings.NewReader(s))
+	if err := unmarshalStrict(decoder, v); err != nil {
+		return formatError(s, err)
+	}
+	return nil
+}
+
 // UnmarshalFromReader 从 Reader 读取 JSON 并反序列化到 v。
 func UnmarshalFromReader(reader io.Reader, v any) error {
 	var buf strings.Builder
