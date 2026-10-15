@@ -1,6 +1,7 @@
 # pkg
 
 > oekit 微工具集——16 个零依赖（或近零依赖）的基础工具包，合为一个 module 按需 import。
+> 🤖 AI Agent：本仓规范与硬规则见 [AGENTS.md](AGENTS.md)；机器可读索引见 [llms.txt](https://oekit.github.io/llms.txt)。
 
 [errors](https://github.com/oekit/pkg/tree/main/errors) · [validator](https://github.com/oekit/pkg/tree/main/validator) · [stringx](https://github.com/oekit/pkg/tree/main/stringx) · [slicex](https://github.com/oekit/pkg/tree/main/slicex) · [enumx](https://github.com/oekit/pkg/tree/main/enumx) · [convert](https://github.com/oekit/pkg/tree/main/convert) · [encoding](https://github.com/oekit/pkg/tree/main/encoding) · [jsonrepair](https://github.com/oekit/pkg/tree/main/jsonrepair) · [httpjson](https://github.com/oekit/pkg/tree/main/httpjson) · [mathx](https://github.com/oekit/pkg/tree/main/mathx) · [pathx](https://github.com/oekit/pkg/tree/main/pathx) · [pagination](https://github.com/oekit/pkg/tree/main/pagination) · [ptrx](https://github.com/oekit/pkg/tree/main/ptrx) · [timex](https://github.com/oekit/pkg/tree/main/timex) · [uidgen](https://github.com/oekit/pkg/tree/main/uidgen) · [cache](https://github.com/oekit/pkg/tree/main/cache)
 
