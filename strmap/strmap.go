@@ -182,7 +182,7 @@ func (m *StrMap[V]) makeHashtable() {
 
 	// 槽位折叠到实际表大小
 	for i := range m.items {
-		m.items[i].slot = m.items[i].slot % uint32(slots)
+		m.items[i].slot %= uint32(slots)
 	}
 
 	// 同槽条目连续存放（利于 CPU cache），冲突时 Get 沿 items 顺位扫描

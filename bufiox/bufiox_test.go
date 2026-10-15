@@ -146,8 +146,8 @@ func TestDefaultReader_NextPeekSkip(t *testing.T) {
 	if err != nil || string(p) != "0123" {
 		t.Fatalf("Peek(4) = (%q, %v)", p, err)
 	}
-	if err := r.Skip(2); err != nil {
-		t.Fatalf("Skip(2): %v", err)
+	if skipErr := r.Skip(2); skipErr != nil {
+		t.Fatalf("Skip(2): %v", skipErr)
 	}
 	p, err = r.Next(3)
 	if err != nil || string(p) != "234" {
