@@ -45,7 +45,8 @@ import (
 ## 历史
 
 原为 16 个独立微库（oekit/errors、oekit/stringx…），2026-10 合并为本 module——
-旧仓已归档并重定向；import 路径迁移：`github.com/oekit/<pkg>` → `github.com/oekit/pkg/<pkg>`。
+旧仓已删除；已发布的旧版本在 Go module proxy 缓存中仍可解析。
+import 路径迁移：`github.com/oekit/<pkg>` → `github.com/oekit/pkg/<pkg>`。
 
 ## License
 
