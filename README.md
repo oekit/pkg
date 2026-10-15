@@ -1,6 +1,6 @@
 # pkg
 
-> 微工具集 16 合 1——errors/validator/stringx/convert/timex/uidgen/cache 等基础工具包
+> 微工具集 18 合 1——errors/validator/stringx/convert/timex/uidgen/cache/bufiox/strmap 等基础工具包
 
 > 🌐 项目主页：**https://oekit.github.io/** · 名称由来：**O**pen **E**asy **Kit**（开源 · 易用 · 工具集合）
 > 🤖 AI Agent：本仓规范与硬规则见 [AGENTS.md](AGENTS.md)；机器可读索引见 [llms.txt](https://oekit.github.io/llms.txt)（接口签名以源码为准）。
@@ -8,20 +8,21 @@
 ## 安装
 
 ```bash
-go get github.com/oekit/pkg@v0.1.3
+go get github.com/oekit/pkg@v0.2.0
 ```
 
 ## 这个仓库做什么
 
-`pkg` 是 oekit 的**基础工具集**：16 个经过生产验证的小工具包合成一个 module，
+`pkg` 是 oekit 的**基础工具集**：18 个经过生产验证的小工具包合成一个 module，
 覆盖错误处理、参数校验、字符串/切片/类型转换、时间与 cron、ID 生成、JSON 修复、
-HTTP JSON 调用、分页、glob 匹配、进程内缓存等日常高频需求。
+HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO、GC 友好只读字典
+等日常高频需求。
 
 设计原则：
 
 - **按包编译**：import 哪个子包用哪个，go.mod 只多一条 require，二进制零冗余
 - **零依赖或近零依赖**：绝大多数子包只依赖标准库；重依赖（validator/v10）隔离在对应子包
-- **生产验证**：全部代码源自 enjoydream 后端服务多年共用积累，带完整单元测试（17/17 包）
+- **生产验证**：全部代码源自 enjoydream 后端服务多年共用积累，带完整单元测试（19/19 包）
 
 ## 包清单
 
@@ -43,6 +44,8 @@ HTTP JSON 调用、分页、glob 匹配、进程内缓存等日常高频需求�
 | `timex`（+`cron`） | 时间格式化/解析/时间戳 + cron 表达式 |
 | `uidgen` | UUID/雪花/随机串 ID 生成 |
 | `cache` | 刷新检查器：TTL 后台刷新、失败按 failTTL 降级、并发请求合并为一次刷新 |
+| `bufiox` | 面向协议编解码的零拷贝缓冲 IO：读侧 Next/Peek 返回缓冲视图，写侧 Malloc/WriteBinary 攒批一次 Flush（`bytes` 与 `io.Reader/Writer` 双实现） |
+| `strmap` | GC 友好的只读字符串 map：键打包 + int32 哈希表 + maphash，海量静态映射（header/字典表）零 GC 扫描开销 |
 
 ## 快速使用
 
@@ -62,6 +65,26 @@ fixed := jsonrepair.Repair(`{"name": "oekit",) `)
 fmt.Println(stringx.Pluralize(3, "module")) // 3 modules
 ```
 
+```go
+import (
+    "github.com/oekit/pkg/bufiox"
+    "github.com/oekit/pkg/strmap"
+)
+
+// 零拷贝解析：Peek 定长头 → Next 出负载视图，全程无字段级拷贝
+r := bufiox.NewDefaultReader(conn)
+hdr, _ := r.Peek(4)                  // 零拷贝视图
+_ = r.Skip(4)
+payload, _ := r.Next(int(binary.BigEndian.Uint32(hdr)))
+defer r.Release(nil)                 // Release 后视图失效
+
+// GC 友好只读字典：构建后只读，Get 无 map 开销
+var canon = strmap.NewStr2StrFromMap(map[string]string{
+    "content-type": "Content-Type",
+})
+name, ok := canon.Get("content-type") // "Content-Type", true
+```
+
 ## 边界
 
 - 需要并发原语（safe-go/重试/限流）→ [concurrency](https://github.com/oekit/concurrency)
@@ -73,8 +96,8 @@ fmt.Println(stringx.Pluralize(3, "module")) // 3 modules
 
 | 模块 | 内容 | 矩阵内依赖 |
 |---|---|---|
-| [pkg](https://github.com/oekit/pkg) | 微工具集 16 合 1（errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache） | — |
-| [concurrency](https://github.com/oekit/concurrency) | 并发与流控原语（async/group/singleflight/progress/syncx/ratelimit/retry） | — |
+| [pkg](https://github.com/oekit/pkg) | 微工具集 18 合 1（errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap） | — |
+| [concurrency](https://github.com/oekit/concurrency) | 并发与流控原语（async/gopool/group/singleflight/progress/syncx/ratelimit/retry） | — |
 | [logx](https://github.com/oekit/logx) | 统一日志门面（多后端可替换 + Sink + caller 归属）+ 优雅关停 | — |
 | [core](https://github.com/oekit/core) | 应用基建件（governance 治理 schema / config 配置加载 / lifecycle 契约 / network IP 工具 / version） | [logx](https://github.com/oekit/logx) |
 | [istio](https://github.com/oekit/istio) | Istio Proxyless——Kitex xDS 动态熔断 | — |
