@@ -1,6 +1,6 @@
 # pkg
 
-> 微工具集 18 合 1——errors/validator/stringx/convert/timex/uidgen/cache/bufiox/strmap 等基础工具包
+> 微工具集 20 合 1——errors/bloomx/contextx/validator/stringx/convert/timex/uidgen/cache/bufiox/strmap 等基础工具包
 
 > 🌐 项目主页：**https://oekit.github.io/** · 名称由来：**O**pen **E**asy **Kit**（开源 · 易用 · 工具集合）
 > 🤖 AI Agent：本仓规范与硬规则见 [AGENTS.md](AGENTS.md)；机器可读索引见 [llms.txt](https://oekit.github.io/llms.txt)（接口签名以源码为准）。
@@ -13,7 +13,7 @@ go get github.com/oekit/pkg@v0.2.0
 
 ## 这个仓库做什么
 
-`pkg` 是 oekit 的**基础工具集**：18 个经过生产验证的小工具包合成一个 module，
+`pkg` 是 oekit 的**基础工具集**：20 个经过生产验证的小工具包合成一个 module，
 覆盖错误处理、参数校验、字符串/切片/类型转换、时间与 cron、ID 生成、JSON 修复、
 HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO、GC 友好只读字典
 等日常高频需求。
@@ -22,22 +22,24 @@ HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO�
 
 - **按包编译**：import 哪个子包用哪个，go.mod 只多一条 require，二进制零冗余
 - **零依赖或近零依赖**：绝大多数子包只依赖标准库；重依赖（validator/v10）隔离在对应子包
-- **生产验证**：全部代码源自 enjoydream 后端服务多年共用积累，带完整单元测试（19/19 包）
+- **生产验证**：全部代码源自 enjoydream 后端服务多年共用积累，带完整单元测试（21/21 包）
 
 ## 包清单
 
 | 包 | 做什么 |
 |---|---|
-| `errors` | 错误链 `Wrap`/`Cause`（nil-safe）、`BizError`（业务码/HTTP 码双轨）、sentinel 错误。整个矩阵的错误处理基座 |
+| `errors` | 错误链 `Wrap`/`Cause`（nil-safe）、`BizError`（业务码/HTTP 码双轨）、`Chain`/`In` 组合工具、sentinel 错误。整个矩阵的错误处理基座 |
+| `bloomx` | 本地布隆过滤器：FNV-1a 双哈希、RWMutex 并发安全，缓存穿透防护/去重预检（非法入参归一默认值） |
+| `contextx` | `ValueOnlyFrom` 只传值轻量 ctx：剥离 Done/Err/Deadline，把请求值交给后台任务而不继承取消/超时 |
 | `validator` | go-playground/validator 封装，`ValidationError` 自动映射 400 |
 | `stringx` | ID 生成、关键词包含匹配、缩进、英文复数化、`{key}` 模板替换 |
 | `slicex` | `Partition` 二分组（保序）、GroupBy 等切片操作 |
 | `enumx` | 枚举：确定性顺序的 All/Values/解析（map 遍历乱序问题的解法） |
 | `convert` | 字符串/数字/布尔/切片的宽容转换（脏输入友好） |
-| `encoding` | JSON/msgpack 等序列化助手 |
+| `encoding` | JSON 序列化助手（`UnmarshalUseNumber` 系列保留 json.Number，防 >2^53 float 精度丢失）+ FNV-1a/SHA-256 摘要与 Base64 |
 | `jsonrepair` | LLM 输出等脏 JSON 的宽容修复链（截断/尾逗号/单引号），修复永不失败——异常时回退原文 |
 | `httpjson` | 带 JSON 解析的 HTTP 调用助手 |
-| `mathx` | 安全随机、平均值等统计助手 |
+| `mathx` | 安全随机、平均值等统计助手 + `Unstable` 抖动值（缓存 TTL 打散防集中失效） |
 | `pathx` | glob 路径匹配（`vendor/**`、`*.test`） |
 | `pagination` | `PageRequest`/`PageResponse` 分页换算 |
 | `ptrx` | 指针 To/From 与安全解引用 |
@@ -89,7 +91,7 @@ name, ok := canon.Get("content-type") // "Content-Type", true
 
 - 需要并发原语（safe-go/重试/限流）→ [concurrency](https://github.com/oekit/concurrency)
 - 需要日志 → [logx](https://github.com/oekit/logx)；需要数据库 → [gorm](https://github.com/oekit/gorm)
-- 本仓不依赖矩阵内任何其他模块（validator→errors、httpjson→stringx 两条内部边除外）
+- 本仓不依赖矩阵内任何其他模块（validator→errors、httpjson→stringx、bloomx→encoding 三条内部边除外）
 
 
 ## 矩阵总览（23 活跃模块，自动生成）

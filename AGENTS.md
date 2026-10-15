@@ -1,13 +1,13 @@
 # AGENTS.md — oekit/pkg
 
-> 微工具集 18 合 1（errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）
+> 微工具集 20 合 1（bloomx/contextx/errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）
 > 当前版本：`v0.2.0` · module：`github.com/oekit/pkg` · org：[oekit = Open Easy Kit](https://oekit.github.io)
 
 ## 本仓包含
 
-`bufiox/`、`cache/`、`convert/`、`encoding/`、`enumx/`、`errors/`、`httpjson/`、`jsonrepair/`、
-`mathx/`、`pagination/`、`pathx/`、`ptrx/`、`slicex/`、`stringx/`、`strmap/`、`timex/`（含 `cron`）、
-`uidgen/`、`validator/`
+`bloomx/`、`bufiox/`、`cache/`、`contextx/`、`convert/`、`encoding/`、`enumx/`、`errors/`、
+`httpjson/`、`jsonrepair/`、`mathx/`、`pagination/`、`pathx/`、`ptrx/`、`slicex/`、`stringx/`、
+`strmap/`、`timex/`（含 `cron`）、`uidgen/`、`validator/`
 ## 硬规则速览（全矩阵适用）
 
 ### 分层与依赖
@@ -51,8 +51,9 @@
 
 ## 本仓范围
 
-- **基础工具**：errors（错误链/BizError）、validator（参数校验）、convert/encoding（类型转换与序列化）、
-  mathx/pathx/pagination/ptrx/stringx/slicex/enumx/timex+cron/uidgen（日常工具）
+- **基础工具**：errors（错误链/BizError/Chain/In）、validator（参数校验）、convert/encoding（类型转换与序列化，UseNumber 显式入口防 >2^53 float 精度丢失）、
+  mathx（统计/`Unstable` 抖动值）/pathx/pagination/ptrx/stringx/slicex/enumx/timex+cron/uidgen（日常工具）、
+  bloomx（本地布隆过滤器）、contextx（`ValueOnlyFrom` 只传值 ctx）
 - **数据修复与调用**：jsonrepair（脏 JSON 宽容修复）、httpjson（HTTP JSON 调用）、cache（刷新检查器）
 - **协议与字典**（v0.2.0 吸收自 cloudwego/gopkg，独立重写）：bufiox（零拷贝缓冲 IO）、
   strmap（GC 友好只读字符串 map）
