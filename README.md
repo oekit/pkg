@@ -19,6 +19,18 @@ import (
 
 > Go 按包编译：import 一个子包不会引入其他子包的代码；module require 只有一条。
 
+## 快速使用
+
+```go
+import (
+    "github.com/oekit/pkg/errors"
+    "github.com/oekit/pkg/stringx"
+)
+
+err := errors.Wrap(io.ErrUnexpectedEOF, "read config", "path", "/etc/app.yaml")
+fmt.Println(stringx.Pluralize(3, "module")) // 3 modules
+```
+
 ## 包清单
 
 | 包 | 说明 | 三方依赖 |
