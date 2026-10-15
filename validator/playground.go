@@ -98,7 +98,7 @@ func (pv *PlaygroundValidator) RegisterTranslation(locale, tag, msg string) erro
 	return ErrTranslationNotSupported
 }
 
-// Validate 底层验证器实例，供高级用户直接使用。
+// Validate_ 返回底层验证器实例，供高级用户直接使用。
 func (pv *PlaygroundValidator) Validate_() *validator.Validate {
 	return pv.validate
 }

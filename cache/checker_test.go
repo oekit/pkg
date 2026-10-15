@@ -86,7 +86,7 @@ func TestCheckInflightWaiterHonorsCtx(t *testing.T) {
 		<-block
 		return nil
 	}, time.Hour, 0)
-	go c.Check(context.Background()) // 领头者卡在刷新
+	go func() { _ = c.Check(context.Background()) }() // 领头者卡在刷新
 	time.Sleep(20 * time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
