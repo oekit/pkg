@@ -20,18 +20,49 @@ import (
 
 > Go 按包编译：import 一个子包不会引入其他子包的代码；module require 只有一条。
 
-## 快速使用
+## 能做什么
 
+- **错误处理**：`Wrap`/`Cause` 链、`BizError` 业务码/HTTP 码双轨、命名工厂
+- **参数校验**：go-playground 封装，`ValidationError` 自动映射 400
+- **文本与集合**：字符串模板/复数化/ID、切片二分组、枚举解析、宽容类型转换
+- **JSON**：宽容修复链（截断/尾逗号/单引号都能救）、带重试的 HTTP+JSON
+- **基础设施件**：时间/cron、雪花与随机 ID、分页、指针、glob 匹配、刷新缓存
+
+## 使用示例
+
+### 错误链与业务码
+```go
+import "github.com/oekit/pkg/errors"
+
+err := errors.Wrap(sql.ErrNoRows, "query user", "user_id", uid)
+biz := errors.NewNotFoundError("order not found") // HTTPCode 自动推导 404
+_ = errors.WrapBizError(40010, "库存不足", cause)   // 带因业务错误
+```
+### 模板与 ID
 ```go
 import (
-    "github.com/oekit/pkg/errors"
     "github.com/oekit/pkg/stringx"
+    "github.com/oekit/pkg/uidgen"
 )
 
-err := errors.Wrap(io.ErrUnexpectedEOF, "read config", "path", "/etc/app.yaml")
-fmt.Println(stringx.Pluralize(3, "module")) // 3 modules
+msg := stringx.FormatTemplate("user {uid} not in {room}", map[string]any{"uid": 42, "room": "r1"})
+id := uidgen.RandomHex(16)
 ```
+### JSON 修复（LLM 输出救星）
+```go
+import "github.com/oekit/pkg/jsonrepair"
 
+var v map[string]any
+err := jsonrepair.Unmarshal(brokenJSON, &v) // 截断/尾逗号/单引号都能救；修不好回退原文
+```
+### 刷新缓存
+```go
+import "github.com/oekit/pkg/cache"
+
+ck := cache.NewChecker(refreshFn, time.Minute, 10*time.Second) // TTL/失败TTL/并发合并
+_ = ck.Check(ctx)
+
+> ⚠️ **红线**：同一进程只允许一套 errors 包（`oekit/pkg/errors`），混用旧路径会让 BizError 判定断裂。
 ## 包清单
 
 | 包 | 说明 | 三方依赖 |
