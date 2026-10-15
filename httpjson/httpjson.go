@@ -21,7 +21,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/oekit/stringx"
+	"github.com/oekit/pkg/stringx"
 )
 
 // maxBody 响应体采集上限（异常服务端刷屏防内存放大）。

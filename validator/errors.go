@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	bizerrors "github.com/oekit/errors"
+	bizerrors "github.com/oekit/pkg/errors"
 )
 
 // ErrTranslationNotSupported 表示当前验证器不支持错误消息翻译。

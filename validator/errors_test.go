@@ -4,7 +4,7 @@ import (
 	stderrors "errors"
 	"testing"
 
-	bizerrors "github.com/oekit/errors"
+	bizerrors "github.com/oekit/pkg/errors"
 )
 
 // TestValidationError_Error_Empty covers the no-errors path:

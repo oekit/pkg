@@ -5,8 +5,6 @@ go 1.26.0
 require (
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/google/uuid v1.6.0
-	github.com/oekit/errors v0.1.2
-	github.com/oekit/stringx v0.1.2
 )
 
 require (
