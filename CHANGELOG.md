@@ -3,6 +3,21 @@
 由 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来。所有 notable 变更记录如下。
 
 
+## [v0.7.0] — 2026-10-16
+
+- feat(timex): 新增时间段边界函数——`BeginningOfX`/`EndOfX` 七对
+  （分/时/日/周/月/季/年），纯函数保持时区不变；`EndOfX` 取"下一周期
+  起点 - 1ns"，`[Beginning, End]` 恰好覆盖整周期不与相邻重叠；边界按
+  墙钟 `time.Date` 重建（规避 `Truncate` 在非整小时偏移时区的 UTC 对
+  齐陷阱），月末/季末以月初为基准走 `AddDate`（规避大小月与闰月归一
+  化陷阱，跨夏令时日按墙钟日界）；`BeginningOfWeek`/`EndOfWeek` 周起
+  始日显式传参（无全局状态）
+- feat(stringx): 新增 trie 多模式替换器——`NewReplacer(patterns, repls)`
+  rune 级扫描、同起点恒取最长匹配、命中后整体跳过不回溯；pattern 空
+  串/非法 UTF-8 显式报错；`Replace` 按 rune 边界迭代，未命中 rune 原
+  字节保留（非法 UTF-8 文本不被改写为 U+FFFD）；构造后只读可并发；
+  另附 `NewMask(words, mask)` 敏感词遮罩薄壳（等 rune 数逐字遮罩）
+
 ## [v0.6.0] — 2026-10-16
 
 - feat(cache): 新增 `BatchGetter[T]` 批量读取可选能力接口——`MGet` 单次网络
