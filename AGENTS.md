@@ -1,7 +1,7 @@
 # AGENTS.md — oekit/pkg
 
 > 微工具集 20 合 1（bloomx/contextx/errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）
-> 当前版本：`v0.3.0` · module：`github.com/oekit/pkg` · org：[oekit = Open Easy Kit](https://oekit.github.io)
+> 当前版本：`pkg` · module：`github.com/oekit/pkg` · org：[oekit = Open Easy Kit](https://oekit.github.io)
 
 ## 本仓包含
 
