@@ -277,7 +277,8 @@ func (c *LocalCache[T]) DelBatch(ctx context.Context, keys ...string) error {
 
 // MGet 批量获取：单次读锁区间取回一批键（契约见 BatchGetter——缺席语义
 // 与 (nil, nil) 双关一致：不存在与 null marker 一律缺席；纯读不回填，
-// 已过期条目按缺席处理，回收留给 Get/cleanup 的双检路径）。
+// 已过期条目按缺席处理，回收留给 Get/Exists 的双检路径——TTL=0 时无
+// cleanup goroutine，过期条目仅在这些路径被惰性回收）。
 func (c *LocalCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T, error) {
 	out := make(map[string]*T, len(keys))
 	c.mu.RLock()
