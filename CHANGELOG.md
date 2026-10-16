@@ -39,7 +39,7 @@
 
 ## [v0.1.2] — 2026-10-15
 
-- org 迁移收尾 patch（yi-nology → openekit → oekit，module path 统一 github.com/oekit/pkg）
+- org 命名与 module path 收敛至 oekit（github.com/oekit/pkg）
 
 ## [v0.1.0] — 2026-10-15
 
