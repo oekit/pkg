@@ -9,7 +9,7 @@ import (
 // 本文件提供基于 rune 级 trie 的多模式替换器。
 //
 // 扫描语义：从左到右逐 rune 扫描，同一起点命中多个 pattern 时取最长
-//（命中后整体跳过该词，不再回溯）；未命中的 rune 原样保留。
+// （命中后整体跳过该词，不再回溯）；未命中的 rune 原样保留。
 // Replacer 构造完成后只读，可安全并发使用。
 
 // replacerNode trie 节点。terminal 标记词尾——替换串允许为空串
@@ -55,6 +55,7 @@ func NewReplacer(patterns, repls []string) (*Replacer, error) {
 			node = next
 		}
 		node.terminal = true
+		//nolint:gosec // G602 误报：等长性已在函数入口校验（len(patterns) != len(repls) 即返回）
 		node.repl = repls[i]
 	}
 	return &Replacer{root: root}, nil
