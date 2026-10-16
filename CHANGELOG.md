@@ -41,10 +41,6 @@
 
 - org 迁移收尾 patch（yi-nology → openekit → oekit，module path 统一 github.com/oekit/pkg）
 
-## [v0.1.1] — 2026-10-15
-
-- 16 微库归一为单 module（pkg 16 合 1）
-
 ## [v0.1.0] — 2026-10-15
 
-- 首次发布：errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex+cron/uidgen/cache
+自 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来的初始公开版本，完成拆分稳定化：模块路径统一为 `github.com/oekit/pkg`，多轮拆分/合并收敛至当前模块边界，组织基建（共享 CI workflow、golangci v2、Dependabot）就位。
