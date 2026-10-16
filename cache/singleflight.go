@@ -84,6 +84,25 @@ func (sf *SingleFlightCache[T]) GetOrLoad(ctx context.Context, key string) (*T, 
 	return val, nil
 }
 
+// MGet 批量获取：内层具备批量能力时直接委托（装饰器不得退化批量）；
+// 内层无批量能力时退化为逐键 Get。
+func (sf *SingleFlightCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T, error) {
+	if bg, ok := sf.inner.(BatchGetter[T]); ok {
+		return bg.MGet(ctx, keys...)
+	}
+	out := make(map[string]*T, len(keys))
+	for _, key := range keys {
+		v, err := sf.Get(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		if v != nil {
+			out[key] = v
+		}
+	}
+	return out, nil
+}
+
 // Refresh 刷新缓存（带 singleflight 保护）。
 func (sf *SingleFlightCache[T]) Refresh(ctx context.Context, key string) (*T, error) {
 	val, err := sf.flight.Do(ctx, key, func(ctx context.Context) (*T, error) {

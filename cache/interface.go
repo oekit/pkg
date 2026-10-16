@@ -98,3 +98,19 @@ type CacheAside[T any] interface {
 	// Refresh 刷新缓存（删除后重新从 Source 加载）。
 	Refresh(ctx context.Context, key string) (*T, error)
 }
+
+// BatchGetter 是批量读取的可选能力接口：实现方在单次网络往返（或单次
+// 锁区间）内取回一批键，消费方经类型断言探测选用（缓存装饰器应向下
+// 透传：内层具备批量能力时不得在外层退化为逐键）。
+//
+// 实现契约（与包级 (nil, nil) 双关一致的键缺席语义）：
+//
+//   - 返回 map 只含命中真值的键；key 不存在与命中 null marker 一律缺席。
+//     缺席键的消费方应回退 GetOrLoad——真 miss 回源回填，marker 命中在
+//     后端短路，两种情况都不会重复回源；
+//   - MGet 是纯读：不回源、不回填、不产生 null marker；
+//   - 批量中的反序列化失败按整批错误处理（与单键 Get 同口径）。
+type BatchGetter[T any] interface {
+	// MGet 批量获取。keys 为空时返回空 map。
+	MGet(ctx context.Context, keys ...string) (map[string]*T, error)
+}

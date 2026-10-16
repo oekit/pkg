@@ -3,6 +3,15 @@
 由 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来。所有 notable 变更记录如下。
 
 
+## [v0.6.0] — 2026-10-16
+
+- feat(cache): 新增 `BatchGetter[T]` 批量读取可选能力接口——`MGet` 单次网络
+  往返（或单次锁区间）取回一批键；缺席语义与 (nil, nil) 双关一致（不存在
+  与 null marker 一律缺席，缺席键由消费方回退 GetOrLoad 享受 marker 短路）；
+  纯读不回源不回填不产生 marker；`LocalCache` 单读锁批量实现、
+  `SingleFlightCache` 委托内层批量能力（内层无批量时退化为逐键）；装饰器
+  透传规则与消费方探测用法固化在接口 godoc
+
 ## [v0.5.0] — 2026-10-16
 
 - feat(collectionx): 新增泛型容器微件——`Set`（集合代数并/交/差，非并发安全）、`Ring`

@@ -275,6 +275,26 @@ func (c *LocalCache[T]) DelBatch(ctx context.Context, keys ...string) error {
 	return nil
 }
 
+// MGet 批量获取：单次读锁区间取回一批键（契约见 BatchGetter——缺席语义
+// 与 (nil, nil) 双关一致：不存在与 null marker 一律缺席；纯读不回填，
+// 已过期条目按缺席处理，回收留给 Get/cleanup 的双检路径）。
+func (c *LocalCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T, error) {
+	out := make(map[string]*T, len(keys))
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, key := range keys {
+		entry, ok := c.data[key]
+		if !ok || entry.isNull || entry.isExpired() {
+			continue
+		}
+		out[key] = entry.value
+	}
+	return out, nil
+}
+
+// 编译期能力契约：LocalCache 具备批量读取能力。
+var _ BatchGetter[int] = (*LocalCache[int])(nil)
+
 // Exists 检查缓存是否存在。
 func (c *LocalCache[T]) Exists(ctx context.Context, key string) (bool, error) {
 	c.mu.RLock()
