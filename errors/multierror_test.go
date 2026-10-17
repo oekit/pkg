@@ -174,6 +174,25 @@ func TestMultiError_Errors_ReturnsSlice(t *testing.T) {
 	}
 }
 
+// TestMultiError_Errors_DefensiveCopy verifies Errors() returns a defensive
+// copy：调用方对返回值改元素/append 均不影响内部状态，后续 Append 的
+// copy-on-write 前提不被绕开（pkg#5）。
+func TestMultiError_Errors_DefensiveCopy(t *testing.T) {
+	errA, errB := stderrors.New("a"), stderrors.New("b")
+	merr := Append(errA, errB).(*MultiError)
+
+	sub := merr.Errors()
+	sub[0] = stderrors.New("mutated") // 外部改元素（Clone 保证独立底层数组，不得影响内部）
+
+	got := merr.Errors()
+	if got[0] != errA || got[1] != errB {
+		t.Fatalf("外部修改不得影响内部状态：got %v", got)
+	}
+	if !stderrors.Is(merr, errA) || !stderrors.Is(merr, errB) {
+		t.Error("Is 遍历应仍命中原始子错误")
+	}
+}
+
 // TestMultiError_Is_NestedErrorMatch verifies Is() walks nested
 // MultiErrors via errors.Is.
 func TestMultiError_Is_NestedErrorMatch(t *testing.T) {

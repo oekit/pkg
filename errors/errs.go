@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -24,11 +25,15 @@ type MultiError struct {
 }
 
 // Errors 返回所有子错误的切片。
+//
+// 返回值是内部切片的**防御性拷贝**，调用方对其 append/修改元素均不影响
+// MultiError 内部状态（也不得绕开 Append 的 copy-on-write 保护前提）。
+// 聚合错误量通常为个位数，拷贝成本可忽略。
 func (merr *MultiError) Errors() []error {
 	if merr == nil {
 		return nil
 	}
-	return merr.errors
+	return slices.Clone(merr.errors)
 }
 
 // Is 实现 errors.Is 接口，遍历所有子错误进行匹配。

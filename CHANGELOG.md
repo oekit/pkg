@@ -3,6 +3,14 @@
 由 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来。所有 notable 变更记录如下。
 
 
+## [v0.9.1] — 2026-10-17
+
+- **fix(errors)**：`MultiError.Errors()` 改为返回内部切片的**防御性拷贝**
+  （`slices.Clone`）——此前直接暴露内部引用，调用方改元素/append 会静默
+  改动聚合错误状态，并绕开 `Append` 的 copy-on-write 保护前提；聚合错误量
+  通常个位数，拷贝成本可忽略。`Unwrap() []error` 保持原样（进 stdlib
+  errors.Is/As 只读遍历路径，无破坏面）（[#5](https://github.com/oekit/pkg/issues/5)）
+
 ## [v0.9.0] — 2026-10-17
 
 - **BREAKING** feat(container): 新增泛型容器包 `container`，整体收编原 `collectionx`
