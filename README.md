@@ -8,7 +8,7 @@
 ## 安装
 
 ```bash
-go get github.com/oekit/pkg@v0.10.0
+go get github.com/oekit/pkg@v0.11.0
 ```
 
 ## 这个仓库做什么
@@ -37,9 +37,9 @@ HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO�
 | `enumx` | 枚举：确定性顺序的 All/Values/解析（map 遍历乱序问题的解法） |
 | `convert` | 字符串/数字/布尔/切片的宽容转换（脏输入友好） |
 | `encoding` | JSON 序列化助手（`UnmarshalUseNumber` 系列保留 json.Number，防 >2^53 float 精度丢失）+ FNV-1a/SHA-256 摘要与 Base64 |
-| `jsonrepair` | LLM 输出等脏 JSON 的宽容修复链（截断/尾逗号/单引号），修复永不失败——异常时回退原文 |
+| `jsonrepair` | LLM 输出等脏 JSON 的宽容修复链（围栏/尾逗号/单引号/括号闭合），修复永不失败——异常时回退原文；`UnmarshalLenient` 宽松模式尽力闭合截断的数组/对象（半截字符串/键位补 null/悬空逗号）并回报 partial |
 | `httpjson` | 带 JSON 解析的 HTTP 调用助手 |
-| `mathx` | 安全随机、平均值等统计助手 + `Unstable` 抖动值（缓存 TTL 打散防集中失效） |
+| `mathx` | 安全随机、平均值等统计助手 + `Unstable` 抖动值（`Around` 对称打散缓存 TTL 防雪崩 / `Upward` 单边向上，重试退避「不得早于基准」） |
 | `pathx` | glob 路径匹配（`vendor/**`、`*.test`） |
 | `pagination` | `PageRequest`/`PageResponse` 分页换算 |
 | `ptrx` | 指针 To/From 与安全解引用 |

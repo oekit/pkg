@@ -2,6 +2,11 @@
 
 由 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来。所有 notable 变更记录如下。
 
+## [v0.11.0] — 2026-10-17
+
+- **feat(mathx)**: `Unstable` 新增单边向上抖动 `Upward`/`UpwardDuration`/`UpwardFloat64`——结果 ∈ [v, v(1+dev)]。重试退避的「不得比基准更早」语义此前无法用对称抖动表达（会把退避压短成更密集的重试风暴）（[#6](https://github.com/oekit/pkg/issues/6)）
+- **feat(jsonrepair)**: 新增宽松解析入口 `UnmarshalLenient`（返回 `partial` 截断标记）与 `UnmarshalWithOpts`/`WithAllowPartialArray`（XxxOption 形态）——尽力闭合截断的数组/对象：补悬空字符串引号（含 EOF 悬挂转义）、键位截断补 `:null`（`{"Host` 结尾）、键位串闭合后冒号缺失补 `:null`（`"c"` 结尾）、丢悬空逗号、悬空冒号补 null、按栈闭括号；顶层散串不救，纯垃圾仍报错。保守面零漂移（`UnmarshalWithOpts` 无选项 ≡ `Unmarshal`）。此前 `Repair` 只补括号，截断在字符串中段（`"HostName":"trunc` 结尾）无解（[#7](https://github.com/oekit/pkg/issues/7)）
+
 ## [v0.10.0] — 2026-10-17
 
 - **BREAKING** refactor!: `uidgen`、`validator` 两包拆分至新仓 [kitx](https://github.com/oekit/kitx)——机械替换 import 即可迁移：`github.com/oekit/pkg/uidgen` → `github.com/oekit/kitx/uidgen`、`github.com/oekit/pkg/validator` → `github.com/oekit/kitx/validator`（包名不变）；行为契约不变（`ValidationError` 仍 Unwrap 为 BizError 400，uidgen 的 UUID 输出语义逐字节一致，且其 google/uuid 依赖已改标准库手写 v4）
