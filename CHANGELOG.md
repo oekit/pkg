@@ -3,6 +3,18 @@
 由 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来。所有 notable 变更记录如下。
 
 
+## [Unreleased]
+
+- **fix(errors)**：`formatKV` 奇数个 kv 不再静默丢弃最后一个——保留并渲染为
+  `!BADKEY=<value>`（对齐 `log/slog` 约定），漏传 value 的编程错误在输出里
+  留下痕迹
+  （[#3](https://github.com/oekit/pkg/issues/3)）
+- **feat(singleflighttest)**：新增共享契约测试套件 `singleflighttest.Run`
+  （先例 `cache/cachetest`）。固化 waiter 独立取消 / panic 转 error 且清 key /
+  Forget 重入 / 同 key 去重 / 不同 key 并行 / error 透传；`pkg/internal/singleflight`
+  与 `concurrency/singleflight` 双侧引用，语义漂移双红
+  （[#4](https://github.com/oekit/pkg/issues/4)）
+
 ## [v0.7.0] — 2026-10-16
 
 - feat(timex): 新增时间段边界函数——`BeginningOfX`/`EndOfX` 七对

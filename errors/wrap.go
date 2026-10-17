@@ -50,15 +50,21 @@ func (w *wrappedError) Unwrap() error {
 	return w.err
 }
 
-// formatKV 把 k/v 对格式化成 "k1=v1 k2=v2" 形式。偶数长度,否则丢弃最后一个。
+// formatKV 把 k/v 对格式化成 "k1=v1 k2=v2" 形式。
+// 奇数长度时保留最后一个参数并渲染为 "!BADKEY=<value>"（对齐 log/slog 约定），
+// 不再静默丢弃——漏传 value 的编程错误必须在输出里留下痕迹。
 func formatKV(kv []any) string {
-	if len(kv)%2 != 0 {
-		kv = kv[:len(kv)-1]
+	if len(kv) == 0 {
+		return ""
 	}
 	var sb []byte
 	for i := 0; i < len(kv); i += 2 {
 		if i > 0 {
 			sb = append(sb, ' ')
+		}
+		if i+1 >= len(kv) {
+			sb = append(sb, fmt.Sprintf("!BADKEY=%v", kv[i])...)
+			break
 		}
 		sb = append(sb, fmt.Sprintf("%v=%v", kv[i], kv[i+1])...)
 	}

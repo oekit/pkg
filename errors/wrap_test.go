@@ -30,9 +30,17 @@ func TestWrap_WithKV(t *testing.T) {
 }
 
 func TestWrap_HandlesOddKV(t *testing.T) {
-	// 奇数长度,自动丢弃最后一个
+	// 奇数长度：保留末参并标 !BADKEY，不静默丢弃（对齐 log/slog）
 	err := Wrap(errBase, "op", "k1", "v1", "extra")
-	if err.Error() != "op: base error k1=v1" {
+	if err.Error() != "op: base error k1=v1 !BADKEY=extra" {
+		t.Errorf("got %q", err.Error())
+	}
+}
+
+func TestWrap_OddKVSoleKey(t *testing.T) {
+	// 典型漏传 value：Wrap(err, "read config", "path")
+	err := Wrap(errBase, "read config", "path")
+	if err.Error() != "read config: base error !BADKEY=path" {
 		t.Errorf("got %q", err.Error())
 	}
 }
@@ -80,7 +88,8 @@ func TestFormatKV(t *testing.T) {
 	}{
 		{[]any{"a", "1", "b", "2"}, "a=1 b=2"},
 		{[]any{}, ""},
-		{[]any{"x"}, ""}, // 奇数,丢弃
+		{[]any{"x"}, "!BADKEY=x"}, // 奇数：保留末参
+		{[]any{"k1", "v1", "extra"}, "k1=v1 !BADKEY=extra"},
 		{nil, ""},
 	}
 	for _, tt := range tests {
