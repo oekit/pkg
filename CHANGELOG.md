@@ -3,9 +3,13 @@
 由 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来。所有 notable 变更记录如下。
 
 
+## [v0.9.3] — 2026-10-17
+
+- build: go 最低版本实际降至 1.24.0——锁定 go1.24 兼容版依赖：golang.org/x/sys v0.41.0、x/crypto v0.48.0、x/text v0.34.0、validator/v10 v10.30.1（各取声明 go≤1.24 的最高版）；语言面无变更
+
 ## [v0.9.2] — 2026-10-17
 
-- build: go 最低版本降至 1.24（go.mod go 1.26 → 1.24，golangci 同步）——降低接入门槛，语言面无变更
+- build: go 最低版本降至 1.24（golangci 同步）——⚠️ 发布事故：本版 go 行实际仍为 1.26.0（x/sys/x/crypto/x/text/validator 最新版要求 go≥1.26，go mod tidy 回抬）；真实降级见 v0.9.3
 
 ## [v0.9.2] — 2026-10-17
 
