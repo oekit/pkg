@@ -2,6 +2,8 @@
 
 由 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来。所有 notable 变更记录如下。
 
+## [- feat(errors): `New`/`As`/`Is`/`Unwrap` 与 stdlib 同型透传——下游哨兵错误不再需要双 import，「类型同一性红线」可完整执行（#8）
+
 ## [v0.11.0] — 2026-10-17
 
 - **feat(mathx)**: `Unstable` 新增单边向上抖动 `Upward`/`UpwardDuration`/`UpwardFloat64`——结果 ∈ [v, v(1+dev)]。重试退避的「不得比基准更早」语义此前无法用对称抖动表达（会把退避压短成更密集的重试风暴）（[#6](https://github.com/oekit/pkg/issues/6)）
