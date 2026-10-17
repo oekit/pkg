@@ -1,10 +1,21 @@
 # AGENTS.md — oekit/pkg
 
 > 微工具集 19 合 1（errors/bloomx/contextx/container/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/cache/bufiox/strmap；v0.10.0 起 uidgen/validator 拆至 kitx）；cache（v0.4.0 起）含缓存接口 CacheAside + BatchGetter 批量能力（MGet）+ LocalCache/SingleFlightCache + cachetest 契约 + Checker；container（v0.9.0 起，收编原 collectionx）泛型容器 Set/Ring/Queue/SafeMap + Map（sync.Map 背书）/Slice（并发安全）；timex/stringx（v0.7.0 起）时间段边界 BeginningOf/EndOf 七对（分/时/日/周/月/季/年，周起始显式参数）+ trie 多模式替换器 Replacer（最长匹配）/ NewMask 敏感词遮罩；singleflighttest（v0.8.0 起）singleflight 共享契约测试套件（internal 与 concurrency 双侧引用）
-> 当前版本：`v0.9.3` · module：`github.com/oekit/pkg` · org：[oekit = Open Easy Kit](https://oekit.github.io)
+> 当前版本：`v0.11.0` · module：`github.com/oekit/pkg` · org：[oekit = Open Easy Kit](https://oekit.github.io)
 
 ## 本仓包含
 `bloomx/`、`bufiox/`、`cache/`、`cache/cachetest/`、`container/`、`contextx/`、`convert/`、`encoding/`、`enumx/`、`errors/`、`httpjson/`、`internal/singleflight/`、`jsonrepair/`、`mathx/`、`pagination/`、`pathx/`、`ptrx/`、`singleflighttest/`、`slicex/`、`stringx/`、`strmap/`、`timex/`、`timex/cron/`
+
+## 零第三方依赖（本仓硬规则，CI 强制）
+
+- go.mod **永远不允许出现任何 require**：全部子包仅依赖 Go 标准库。
+  golang.org/x、github.com、google.golang.org 等任何外部模块一律禁止——
+  「看起来很稳」的 x/* 同样禁止（历史教训：dependabot 的版本升级曾把依赖链的
+  Go 门槛连带抬到 1.26，pkg v0.9.0–v0.9.3 期间实际下限失守，见 CHANGELOG）
+- 需要三方能力的基础工具：**拆独立仓，不进 pkg**（先例：validator/uidgen →
+  [kitx](https://github.com/oekit/kitx)，2026-10 pkg v0.10.0 拆分）
+- 强制点：CI `Zero Third-Party Deps` job（`go list -m all` 仅允许本模块一行）
+  与本地 `make zero-dep`；`go mod tidy -diff` 门禁管依赖一致性，本规则管策略
 
 ## 硬规则速览（全矩阵适用）
 

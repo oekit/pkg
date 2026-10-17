@@ -21,7 +21,7 @@ HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO�
 设计原则：
 
 - **按包编译**：import 哪个子包用哪个，go.mod 只多一条 require，二进制零冗余
-- **零第三方依赖**（v0.10.0 起）：全部子包只依赖标准库，validator/v10 随拆分迁出
+- **零第三方依赖（本仓硬规则，CI 强制）**：go.mod 永不出现 require——全部子包仅依赖标准库；需要三方能力的基础工具拆独立仓（先例：validator/uidgen → [kitx](https://github.com/oekit/kitx)）
 - **生产验证**：全部代码源自 enjoydream 后端服务多年共用积累，带完整单元测试（19/19 包）
 
 ## 包清单
