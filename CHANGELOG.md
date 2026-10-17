@@ -3,7 +3,11 @@
 由 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来。所有 notable 变更记录如下。
 
 
-## [v0.9.1] — 2026-10-17
+## [v0.9.2] — 2026-10-17
+
+- build: go 最低版本降至 1.24（go.mod go 1.26 → 1.24，golangci 同步）——降低接入门槛，语言面无变更
+
+## [v0.9.2] — 2026-10-17
 
 - **fix(errors)**：`MultiError.Errors()` 改为返回内部切片的**防御性拷贝**
   （`slices.Clone`）——此前直接暴露内部引用，调用方改元素/append 会静默
