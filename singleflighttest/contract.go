@@ -43,7 +43,7 @@ func runDedup[T any](t *testing.T, f Flight[T]) {
 	start := make(chan struct{})
 	errs := make([]error, n)
 
-	fn := func(_ context.Context) (T, error) {
+	fn := func(_ context.Context) (T, error) { //nolint:unparam // 契约桩恒返回零值——聚焦同 key 去重语义
 		calls.Add(1)
 		time.Sleep(30 * time.Millisecond) // 让迟到者进入 waiter
 		var zero T
