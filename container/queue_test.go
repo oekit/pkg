@@ -1,4 +1,4 @@
-package collectionx
+package container
 
 import (
 	"sync"

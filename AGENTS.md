@@ -1,11 +1,11 @@
 # AGENTS.md — oekit/pkg
 
-> 微工具集 21 合 1（bloomx/collectionx/contextx/errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）
-> 当前版本：`v0.8.0` · module：`github.com/oekit/pkg` · org：[oekit = Open Easy Kit](https://oekit.github.io)
+> 微工具集 21 合 1（bloomx/container/contextx/errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）
+> 当前版本：`v0.9.0` · module：`github.com/oekit/pkg` · org：[oekit = Open Easy Kit](https://oekit.github.io)
 
 ## 本仓包含
 
-`bloomx/`、`bufiox/`、`cache/`、`collectionx/`、`contextx/`、`convert/`、`encoding/`、`enumx/`、`errors/`、
+`bloomx/`、`bufiox/`、`cache/`、`container/`、`contextx/`、`convert/`、`encoding/`、`enumx/`、`errors/`、
 `httpjson/`、`jsonrepair/`、`mathx/`、`pagination/`、`pathx/`、`ptrx/`、`slicex/`、`stringx/`、
 `strmap/`、`timex/`（含 `cron`）、`uidgen/`、`validator/`、`singleflighttest/`
 ## 硬规则速览（全矩阵适用）

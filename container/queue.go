@@ -1,4 +1,4 @@
-package collectionx
+package container
 
 import (
 	"sync"
@@ -27,7 +27,7 @@ func (q *Queue[T]) Put(v T) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.closed {
-		panic("collectionx: put on closed queue")
+		panic("container: put on closed queue")
 	}
 	q.items = append(q.items, v)
 	q.notEmpty.Signal()

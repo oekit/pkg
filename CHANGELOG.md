@@ -3,7 +3,18 @@
 由 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来。所有 notable 变更记录如下。
 
 
-## [Unreleased]
+## [v0.9.0] — 2026-10-17
+
+- **BREAKING** feat(container): 新增泛型容器包 `container`，整体收编原 `collectionx`
+  子包——`Set`/`Ring`/`Queue`/`SafeMap` 类型名与方法签名不变，仅 import 路径由
+  `github.com/oekit/pkg/collectionx` 改为 `github.com/oekit/pkg/container`（机械替换即可）；
+  `collectionx` 子包同步删除，容器唯一家为 `container`
+- feat(container): 参考 go-kratos/kit container 新增两个并发安全类型——`Map[K,V]`
+  （sync.Map 背书：Load/Store/LoadOrStore/Delete/Range/Len/Clear，读多写少、key 集合
+  稳定时优于 SafeMap）、`Slice[T]`（RWMutex 背书：Append/Get/Set/Delete/Snapshot/Range/
+  Clear，Range 在独立快照上进行不受并发写干扰）
+
+## [v0.8.0] — 2026-10-17
 
 - **fix(errors)**：`formatKV` 奇数个 kv 不再静默丢弃最后一个——保留并渲染为
   `!BADKEY=<value>`（对齐 `log/slog` 约定），漏传 value 的编程错误在输出里

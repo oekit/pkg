@@ -1,6 +1,6 @@
 # pkg
 
-> 微工具集 21 合 1——errors/bloomx/contextx/validator/stringx/convert/timex/uidgen/cache/bufiox/strmap 等基础工具包
+> 微工具集 21 合 1——errors/bloomx/container/contextx/validator/stringx/convert/timex/uidgen/cache/bufiox/strmap 等基础工具包
 
 > 🌐 项目主页：**https://oekit.github.io/** · 名称由来：**O**pen **E**asy **Kit**（开源 · 易用 · 工具集合）
 > 🤖 AI Agent：本仓规范与硬规则见 [AGENTS.md](AGENTS.md)；机器可读索引见 [llms.txt](https://oekit.github.io/llms.txt)（接口签名以源码为准）。
@@ -13,8 +13,8 @@ go get github.com/oekit/pkg@v0.7.0
 
 ## 这个仓库做什么
 
-`pkg` 是 oekit 的**基础工具集**：20 个经过生产验证的小工具包合成一个 module，
-覆盖错误处理、参数校验、字符串/切片/类型转换、时间与 cron、ID 生成、JSON 修复、
+`pkg` 是 oekit 的**基础工具集**：21 个经过生产验证的小工具包合成一个 module，
+覆盖错误处理、参数校验、字符串/切片/类型转换、泛型容器、时间与 cron、ID 生成、JSON 修复、
 HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO、GC 友好只读字典
 等日常高频需求。
 
@@ -34,6 +34,7 @@ HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO�
 | `validator` | go-playground/validator 封装，`ValidationError` 自动映射 400 |
 | `stringx` | ID 生成、关键词包含匹配、缩进、英文复数化、`{key}` 模板替换 |
 | `slicex` | `Partition` 二分组（保序）、GroupBy 等切片操作 |
+| `container` | 泛型容器（v0.9.0 起，收编原 `collectionx`）：`Set`（集合代数并/交/差）、`Ring` 定长环形缓冲、`Queue` 阻塞队列、`SafeMap`（RWMutex）、`Map`（sync.Map 背书，读多写少）、`Slice` 并发安全切片——参考 go-kratos/kit container 设计 |
 | `enumx` | 枚举：确定性顺序的 All/Values/解析（map 遍历乱序问题的解法） |
 | `convert` | 字符串/数字/布尔/切片的宽容转换（脏输入友好） |
 | `encoding` | JSON 序列化助手（`UnmarshalUseNumber` 系列保留 json.Number，防 >2^53 float 精度丢失）+ FNV-1a/SHA-256 摘要与 Base64 |

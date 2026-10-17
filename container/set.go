@@ -1,4 +1,4 @@
-package collectionx
+package container
 
 // Set 泛型集合（非并发安全：单 goroutine 使用，或由调用方加锁保护）。
 type Set[T comparable] map[T]struct{}

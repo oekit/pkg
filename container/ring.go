@@ -1,4 +1,4 @@
-package collectionx
+package container
 
 // Ring 定长环形缓冲（非并发安全）：生产快于消费最多保留最新 n 个元素，
 // 超出后 Add 覆盖最旧值且保序 FIFO（有界有损，适合"只要最新 n 条"的场景，
@@ -13,7 +13,7 @@ type Ring[T any] struct {
 // NewRing 创建容量为 n 的环形缓冲。n <= 0 属于编程错误，直接 panic。
 func NewRing[T any](n int) *Ring[T] {
 	if n <= 0 {
-		panic("collectionx: ring size must be positive")
+		panic("container: ring size must be positive")
 	}
 	return &Ring[T]{elements: make([]T, n), n: n}
 }
