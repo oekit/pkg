@@ -5,9 +5,10 @@ import (
 	"time"
 )
 
-// Unstable 围绕基准值产生 ±deviation 比例的随机抖动。
-// 典型用途是打散缓存 TTL：同批写入的 key 若 TTL 完全一致，
-// 会形成周期性的集中失效（缓存雪崩），用抖动值错开即可缓解。
+// Unstable 围绕基准值产生比例随机抖动：Around 对称 ±deviation
+// （典型用途是打散缓存 TTL：同批写入的 key 若 TTL 完全一致，会形成周期性
+// 的集中失效（缓存雪崩），用抖动值错开即可缓解）；Upward 单边向上
+// （重试退避「不得比基准更早」语义）。
 //
 //	u := mathx.NewUnstable(0.1)
 //	ttl := u.AroundDuration(30 * time.Minute) // ∈ [27min, 33min]
@@ -53,4 +54,33 @@ func (u Unstable) AroundFloat64(v float64) float64 {
 		return v
 	}
 	return v * (1 + u.deviation*(rand.Float64()*2-1))
+}
+
+// —— 单边向上抖动 ——
+
+// Upward 返回 n ∈ [n, n(1+dev)] 的随机整数：只向上抖动，适用于重试退避等
+// 「不得比基准更早」的语义——对称抖动会把退避压短，退避叠加 jitter 反而
+// 促成更密集的重试风暴。deviation=0 恒等返回。与 Around 一致，仅适用于
+// 正数语义。
+func (u Unstable) Upward(n int) int {
+	if u.deviation == 0 {
+		return n
+	}
+	return int(u.UpwardFloat64(float64(n)))
+}
+
+// UpwardDuration 返回 d ∈ [d, d(1+dev)] 的随机时长。deviation=0 恒等返回。
+func (u Unstable) UpwardDuration(d time.Duration) time.Duration {
+	if u.deviation == 0 {
+		return d
+	}
+	return time.Duration(u.UpwardFloat64(float64(d)))
+}
+
+// UpwardFloat64 返回 v ∈ [v, v(1+dev)] 的随机浮点数。deviation=0 恒等返回。
+func (u Unstable) UpwardFloat64(v float64) float64 {
+	if u.deviation == 0 {
+		return v
+	}
+	return v * (1 + u.deviation*rand.Float64())
 }
