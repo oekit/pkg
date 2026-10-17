@@ -43,7 +43,7 @@ func runDedup[T any](t *testing.T, f Flight[T]) {
 	start := make(chan struct{})
 	errs := make([]error, n)
 
-	fn := func(ctx context.Context) (T, error) {
+	fn := func(_ context.Context) (T, error) {
 		calls.Add(1)
 		time.Sleep(30 * time.Millisecond) // 让迟到者进入 waiter
 		var zero T
@@ -123,7 +123,7 @@ func runPanic[T any](t *testing.T, f Flight[T]) {
 	release := make(chan struct{})
 	var once sync.Once
 
-	fn := func(ctx context.Context) (T, error) {
+	fn := func(_ context.Context) (T, error) {
 		once.Do(func() { close(entered) })
 		<-release
 		panic("boom")
