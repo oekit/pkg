@@ -1,6 +1,6 @@
 # pkg
 
-> 微工具集 21 合 1——errors/bloomx/container/contextx/validator/stringx/convert/timex/uidgen/cache/bufiox/strmap 等基础工具包
+> 微工具集 19 合 1——errors/bloomx/container/contextx/stringx/convert/timex/cache/bufiox/strmap 等基础工具包
 
 > 🌐 项目主页：**https://oekit.github.io/** · 名称由来：**O**pen **E**asy **Kit**（开源 · 易用 · 工具集合）
 > 🤖 AI Agent：本仓规范与硬规则见 [AGENTS.md](AGENTS.md)；机器可读索引见 [llms.txt](https://oekit.github.io/llms.txt)（接口签名以源码为准）。
@@ -8,21 +8,21 @@
 ## 安装
 
 ```bash
-go get github.com/oekit/pkg@v0.9.3
+go get github.com/oekit/pkg@v0.10.0
 ```
 
 ## 这个仓库做什么
 
-`pkg` 是 oekit 的**基础工具集**：21 个经过生产验证的小工具包合成一个 module，
-覆盖错误处理、参数校验、字符串/切片/类型转换、泛型容器、时间与 cron、ID 生成、JSON 修复、
+`pkg` 是 oekit 的**基础工具集**：19 个经过生产验证的小工具包合成一个 module，
+覆盖错误处理、字符串/切片/类型转换、泛型容器、时间与 cron、JSON 修复、
 HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO、GC 友好只读字典
-等日常高频需求。
+等日常高频需求。标识与校验（uidgen/validator）已拆分至 [kitx](https://github.com/oekit/kitx)。
 
 设计原则：
 
 - **按包编译**：import 哪个子包用哪个，go.mod 只多一条 require，二进制零冗余
-- **零依赖或近零依赖**：绝大多数子包只依赖标准库；重依赖（validator/v10）隔离在对应子包
-- **生产验证**：全部代码源自 enjoydream 后端服务多年共用积累，带完整单元测试（21/21 包）
+- **零第三方依赖**（v0.10.0 起）：全部子包只依赖标准库，validator/v10 随拆分迁出
+- **生产验证**：全部代码源自 enjoydream 后端服务多年共用积累，带完整单元测试（19/19 包）
 
 ## 包清单
 
@@ -31,7 +31,6 @@ HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO�
 | `errors` | 错误链 `Wrap`/`Cause`（nil-safe）、`BizError`（业务码/HTTP 码双轨）、`Chain`/`In` 组合工具、sentinel 错误。整个矩阵的错误处理基座 |
 | `bloomx` | 本地布隆过滤器：FNV-1a 双哈希、RWMutex 并发安全，缓存穿透防护/去重预检（非法入参归一默认值） |
 | `contextx` | `ValueOnlyFrom` 只传值轻量 ctx：剥离 Done/Err/Deadline，把请求值交给后台任务而不继承取消/超时 |
-| `validator` | go-playground/validator 封装，`ValidationError` 自动映射 400 |
 | `stringx` | ID 生成、关键词包含匹配、缩进、英文复数化、`{key}` 模板替换 |
 | `slicex` | `Partition` 二分组（保序）、GroupBy 等切片操作 |
 | `container` | 泛型容器（v0.9.0 起，收编原 `collectionx`）：`Set`（集合代数并/交/差）、`Ring` 定长环形缓冲、`Queue` 阻塞队列、`SafeMap`（RWMutex）、`Map`（sync.Map 背书，读多写少）、`Slice` 并发安全切片——参考 go-kratos/kit container 设计 |
@@ -45,7 +44,6 @@ HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO�
 | `pagination` | `PageRequest`/`PageResponse` 分页换算 |
 | `ptrx` | 指针 To/From 与安全解引用 |
 | `timex`（+`cron`） | 时间格式化/解析/时间戳 + cron 表达式 |
-| `uidgen` | UUID/雪花/随机串 ID 生成 |
 | `cache` | 刷新检查器：TTL 后台刷新、失败按 failTTL 降级、并发请求合并为一次刷新 |
 | `bufiox` | 面向协议编解码的零拷贝缓冲 IO：读侧 Next/Peek 返回缓冲视图，写侧 Malloc/WriteBinary 攒批一次 Flush（`bytes` 与 `io.Reader/Writer` 双实现） |
 | `strmap` | GC 友好的只读字符串 map：键打包 + int32 哈希表 + maphash，海量静态映射（header/字典表）零 GC 扫描开销 |
@@ -95,14 +93,15 @@ name, ok := canon.Get("content-type") // "Content-Type", true
 - 本仓不依赖矩阵内任何其他模块（validator→errors、httpjson→stringx、bloomx→encoding 三条内部边除外）
 
 
-## 矩阵总览（23 活跃模块，自动生成）
+## 矩阵总览（24 活跃模块，自动生成）
 
 | 模块 | 内容 | 矩阵内依赖 |
 |---|---|---|
-| [pkg](https://github.com/oekit/pkg) | 微工具集 21 合 1（errors/bloomx/contextx/container/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）；cache（v0.4.0 起）含缓存接口 CacheAside + BatchGetter 批量能力（MGet）+ LocalCache/SingleFlightCache + cachetest 契约 + Checker；container（v0.9.0 起，收编原 collectionx）泛型容器 Set/Ring/Queue/SafeMap + Map（sync.Map 背书）/Slice（并发安全）；timex/stringx（v0.7.0 起）时间段边界 BeginningOf/EndOf 七对（分/时/日/周/月/季/年，周起始显式参数）+ trie 多模式替换器 Replacer（最长匹配）/ NewMask 敏感词遮罩；singleflighttest（v0.8.0 起）singleflight 共享契约测试套件（internal 与 concurrency 双侧引用） | — |
+| [pkg](https://github.com/oekit/pkg) | 微工具集 19 合 1（errors/bloomx/contextx/container/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/cache/bufiox/strmap；v0.10.0 起 uidgen/validator 拆至 kitx）；cache（v0.4.0 起）含缓存接口 CacheAside + BatchGetter 批量能力（MGet）+ LocalCache/SingleFlightCache + cachetest 契约 + Checker；container（v0.9.0 起，收编原 collectionx）泛型容器 Set/Ring/Queue/SafeMap + Map（sync.Map 背书）/Slice（并发安全）；timex/stringx（v0.7.0 起）时间段边界 BeginningOf/EndOf 七对（分/时/日/周/月/季/年，周起始显式参数）+ trie 多模式替换器 Replacer（最长匹配）/ NewMask 敏感词遮罩；singleflighttest（v0.8.0 起）singleflight 共享契约测试套件（internal 与 concurrency 双侧引用） | — |
 | [concurrency](https://github.com/oekit/concurrency) | 并发与流控原语（async/gopool/group/singleflight/progress/syncx/ratelimit/retry）+ window 滑动窗口 / breaker 自适应熔断（规范哨兵 ErrCircuitOpen）/ shedding CPU 自适应降载 / batch 攒批执行器（满条数/满字节/窗口去重）/ timewheel 单级时间轮 | [pkg](https://github.com/oekit/pkg) |
 | [logx](https://github.com/oekit/logx) | 统一日志门面（多后端可替换 + Sink + caller 归属）+ 优雅关停；桥接子包 hlog/hertzlog/kitexlog 为嵌套模块按需引入 | — |
 | [core](https://github.com/oekit/core) | 应用基建件（governance 治理 schema / config 配置加载 + default/env/range/options tag 校验 / lifecycle 契约 / network IP 工具 / version） | — |
+| [kitx](https://github.com/oekit/kitx) | 标识与校验——uidgen（Snowflake 全局单例+Extract 元数据、手写 RFC 4122 v4 UUID 零第三方依赖、RandomHex/RandomString 拒绝采样随机串）+ validator（go-playground/validator v10 接口化门面：struct tag 校验/自定义规则注册/ValidationError Unwrap 为 BizError 400 对接 middleware.Fail），自 pkg v0.10.0 拆出 | [pkg](https://github.com/oekit/pkg) |
 | [metrics](https://github.com/oekit/metrics) | Prometheus 门面 + 弹性指标族 | [core](https://github.com/oekit/core) |
 | [tracing](https://github.com/oekit/tracing) | OpenTelemetry 追踪 + trace_id 真相源 | [logx](https://github.com/oekit/logx) |
 | [registry](https://github.com/oekit/registry) | 注册发现核心 + Nacos 实现 + Nacos 配置源 + sdbridge | [core](https://github.com/oekit/core)、[logx](https://github.com/oekit/logx) |

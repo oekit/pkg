@@ -3,6 +3,11 @@
 由 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来。所有 notable 变更记录如下。
 
 
+## [v0.10.0] — 2026-10-17
+
+- **BREAKING** refactor!: `uidgen`、`validator` 两包拆分至新仓 [kitx](https://github.com/oekit/kitx)——机械替换 import 即可迁移：`github.com/oekit/pkg/uidgen` → `github.com/oekit/kitx/uidgen`、`github.com/oekit/pkg/validator` → `github.com/oekit/kitx/validator`（包名不变）；行为契约不变（`ValidationError` 仍 Unwrap 为 BizError 400，uidgen 的 UUID 输出语义逐字节一致，且其 google/uuid 依赖已改标准库手写 v4）
+- build: **第三方依赖归零**——go.mod 不再有任何 require，go.sum 清空（v0.9.3 拆出前有 validator/go-playground 全链 9 个模块）
+
 ## [v0.9.3] — 2026-10-17
 
 - build: go 最低版本实际降至 1.24.0——锁定 go1.24 兼容版依赖：golang.org/x/sys v0.41.0、x/crypto v0.48.0、x/text v0.34.0、validator/v10 v10.30.1（各取声明 go≤1.24 的最高版）；语言面无变更

@@ -1,13 +1,11 @@
 # AGENTS.md — oekit/pkg
 
-> 微工具集 21 合 1（bloomx/container/contextx/errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）
-> 当前版本：`v0.9.0` · module：`github.com/oekit/pkg` · org：[oekit = Open Easy Kit](https://oekit.github.io)
+> 微工具集 19 合 1（errors/bloomx/contextx/container/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/cache/bufiox/strmap；v0.10.0 起 uidgen/validator 拆至 kitx）；cache（v0.4.0 起）含缓存接口 CacheAside + BatchGetter 批量能力（MGet）+ LocalCache/SingleFlightCache + cachetest 契约 + Checker；container（v0.9.0 起，收编原 collectionx）泛型容器 Set/Ring/Queue/SafeMap + Map（sync.Map 背书）/Slice（并发安全）；timex/stringx（v0.7.0 起）时间段边界 BeginningOf/EndOf 七对（分/时/日/周/月/季/年，周起始显式参数）+ trie 多模式替换器 Replacer（最长匹配）/ NewMask 敏感词遮罩；singleflighttest（v0.8.0 起）singleflight 共享契约测试套件（internal 与 concurrency 双侧引用）
+> 当前版本：`v0.9.3` · module：`github.com/oekit/pkg` · org：[oekit = Open Easy Kit](https://oekit.github.io)
 
 ## 本仓包含
+`bloomx/`、`bufiox/`、`cache/`、`cache/cachetest/`、`container/`、`contextx/`、`convert/`、`encoding/`、`enumx/`、`errors/`、`httpjson/`、`internal/singleflight/`、`jsonrepair/`、`mathx/`、`pagination/`、`pathx/`、`ptrx/`、`singleflighttest/`、`slicex/`、`stringx/`、`strmap/`、`timex/`、`timex/cron/`
 
-`bloomx/`、`bufiox/`、`cache/`、`container/`、`contextx/`、`convert/`、`encoding/`、`enumx/`、`errors/`、
-`httpjson/`、`jsonrepair/`、`mathx/`、`pagination/`、`pathx/`、`ptrx/`、`slicex/`、`stringx/`、
-`strmap/`、`timex/`（含 `cron`）、`uidgen/`、`validator/`、`singleflighttest/`
 ## 硬规则速览（全矩阵适用）
 
 ### 分层与依赖
@@ -51,9 +49,3 @@
 
 ## 本仓范围
 
-- **基础工具**：errors（错误链/BizError/Chain/In）、validator（参数校验）、convert/encoding（类型转换与序列化，UseNumber 显式入口防 >2^53 float 精度丢失）、
-  mathx（统计/`Unstable` 抖动值）/pathx/pagination/ptrx/stringx/slicex/enumx/timex+cron/uidgen（日常工具）、
-  bloomx（本地布隆过滤器）、contextx（`ValueOnlyFrom` 只传值 ctx）
-- **数据修复与调用**：jsonrepair（脏 JSON 宽容修复）、httpjson（HTTP JSON 调用）、cache（刷新检查器）
-- **协议与字典**（v0.2.0 吸收自 cloudwego/gopkg，独立重写）：bufiox（零拷贝缓冲 IO）、
-  strmap（GC 友好只读字符串 map）
