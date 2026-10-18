@@ -1,6 +1,6 @@
 # AGENTS.md — oekit/pkg
 
-> 微工具集 19 合 1（errors/bloomx/contextx/container/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/cache/bufiox/strmap；v0.10.0 起 uidgen/validator 拆至 kitx）；cache（v0.4.0 起）含缓存接口 CacheAside + BatchGetter 批量能力（MGet）+ LocalCache/SingleFlightCache + cachetest 契约 + Checker；container（v0.9.0 起，收编原 collectionx）泛型容器 Set/Ring/Queue/SafeMap + Map（sync.Map 背书）/Slice（并发安全）；timex/stringx（v0.7.0 起）时间段边界 BeginningOf/EndOf 七对（分/时/日/周/月/季/年，周起始显式参数）+ trie 多模式替换器 Replacer（最长匹配）/ NewMask 敏感词遮罩；singleflighttest（v0.8.0 起）singleflight 共享契约测试套件（internal 与 concurrency 双侧引用）
+> 微工具集 20 合 1（errors/bloomx/contextx/container/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/cache/bufiox/strmap/singleflighttest；v0.10.0 起 uidgen/validator 拆至 kitx；v0.12.0 起 errors New/As/Is/Unwrap 与 stdlib 同型透传）；cache（v0.4.0 起）含缓存接口 CacheAside + BatchGetter 批量能力（MGet）+ LocalCache/SingleFlightCache + cachetest 契约 + Checker；container（v0.9.0 起，收编原 collectionx）泛型容器 Set/Ring/Queue/SafeMap + Map（sync.Map 背书）/Slice（并发安全）；timex/stringx（v0.7.0 起）时间段边界 BeginningOf/EndOf 七对（分/时/日/周/月/季/年，周起始显式参数）+ trie 多模式替换器 Replacer（最长匹配）/ NewMask 敏感词遮罩；singleflighttest（v0.8.0 起）singleflight 共享契约测试套件（internal 与 concurrency 双侧引用）
 > 当前版本：`v0.11.0` · module：`github.com/oekit/pkg` · org：[oekit = Open Easy Kit](https://oekit.github.io)
 
 ## 本仓包含
@@ -42,7 +42,7 @@
 
 ### 生命周期
 - 组件 Close 统一 `Close(ctx) error` 签名 + sync.Once 幂等
-- 应用骨架用 `github.com/oekit/bootstrap/bootstrap.Run`；**userFn 返回即服务结束，
+- 应用骨架用 `github.com/oekit/bootstrap（New + Run(fn)，v0.4.0 起无 Run(Config)）`；**userFn 返回即服务结束，
   长驻服务必须 `<-app.Context().Done()` 阻塞**
 
 ### Option 与命名
