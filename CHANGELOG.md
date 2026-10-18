@@ -2,7 +2,10 @@
 
 由 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来。所有 notable 变更记录如下。
 
-## [- feat(errors): `New`/`As`/`Is`/`Unwrap` 与 stdlib 同型透传——下游哨兵错误不再需要双 import，「类型同一性红线」可完整执行（#8）
+## [v0.12.0] — 2026-10-18
+
+- **feat(errors)**: `New`/`As`/`Is`/`Unwrap` 与 stdlib 同型透传——下游哨兵错误不再需要双 import，「类型同一性红线」可完整执行（[#8](https://github.com/oekit/pkg/issues/8)）
+- build: 零第三方依赖硬规则四层强制——Makefile `zero-dep` 目标（`GOWORK=off go list -m all` 仅标准库 1 行）+ CI `Zero Third-Party Deps` job + AGENTS/README 明文规则 + main 分支保护
 
 ## [v0.11.0] — 2026-10-17
 
