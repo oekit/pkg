@@ -37,9 +37,9 @@ type localEntry[T any] struct {
 	expiresAt time.Time
 }
 
-// isExpired 检查是否过期。
-func (e *localEntry[T]) isExpired() bool {
-	return !e.expiresAt.IsZero() && time.Now().After(e.expiresAt)
+// isExpired 检查是否过期（now 由调用方传入——注入时钟的唯一判定口径）。
+func (e *localEntry[T]) isExpired(now time.Time) bool {
+	return !e.expiresAt.IsZero() && now.After(e.expiresAt)
 }
 
 // LocalConfig 配置本地缓存实例。
@@ -59,6 +59,11 @@ type LocalConfig[T any] struct {
 	//     下次 GetOrLoad 会重新调用 Source）；
 	//   - 正值：按指定时长缓存 null marker。
 	NullTTL time.Duration
+
+	// Now 时钟注入（缺省 time.Now；nil 视为缺省）。TTL/NullTTL 的全部过期判定
+	// 与过期时刻写入走该时钟——测试注入假时钟即可确定性驱动过期/空值窗口，
+	// 无 sleep 无 flake（与 memkv 的 s.now、budget 的 WithClock 口径拉齐，#9）。
+	Now func() time.Time
 }
 
 // LocalCache 是基于内存的本地缓存实现。
@@ -71,17 +76,23 @@ type LocalCache[T any] struct {
 	mu        sync.RWMutex
 	data      map[string]*localEntry[T]
 	cfg       LocalConfig[T]
-	order     []string       // 写序淘汰队列（尾部最新；重写提升，读命中不提升）
-	orderIdx  map[string]int // key → order 切片索引，O(1) 移除
+	now       func() time.Time // 规范化后的时钟（cfg.Now nil → time.Now）
+	order     []string         // 写序淘汰队列（尾部最新；重写提升，读命中不提升）
+	orderIdx  map[string]int   // key → order 切片索引，O(1) 移除
 	done      chan struct{}
 	closeOnce sync.Once
 }
 
 // NewLocalCache 创建一个本地缓存实例。
 func NewLocalCache[T any](cfg LocalConfig[T]) *LocalCache[T] {
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
 	c := &LocalCache[T]{
 		data:     make(map[string]*localEntry[T]),
 		cfg:      cfg,
+		now:      now,
 		orderIdx: make(map[string]int),
 		done:     make(chan struct{}),
 	}
@@ -132,7 +143,7 @@ func (c *LocalCache[T]) getEntry(key string) (*localEntry[T], bool) {
 		return nil, false
 	}
 
-	if entry.isExpired() {
+	if entry.isExpired(c.now()) {
 		c.mu.Lock()
 		// 二次检查：在 RUnlock 和 Lock 之间可能有别的 goroutine Set 了新值，
 		// 只删除仍然是同一个过期 entry 的情况，避免误删新值。
@@ -204,7 +215,7 @@ func (c *LocalCache[T]) setNullMarker(key string, ttl time.Duration) {
 
 	var expiresAt time.Time
 	if ttl > 0 {
-		expiresAt = time.Now().Add(ttl)
+		expiresAt = c.now().Add(ttl)
 	}
 
 	// 检查是否需要淘汰（同 SetWithTTL）
@@ -233,7 +244,7 @@ func (c *LocalCache[T]) SetWithTTL(ctx context.Context, key string, value *T, tt
 
 	var expiresAt time.Time
 	if ttl > 0 {
-		expiresAt = time.Now().Add(ttl)
+		expiresAt = c.now().Add(ttl)
 	}
 
 	// 检查是否需要淘汰
@@ -281,11 +292,12 @@ func (c *LocalCache[T]) DelBatch(ctx context.Context, keys ...string) error {
 // cleanup goroutine，过期条目仅在这些路径被惰性回收）。
 func (c *LocalCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T, error) {
 	out := make(map[string]*T, len(keys))
+	now := c.now()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for _, key := range keys {
 		entry, ok := c.data[key]
-		if !ok || entry.isNull || entry.isExpired() {
+		if !ok || entry.isNull || entry.isExpired(now) {
 			continue
 		}
 		out[key] = entry.value
@@ -306,7 +318,7 @@ func (c *LocalCache[T]) Exists(ctx context.Context, key string) (bool, error) {
 		return false, nil
 	}
 
-	if entry.isExpired() {
+	if entry.isExpired(c.now()) {
 		c.mu.Lock()
 		// 二次检查：同 Get，避免误删并发 Set 的新值。
 		if cur, exists := c.data[key]; exists && cur == entry {
@@ -346,6 +358,8 @@ func (c *LocalCache[T]) Clear() {
 
 // cleanup 定期清理过期条目。
 // 分两阶段：读锁收集过期 key，写锁批量删除，减少写锁持有时间。
+// ticker 只定节奏，过期判定一律走注入时钟——假时钟下真实 ticker 的时间戳
+// 不可比（直接比较会把全部条目误判为过期而清空）。
 func (c *LocalCache[T]) cleanup() {
 	// TTL/2 可能整除为 0（如 TTL=1ns），time.NewTicker(0) 会 panic
 	// （同型问题 KeyedLimiter 已修，此处补齐）；下限 1s 保底。
@@ -360,7 +374,8 @@ func (c *LocalCache[T]) cleanup() {
 		select {
 		case <-c.done:
 			return
-		case now := <-ticker.C:
+		case <-ticker.C:
+			now := c.now()
 			// 阶段 1：读锁扫描，收集过期 key
 			c.mu.RLock()
 			var expired []string
@@ -379,7 +394,7 @@ func (c *LocalCache[T]) cleanup() {
 			c.mu.Lock()
 			for _, key := range expired {
 				// 二次检查：可能已被其他 goroutine 更新
-				if entry, ok := c.data[key]; ok && entry.isExpired() {
+				if entry, ok := c.data[key]; ok && entry.isExpired(now) {
 					delete(c.data, key)
 					c.removeFromOrder(key)
 				}

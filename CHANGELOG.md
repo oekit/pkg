@@ -2,6 +2,19 @@
 
 由 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来。所有 notable 变更记录如下。
 
+## [v0.13.0] — 2026-10-18
+
+- **feat(cache)**: `LocalCache` 时钟注入——`LocalConfig` 新增 `Now func() time.Time`
+  （缺省 time.Now），TTL/NullTTL 的全部过期判定（Get/GetOrLoad/Exists/MGet）与过期
+  时刻写入（Set/SetWithTTL/null marker）及后台清扫一并路由注入时钟——测试注入假时钟
+  即可确定性驱动过期与空值窗口，无 sleep 无 flake（[#9](https://github.com/oekit/pkg/issues/9)；
+  与 memkv 的 s.now、concurrency budget 的 WithClock 口径拉齐）。
+  注意：清扫 ticker 只定节奏、判定走注入时钟——假时钟下真实 ticker 时间戳不可比，
+  直接比较会全量误删（实现时已规避）
+- **feat(cachetest)**: 新增 `FakeClock` + `RunWithClock` 假时钟 TTL 套件（4 场景）：
+  过期闭边界（恰到期仍命中、越过 1ns miss）、TTL=0 永不过期、null marker 过窗重源、
+  重写刷新过期时刻——支持时钟注入的实现经 `ClockFactory` 接入，既有 `Run` 契约不动
+
 ## [v0.12.0] — 2026-10-18
 
 - **feat(errors)**: `New`/`As`/`Is`/`Unwrap` 与 stdlib 同型透传——下游哨兵错误不再需要双 import，「类型同一性红线」可完整执行（[#8](https://github.com/oekit/pkg/issues/8)）
