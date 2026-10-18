@@ -64,6 +64,21 @@ type LocalConfig[T any] struct {
 	// 与过期时刻写入走该时钟——测试注入假时钟即可确定性驱动过期/空值窗口，
 	// 无 sleep 无 flake（与 memkv 的 s.now、budget 的 WithClock 口径拉齐，#9）。
 	Now func() time.Time
+
+	// SourceWithTTL 动态回填 TTL 的回源函数（pkg#11；与 Source 同时配置时本字段
+	// 优先）：ttl > 0 按其缓存，<=0 回退 TTL 字段；返回 nil 值仍走 null marker
+	// （此时 ttl 不生效，NullTTL 治理）。典型场景：第三方 token 的 expires_in。
+	SourceWithTTL SourceFuncWithTTL[T]
+
+	// StaleIfError 回源失败时回退已过期的历史真值（fail-open，pkg#11——防上游
+	// 抖动放大为拒绝服务）。只认「TTL 过期的真值」：null marker 不参与 stale，
+	// TTL=0 永不过期条目无 stale 语义（不会过期）。过期条目在本路径下保留于表内
+	// （回收交给后台清扫），可反复兜底直至上游恢复。
+	StaleIfError bool
+
+	// OnStale stale 命中回调（观测：打点/告警；nil = no-op）。
+	// value 所有权与缓存值一致（共享引用、调用方只读）。
+	OnStale func(ctx context.Context, key string, stale *T)
 }
 
 // LocalCache 是基于内存的本地缓存实现。
@@ -158,33 +173,64 @@ func (c *LocalCache[T]) getEntry(key string) (*localEntry[T], bool) {
 	return entry, true
 }
 
-// GetOrLoad 获取缓存，未命中时通过 Source 加载（Cache-Aside 模式）。
+// GetOrLoad 获取缓存，未命中时通过 Source/SourceWithTTL 加载（Cache-Aside 模式）。
 // Source 返回 (nil, nil) 时缓存 null marker（默认 1 分钟，可用 NullTTL
 // 调整，负值禁用）；命中 null marker 时直接返回 (nil, nil)，**不会**再调
 // Source，避免对不存在的 key 形成 thundering-herd 击穿。
+//
+// 动态回填 TTL（SourceWithTTL，pkg#11）：回源返回的 ttl > 0 按其缓存，
+// <=0 回退配置的 TTL；两者同时配置时 SourceWithTTL 优先。
+//
+// stale-if-error（StaleIfError，pkg#11）：回源失败且存在已过期的历史真值时
+// 返回陈旧值并触发 OnStale 回调（fail-open，语义详见 LocalConfig 字段注释）。
 func (c *LocalCache[T]) GetOrLoad(ctx context.Context, key string) (*T, error) {
-	// 1. 先查缓存（区分普通未命中与 null marker 命中）
-	entry, ok := c.getEntry(key)
-	if ok {
-		if entry.isNull {
-			// 命中 null marker：直接返回，不调 Source（防穿透）
-			return nil, nil
+	// 1. 非删除式查看：未过期直接返回（null marker 命中 → (nil, nil) 防穿透）。
+	//    过期条目保留在表内——StaleIfError 需要过期真值在回源失败时仍可读
+	//    （惰性删除在此让位，回收交给后台清扫与其他读路径）
+	now := c.now()
+	c.mu.RLock()
+	entry, exists := c.data[key]
+	c.mu.RUnlock()
+
+	stale := false
+	if exists {
+		if !entry.isExpired(now) {
+			if entry.isNull {
+				return nil, nil
+			}
+			return entry.value, nil
 		}
-		return entry.value, nil
+		stale = !entry.isNull && !entry.expiresAt.IsZero()
 	}
 
-	// 2. 缓存未命中，调用 source
-	if c.cfg.Source == nil {
+	// 2. 回源（SourceWithTTL 优先；统一到 (val, ttl, err)）
+	var (
+		val *T
+		ttl time.Duration
+		err error
+	)
+	switch {
+	case c.cfg.SourceWithTTL != nil:
+		val, ttl, err = c.cfg.SourceWithTTL(ctx, key)
+	case c.cfg.Source != nil:
+		val, err = c.cfg.Source(ctx, key)
+		ttl = c.cfg.TTL
+	default:
 		return nil, nil
 	}
-
-	source, err := c.cfg.Source(ctx, key)
 	if err != nil {
+		// stale-if-error：回源失败时回退已过期真值（fail-open）
+		if c.cfg.StaleIfError && stale {
+			if c.cfg.OnStale != nil {
+				c.cfg.OnStale(ctx, key, entry.value)
+			}
+			return entry.value, nil
+		}
 		return nil, err
 	}
 
 	// 3. 回填缓存（best-effort，失败仅记录不影响主流程）
-	if source == nil {
+	if val == nil {
 		// 缓存空值防穿透
 		if nullTTL := c.effectiveNullTTL(); nullTTL > 0 {
 			c.setNullMarker(key, nullTTL)
@@ -192,11 +238,14 @@ func (c *LocalCache[T]) GetOrLoad(ctx context.Context, key string) (*T, error) {
 		return nil, nil
 	}
 
-	if e := c.Set(ctx, key, source); e != nil {
+	if ttl <= 0 {
+		ttl = c.cfg.TTL
+	}
+	if e := c.SetWithTTL(ctx, key, val, ttl); e != nil {
 		cacheLog.Warn("local cache backfill failed", "key", key, "err", e)
 	}
 
-	return source, nil
+	return val, nil
 }
 
 // effectiveNullTTL 返回生效的空值缓存 TTL：

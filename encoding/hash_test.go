@@ -1,6 +1,7 @@
 package encoding
 
 import (
+	"bytes"
 	"testing"
 )
 
@@ -71,5 +72,26 @@ func TestFnv1a64(t *testing.T) {
 	// FNV-1a 64 位标准向量："hello" 的已知值，锁定算法不被无意更改
 	if result != 0xa430d84680aabd0b {
 		t.Errorf("Fnv1a64(hello) = %#x, want %#x", result, uint64(0xa430d84680aabd0b))
+	}
+}
+
+// TestBase64BytesSiblings 字节↔字节兄弟方法（pkg#12）：与 string 版编码互通，
+// 解码返回原始字节（凭据还原/PEM DER 场景从类型层面表达意图）。
+func TestBase64BytesSiblings(t *testing.T) {
+	raw := []byte{0x00, 0xff, 0x10, 0xde, 0xad, 0xbe, 0xef}
+	enc := Base64EncodeBytes(raw)
+	if enc != Base64Encode(string(raw)) {
+		t.Fatalf("Base64EncodeBytes 与 string 版编码不一致: %q", enc)
+	}
+	dec, err := Base64DecodeBytes(enc)
+	if err != nil {
+		t.Fatalf("Base64DecodeBytes err = %v", err)
+	}
+	if !bytes.Equal(dec, raw) {
+		t.Fatalf("Base64DecodeBytes = %v, want %v", dec, raw)
+	}
+	// 非法输入报错
+	if _, err := Base64DecodeBytes("!!not-base64!!"); err == nil {
+		t.Fatal("invalid input must error")
 	}
 }

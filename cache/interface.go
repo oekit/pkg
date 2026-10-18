@@ -34,7 +34,8 @@ import (
 //
 //   - Set：使用实现构造时配置的默认 TTL；
 //   - SetWithTTL：显式传参；
-//   - GetOrLoad 回填：使用默认 TTL。
+//   - GetOrLoad 回填：默认 TTL；实现若支持动态回填 TTL（SourceFuncWithTTL，
+//     pkg#11——如第三方 token 的 expires_in），按回源结果的 TTL 覆盖，<=0 回退默认。
 //
 // TTL<=0 的语义（0 = 不过期还是实现默认值）由各实现的配置文档定义
 // （LocalCache：0 = 不过期；Redis 后端见各自 Config）。
@@ -78,6 +79,18 @@ type Cache[T any] interface {
 // Source 返回的 *T 所有权随值语义契约：实现回填后调用方与实现共享引用
 // 或各持副本，取决于实现（同"实现契约"的值语义，调用方一律只读对待）。
 type SourceFunc[T any] func(ctx context.Context, key string) (*T, error)
+
+// SourceFuncWithTTL 携带动态回填 TTL 的数据获取函数（pkg#11）。
+// ttl > 0 按其缓存；ttl <= 0 回退实现配置的默认 TTL；
+// 返回 (nil, ttl, nil) 仍走 null marker 防穿透（此时 ttl 不生效，null marker
+// 的 TTL 由实现配置治理——LocalCache 为 NullTTL）。
+// 典型场景：第三方 token 的 expires_in、上游按内容给出的缓存窗口。
+type SourceFuncWithTTL[T any] func(ctx context.Context, key string) (*T, time.Duration, error)
+
+// StaleIfError 语义（pkg#11，由支持它的实现提供——LocalCache 经 LocalConfig
+// 开启）：回源失败且存在已过期的历史真值时返回陈旧值（fail-open——防上游
+// 抖动放大为拒绝服务）；null marker 不参与 stale，TTL=0 永不过期条目无
+// stale 语义（它们不会过期）。命中时实现的 OnStale 回调（若配置）可观测。
 
 // CacheAside 是 Cache-Aside 模式扩展接口。
 // 在 Cache 基础上增加数据源回填、刷新等能力。

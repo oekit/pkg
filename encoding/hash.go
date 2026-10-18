@@ -43,6 +43,19 @@ func Base64Decode(s string) (string, error) {
 	return string(rs), err
 }
 
+// Base64EncodeBytes 返回字节切片的 Base64 编码（字节→字节方向的免拷贝入口）。
+func Base64EncodeBytes(b []byte) string {
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// Base64DecodeBytes 解码 Base64 为原始字节（pkg#12）。
+// base64 本质是字节↔字节编码——结果按字节使用（凭据还原/图片/PEM DER 等）
+// 用本方法从类型层面表达意图；Base64Decode 返回 string，供结果按文本处理的
+// 场景，字节场景经它中转会引入一次多余拷贝且编译器无法发现误用。
+func Base64DecodeBytes(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(s)
+}
+
 // Base64URLEncode 返回字符串的 Base64 URL 安全编码。
 func Base64URLEncode(s string) string {
 	return base64.URLEncoding.EncodeToString([]byte(s))

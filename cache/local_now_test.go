@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -186,3 +187,161 @@ func TestLocalCache_FakeClock_CleanupNoFalseSweep(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// ---------- 动态回填 TTL 与 stale-if-error（pkg#11） ----------
+
+// TestLocalCache_SourceWithTTL 动态回填 TTL：ttl>0 按其缓存（非配置 TTL），
+// ttl<=0 回退配置 TTL；返回 nil 值仍走 null marker。
+func TestLocalCache_SourceWithTTL(t *testing.T) {
+	clock := &fakeNowClock{t: nowTestStart}
+	const (
+		configTTL = 30 * time.Second
+		dynTTL    = 5 * time.Second
+	)
+	var withTTLCalls, plainCalls int
+	c := newNowTestCache(t, clock, func(cfg *LocalConfig[string]) {
+		cfg.Source = func(ctx context.Context, key string) (*string, error) {
+			plainCalls++
+			v := "plain"
+			return &v, nil
+		}
+		cfg.SourceWithTTL = func(ctx context.Context, key string) (*string, time.Duration, error) {
+			withTTLCalls++
+			v := "dyn"
+			return &v, dynTTL, nil
+		}
+	})
+	ctx := context.Background()
+
+	// SourceWithTTL 优先于 Source（plain 恒不被调）
+	if got, err := c.GetOrLoad(ctx, "k"); err != nil || *got != "dyn" {
+		t.Fatalf("GetOrLoad = (%v, %v), want dyn", got, err)
+	}
+	if plainCalls != 0 {
+		t.Fatalf("Source must not be called when SourceWithTTL set, calls=%d", plainCalls)
+	}
+	clock.Advance(dynTTL + time.Second) // 过动态 TTL、未过配置 TTL
+	if got, err := c.GetOrLoad(ctx, "k"); err != nil || *got != "dyn" {
+		t.Fatalf("after dynTTL GetOrLoad = (%v, %v)", got, err)
+	}
+	if withTTLCalls != 2 {
+		t.Fatalf("source calls = %d, want 2 (dynamic TTL must govern expiry)", withTTLCalls)
+	}
+
+	// ttl<=0：回退配置 TTL
+	clock2 := &fakeNowClock{t: nowTestStart}
+	c2 := newNowTestCache(t, clock2, func(cfg *LocalConfig[string]) {
+		cfg.SourceWithTTL = func(ctx context.Context, key string) (*string, time.Duration, error) {
+			v := "fallback"
+			return &v, 0, nil
+		}
+	})
+	if got, _ := c2.GetOrLoad(ctx, "k"); *got != "fallback" {
+		t.Fatalf("got %v", got)
+	}
+	clock2.Advance(configTTL + time.Second) // > 配置 30s
+	if _, err := c2.GetOrLoad(ctx, "k"); err != nil {
+		t.Fatal("ttl<=0 must fall back to config TTL")
+	}
+
+	// nil 值：仍走 null marker
+	clock3 := &fakeNowClock{t: nowTestStart}
+	nullCalls := 0
+	c3 := newNowTestCache(t, clock3, func(cfg *LocalConfig[string]) {
+		cfg.SourceWithTTL = func(ctx context.Context, key string) (*string, time.Duration, error) {
+			nullCalls++
+			return nil, dynTTL, nil
+		}
+	})
+	if got, err := c3.GetOrLoad(ctx, "nk"); err != nil || got != nil {
+		t.Fatalf("nil source = (%v, %v), want (nil, nil)", got, err)
+	}
+	clock3.Advance(time.Second) // NullTTL 1m 窗口内
+	if _, err := c3.GetOrLoad(ctx, "nk"); err != nil {
+		t.Fatal("null marker must hold")
+	}
+	if nullCalls != 1 {
+		t.Fatalf("null marker 防穿透失效：calls = %d, want 1", nullCalls)
+	}
+}
+
+// TestLocalCache_StaleIfError stale 三场景：过期真值兜底（fail-open）、
+// OnStale 回调、未开启时错误原样返回；stale 可反复兜底（条目保留于表内）。
+func TestLocalCache_StaleIfError(t *testing.T) {
+	boom := errors.New("source down")
+	failSrc := func(ctx context.Context, key string) (*string, error) {
+		return nil, boom
+	}
+
+	// 场景 1：开启 StaleIfError——回源失败回退过期真值
+	clock := &fakeNowClock{t: nowTestStart}
+	var staleCalls []string
+	c := newNowTestCache(t, clock, func(cfg *LocalConfig[string]) {
+		cfg.StaleIfError = true
+		cfg.OnStale = func(ctx context.Context, key string, stale *string) {
+			staleCalls = append(staleCalls, key+":"+*stale)
+		}
+	})
+	ctx := context.Background()
+	if err := c.SetWithTTL(ctx, "k", ptr("fresh"), 30*time.Second); err != nil {
+		t.Fatalf("SetWithTTL: %v", err)
+	}
+	clock.Advance(31 * time.Second) // 真值过期
+
+	c.cfg.Source = failSrc
+	got, err := c.GetOrLoad(ctx, "k")
+	if err != nil || got == nil || *got != "fresh" {
+		t.Fatalf("stale fallback = (%v, %v), want fresh/nil", got, err)
+	}
+	if len(staleCalls) != 1 || staleCalls[0] != "k:fresh" {
+		t.Fatalf("OnStale = %v, want [k:fresh]", staleCalls)
+	}
+
+	// 场景 2：反复回源失败反复兜底（过期条目保留于表内）
+	clock.Advance(time.Second)
+	for i := 0; i < 3; i++ {
+		if got, err := c.GetOrLoad(ctx, "k"); err != nil || *got != "fresh" {
+			t.Fatalf("repeat stale #%d = (%v, %v), want fresh/nil", i+1, got, err)
+		}
+	}
+
+	// 场景 3：无历史真值时错误原样返回
+	if got, err := c.GetOrLoad(ctx, "no-such"); err == nil || got != nil {
+		t.Fatalf("no stale available = (%v, %v), want (nil, boom)", got, err)
+	}
+
+	// 场景 4：未开启 StaleIfError——错误原样返回（缺省行为不变）
+	clock2 := &fakeNowClock{t: nowTestStart}
+	c2 := newNowTestCache(t, clock2, nil)
+	_ = c2.SetWithTTL(ctx, "k", ptr("old"), time.Second)
+	clock2.Advance(2 * time.Second)
+	c2.cfg.Source = failSrc
+	if got, err := c2.GetOrLoad(ctx, "k"); !errors.Is(err, boom) || got != nil {
+		t.Fatalf("stale disabled = (%v, %v), want (nil, boom)", got, err)
+	}
+}
+
+// TestLocalCache_StaleNullNotServed null marker 不参与 stale：过期的 null
+// 标记 + 回源失败 → 错误原样返回（不会把「不存在」兜底成真值）。
+func TestLocalCache_StaleNullNotServed(t *testing.T) {
+	clock := &fakeNowClock{t: nowTestStart}
+	ctx := context.Background()
+	c := newNowTestCache(t, clock, func(cfg *LocalConfig[string]) {
+		cfg.StaleIfError = true
+		cfg.Source = func(ctx context.Context, key string) (*string, error) {
+			return nil, nil // 先写 null marker
+		}
+	})
+	if _, err := c.GetOrLoad(ctx, "nk"); err != nil {
+		t.Fatalf("GetOrLoad: %v", err)
+	}
+	clock.Advance(2 * time.Minute) // null marker 过期
+	boom := errors.New("down")
+	c.cfg.Source = func(ctx context.Context, key string) (*string, error) {
+		return nil, boom
+	}
+	got, err := c.GetOrLoad(ctx, "nk")
+	if !errors.Is(err, boom) || got != nil {
+		t.Fatalf("null marker must not serve stale = (%v, %v), want (nil, boom)", got, err)
+	}
+}

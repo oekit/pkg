@@ -1,6 +1,25 @@
-# Changelog — oekit/pkg
+## [v0.14.0] — 2026-10-18
 
-由 ekit v0.34.0（git.enjoye.top/enjoydream/ekit，冻结维护）拆分而来。所有 notable 变更记录如下。
+### feat(cache)：动态回填 TTL + stale-if-error（[#11](https://github.com/oekit/pkg/issues/11)——data#4 语义随 data v0.9.0 重构静默回归的本账）
+- `SourceFuncWithTTL[T]`（`(ctx, key) (*T, ttl, error)`）：回填 TTL 动态化——
+  ttl > 0 按其缓存、<=0 回退配置 TTL；返回 nil 值仍走 null marker（ttl 不生效，
+  NullTTL 治理）。典型场景：第三方 token 的 expires_in。`LocalConfig.SourceWithTTL`
+  字段接入，与 Source 同时配置时优先
+- `StaleIfError` + `OnStale`：回源失败且存在已过期历史真值时返回陈旧值
+  （fail-open——防上游抖动放大为拒绝服务）；只认 TTL 过期的真值（null marker
+  不参与 stale、TTL=0 永不过期条目无 stale 语义）；过期条目在兜底路径保留于表内
+  （回收交给后台清扫），可反复兜底直至上游恢复；OnStale 回调供打点/告警
+- 实现细节：GetOrLoad 首查改为**非删除式**查看（原惰性删除会让过期真值在回源
+  前就消失、stale 无从兜底），回收职责让位给后台清扫；Get/Exists/MGet 读路径与
+  惰性删除行为不变；缺省不开启时行为逐位不变
+
+### feat(encoding)：Base64 字节↔字节兄弟方法（[#12](https://github.com/oekit/pkg/issues/12)）
+- `Base64DecodeBytes(s) ([]byte, error)`：结果按字节使用（凭据还原/图片/PEM DER）
+  从类型层面表达意图——`Base64Decode` 返回 string，字节场景经它中转既引入多余
+  拷贝、又让 `[]byte`↔`string` 的误用零编译提示地下沉到运行期（ekit v0.34
+  改签名时 new-api 单仓炸 5 处的教训）
+- `Base64EncodeBytes(b) string`：字节→Base64 免一次 string 拷贝的对称入口；
+  既有签名零改动
 
 ## [v0.13.0] — 2026-10-18
 
