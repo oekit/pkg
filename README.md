@@ -1,6 +1,6 @@
 # pkg
 
-> 微工具集 20 合 1（零第三方依赖，仅标准库）——errors/bloomx/bufiox/cache/container/contextx/convert/encoding/enumx/errors/httpjson/jsonrepair/mathx/pagination/pathx/ptrx/singleflighttest/slicex/stringx/strmap/timex
+> 微工具集 21 合 1（零第三方依赖，仅标准库）——errors/bloomx/bufiox/cache/container/contextx/convert/encoding/enumx/errors/httpjson/jsonrepair/mathx/pagination/pathx/ptrx/singleflighttest/slicex/stringx/strmap/timex/urlguard
 
 > 🌐 项目主页：**https://oekit.github.io/** · 名称由来：**O**pen **E**asy **Kit**（开源 · 易用 · 工具集合）
 > 🤖 AI Agent：本仓规范与硬规则见 [AGENTS.md](AGENTS.md)；机器可读索引见 [llms.txt](https://oekit.github.io/llms.txt)（接口签名以源码为准）。
@@ -8,7 +8,7 @@
 ## 安装
 
 ```bash
-go get github.com/oekit/pkg@v0.14.0
+go get github.com/oekit/pkg@v0.15.0
 ```
 
 ## 这个仓库做什么
@@ -47,6 +47,7 @@ HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO�
 | `cache` | 刷新检查器：TTL 后台刷新、失败按 failTTL 降级、并发请求合并为一次刷新 |
 | `bufiox` | 面向协议编解码的零拷贝缓冲 IO：读侧 Next/Peek 返回缓冲视图，写侧 Malloc/WriteBinary 攒批一次 Flush（`bytes` 与 `io.Reader/Writer` 双实现） |
 | `strmap` | GC 友好的只读字符串 map：键打包 + int32 哈希表 + maphash，海量静态映射（header/字典表）零 GC 扫描开销 |
+| `urlguard` | 出站 URL 的 SSRF 防护原语：层 1 `CheckURL` 字面量校验（私网/loopback/链路本地含云元数据 169.254.169.254/CGNAT/ULA、`.internal`/`.local`/`localhost` 域名、scheme 白名单）；层 2 `DialFunc` 拨号包装——解析出的每个 IP 预检 + 实际 RemoteAddr 端点核对（闭合重解析 TOCTOU 窗口，覆盖 Happy-Eyeballs）；IPv4-mapped IPv6 归一；构造态豁免 `WithAllowPrivate`/`WithAllowCIDRs`/`WithAllowDomains`；与 httpx `WithDialFunc` 一行组合 |
 
 ## 快速使用
 
