@@ -1,3 +1,23 @@
+## [v0.15.0] — 2026-10-19
+
+### feat(urlguard)：出站 SSRF 防护原语（[httpx#11](https://github.com/oekit/httpx/issues/11)——webhook 接收器类服务的两层防护下沉）
+- **层 1 `CheckURL(raw)`**：URL 字面量校验——scheme 白名单（缺省 http/https）、host 直接写
+  私网/loopback/链路本地（含云元数据端点 169.254.169.254）/CGNAT（100.64/10）/ULA/组播保留、
+  未指定地址、`.internal`/`.local`/`localhost`（含子域）一律拒绝；IPv4-mapped IPv6
+  （::ffff:10.0.0.1）先归一化为 IPv4 再判定，防 mapped 绕过
+- **层 2 `DialFunc(next)`**：拨号层包装——host 解析出的**每一个** IP 预检（任一命中即不建连），
+  建连成功后核对**实际 RemoteAddr** 并在违规时关闭连接：预检解析与拨号器真实解析之间的
+  重解析窗口（TOCTOU）被端点核对闭合，Happy-Eyeballs 双栈竞争的胜出路径同样被覆盖；
+  与 httpx `WithDialFunc` 一行组合，next 为 nil 时用 net 默认拨号
+- 构造态豁免（不做进程级全局开关，与矩阵其它原语注入风格一致）：
+  `New(WithAllowPrivate())` 测试打本机 mock、`WithAllowCIDRs` 内网端点豁免、
+  `WithAllowDomains` 域名豁免（点分边界，`example.com` 放行子域但不误放 `notexample.com`）、
+  `WithAllowedSchemes` 覆盖 scheme 白名单；CIDR 文法非法在 New fail-fast
+- 快捷入口 `IsBlockedURL` / `SafeDialFunc`（缺省 Guard）；Guard 只读可并发共享；
+  仅标准库（零第三方依赖红线不受影响）
+- 测试 12 例：阻断清单全表 / scheme / mapped 归一 / 豁免矩阵 / 预检拒绝不建连 /
+  TOCTOU 端点核对关连接 / 合规直通 / WithAllowPrivate 真实 DNS / 并发 -race
+
 ## [v0.14.0] — 2026-10-18
 
 ### feat(cache)：动态回填 TTL + stale-if-error（[#11](https://github.com/oekit/pkg/issues/11)——data#4 语义随 data v0.9.0 重构静默回归的本账）
