@@ -116,8 +116,8 @@ func TestMaskerDeterministic(t *testing.T) {
 	}
 }
 
-// TestMaskerKeepSemantics Keep 语义：首尾各保留 Keep 个字符，位数封顶、
-// 不随原值长度变化；短值不越界、不 panic。
+// TestMaskerKeepSemantics Keep 语义：命中长度 >= Keep*4 时保留首尾各 Keep 个
+// 字符（位数封顶、不随原值长度变化）；不足 Keep*4 时整段全量打码。
 func TestMaskerKeepSemantics(t *testing.T) {
 	tests := []struct {
 		name string
@@ -125,13 +125,16 @@ func TestMaskerKeepSemantics(t *testing.T) {
 		keep int
 		in   string
 		want string
+		// digits 是该用例命中值的原样字符，全掩分支下不得出现在输出里。
+		digits string
 	}{
-		{"Keep=0 全掩", `[0-9]{4}`, 0, "值 1234 尾", "值 «n:****» 尾"},
-		{"Keep=2 保留首尾", `[0-9]{4}`, 2, "值 1234 尾", "值 12«n:****»34 尾"},
-		{"Keep 超过原值长度（收缩且不重叠）", `[0-9]{3}`, 5, "值 123 尾", "值 1«n:****»3 尾"},
-		{"Keep 超过原值长度（2 字符）", `[0-9]{2}`, 5, "值 12 尾", "值 1«n:****»2 尾"},
-		{"Keep 超过原值长度（1 字符→全掩）", `[0-9]{1}`, 5, "值 7 尾", "值 «n:****» 尾"},
-		{"Keep 大于原值长度且不越界", `[0-9]{1}`, 100, "值 7 尾", "值 «n:****» 尾"},
+		{"Keep=0 全掩", `[0-9]{4}`, 0, "值 1234 尾", "值 «n:****» 尾", "1234"},
+		{"Keep=2 长度够（n=8=Keep*4）", `[0-9]{8}`, 2, "值 12345678 尾", "值 12«n:****»78 尾", "12345678"},
+		{"Keep=2 长度不够（n=7=Keep*4-1）全掩", `[0-9]{7}`, 2, "值 1234567 尾", "值 «n:****» 尾", "1234567"},
+		{"Keep 超过原值长度（全掩）", `[0-9]{3}`, 5, "值 123 尾", "值 «n:****» 尾", "123"},
+		{"Keep 超过原值长度（2 字符，全掩）", `[0-9]{2}`, 5, "值 12 尾", "值 «n:****» 尾", "12"},
+		{"Keep 超过原值长度（1 字符→全掩）", `[0-9]{1}`, 5, "值 7 尾", "值 «n:****» 尾", "7"},
+		{"Keep 大于原值长度且不越界", `[0-9]{1}`, 100, "值 7 尾", "值 «n:****» 尾", "7"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -146,27 +149,149 @@ func TestMaskerKeepSemantics(t *testing.T) {
 			if !utf8.ValidString(got) {
 				t.Errorf("Mask 输出非法 UTF-8: %q", got)
 			}
+			// 全掩分支：输出里不得残留原值的任何字符（防回归核心断言）。
+			if got == "值 «n:****» 尾" && strings.Contains(got, tt.digits) {
+				t.Errorf("全掩输出 %q 仍含原值字符 %q", got, tt.digits)
+			}
 		})
 	}
 }
 
-// TestMaskerKeepIsCapped 保留位数封顶：原值长度不同，掩码输出长度相同
-// （掩码主体恒为 4 个 '*'，保留位数恒为 2*Keep），不泄露原值长度。
+// TestMaskerShortValueFullyMasked 契约（pkg#31）：命中长度不足 Keep*4 时整段
+// 全量打码，输出里**不得包含命中的原文**。
+//
+// 回归背景：旧实现把保留位收缩成 min(Keep, n/2)，命中长度 <= 2*Keep 时首尾
+// 两段保留位首尾相接、覆盖整段原文（掩码主体只是插在中间的装饰），原值
+// 完整留在输出里——「留 8 藏 1 等于没藏」，掩码形同虚设。
+func TestMaskerShortValueFullyMasked(t *testing.T) {
+	tests := []struct {
+		name  string
+		keep  int
+		value string
+	}{
+		{"n == Keep*4-1", 4, "0123456789abcde"}, // 15 = 4*4-1
+		{"n == 2*Keep", 4, "01234567"},          // 8 = 2*4
+		{"n < 2*Keep", 4, "012"},
+		{"n == 1", 1, "0"},
+		{"Keep=0", 0, "0123"},
+		{"中文短值", 2, "机密"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := NewMasker([]Rule{{Name: "x", Re: regexp.MustCompile(`\S+`), Keep: tt.keep}})
+			if err != nil {
+				t.Fatalf("NewMasker err = %v", err)
+			}
+			got := m.Mask(tt.value)
+			if want := "«x:****»"; got != want {
+				t.Errorf("Mask(%q) = %q, want %q（短值应整段全掩）", tt.value, got, want)
+			}
+			// 核心断言：全掩输出不得包含命中的原文。
+			if strings.Contains(got, tt.value) {
+				t.Errorf("全掩输出 %q 仍含原值 %q", got, tt.value)
+			}
+			// 更强一档：原值的任何一个字符都不得出现在输出里。
+			for _, r := range tt.value {
+				if strings.ContainsRune(got, r) {
+					t.Errorf("全掩输出 %q 仍含原值字符 %q", got, r)
+				}
+			}
+			if !utf8.ValidString(got) {
+				t.Errorf("Mask 输出非法 UTF-8: %q", got)
+			}
+		})
+	}
+}
+
+// TestMaskerKeepRatioBoundary 契约（pkg#31）：n == Keep*4 是保留位的下边界——
+// 保留首尾各 Keep 个字符，但原值**不得**被完整暴露（中间必须还有被藏住的部分）。
+func TestMaskerKeepRatioBoundary(t *testing.T) {
+	const keep = 4
+	const orig = "0123456789abcdef" // 16 = keep*4
+
+	m, err := NewMasker([]Rule{{Name: "probe", Re: regexp.MustCompile(`[0-9a-f]{15,16}`), Keep: keep}})
+	if err != nil {
+		t.Fatalf("NewMasker err = %v", err)
+	}
+	got := m.Mask(orig)
+	want := "0123«probe:****»cdef"
+	if got != want {
+		t.Errorf("Mask(%q) = %q, want %q", orig, got, want)
+	}
+	if strings.Contains(got, orig) {
+		t.Errorf("边界长度输出 %q 完整暴露了原值", got)
+	}
+	// 藏住的部分不能为空：去掉标签后剩下的字符不足以还原原文。
+	kept := got[:keep] + got[len(got)-keep:]
+	if kept == orig {
+		t.Errorf("边界长度下保留位覆盖了整段原文（%q）", kept)
+	}
+
+	// 少一格就全掩。
+	short := "0123456789abcde" // 15 = keep*4-1
+	gotShort := m.Mask(short)
+	if wantShort := "«probe:****»"; gotShort != wantShort {
+		t.Errorf("Mask(%q) = %q, want %q", short, gotShort, wantShort)
+	}
+	if strings.Contains(gotShort, short) {
+		t.Errorf("全掩输出 %q 仍含原值 %q", gotShort, short)
+	}
+}
+
+// TestMaskerMultibyteShortValue 契约（pkg#31）：多字节短值同样整段全掩，
+// 不切半个字（输出仍是合法 UTF-8，且不含原值字符）。
+func TestMaskerMultibyteShortValue(t *testing.T) {
+	m, err := NewMasker([]Rule{{Name: "cn", Re: regexp.MustCompile(`密码[:：](\S+)`), Keep: 2}})
+	if err != nil {
+		t.Fatalf("NewMasker err = %v", err)
+	}
+	// 命中值「密码：机密」共 5 个 rune < Keep*4=8 → 全掩。
+	got := m.Mask("密码：机密")
+	if want := "«cn:****»"; got != want {
+		t.Errorf("Mask = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "机密") {
+		t.Errorf("全掩输出 %q 仍含原值", got)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("Mask 输出非法 UTF-8: %q", got)
+	}
+
+	// 够长的多字节值仍按 rune 边界保留首尾（不切半个字）。
+	long := m.Mask("密码：超级机密123")
+	if want := "密码«cn:****»23"; long != want {
+		t.Errorf("Mask = %q, want %q", long, want)
+	}
+	if !utf8.ValidString(long) {
+		t.Errorf("Mask 输出非法 UTF-8: %q", long)
+	}
+}
+
+// TestMaskerKeepIsCapped 保留位数封顶：原值长度不同（但都 >= Keep*4），掩码
+// 输出长度相同（掩码主体恒为 4 个 '*'，保留位数恒为 2*Keep），不泄露原值长度。
 func TestMaskerKeepIsCapped(t *testing.T) {
 	m, err := NewMasker([]Rule{{Name: "n", Re: regexp.MustCompile(`[0-9]+`), Keep: 2}})
 	if err != nil {
 		t.Fatalf("NewMasker err = %v", err)
 	}
-	short := m.Mask("123456")
+	short := m.Mask("12345678") // 8 = Keep*4
 	long := m.Mask("123456789012345678")
-	if short != "12«n:****»56" {
-		t.Errorf("Mask(6 位) = %q, want %q", short, "12«n:****»56")
+	if short != "12«n:****»78" {
+		t.Errorf("Mask(8 位) = %q, want %q", short, "12«n:****»78")
 	}
 	if long != "12«n:****»78" {
 		t.Errorf("Mask(18 位) = %q, want %q", long, "12«n:****»78")
 	}
 	if len([]rune(short)) != len([]rune(long)) {
 		t.Errorf("不同长度原值的掩码长度应相同: %d vs %d", len([]rune(short)), len([]rune(long)))
+	}
+	// 短于 Keep*4 的值走全掩分支：输出固定形态，且不含原值。
+	full := m.Mask("1234567")
+	if full != "«n:****»" {
+		t.Errorf("Mask(7 位) = %q, want %q", full, "«n:****»")
+	}
+	if strings.Contains(full, "1234567") {
+		t.Errorf("全掩输出 %q 仍含原值", full)
 	}
 }
 

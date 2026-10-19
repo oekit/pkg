@@ -20,7 +20,8 @@ import (
 type Manifest struct {
 	// FormatVersion 是清单格式版本，写入方与读取方必须一致（当前为 CurrentFormatVersion）。
 	FormatVersion int `json:"format_version"`
-	// CreatedAt 是包的创建时间（UTC）。
+	// CreatedAt 是包的创建时间（UTC），取自 Writer 的时刻来源
+	// （缺省 time.Now，可用 WithClock 注入）。
 	CreatedAt time.Time `json:"created_at"`
 	// Counts 记录每个数据文件的行数（文件名为键）。
 	Counts map[string]int `json:"counts"`
@@ -37,24 +38,48 @@ type Writer struct {
 	version  int
 	counts   map[string]int
 	files    map[string]string
+	now      func() time.Time
 	created  time.Time
 	closed   bool
 	err      error
 	manifest *Manifest
 }
 
+// Option Writer 可选项。
+type Option func(*Writer)
+
+// WithClock 注入清单 created_at 的时刻来源（缺省 time.Now）。
+//
+// 清单里的 created_at 落在包里（下游拿它判断「何时导出」「两个包哪个新」），
+// 写死时刻会让导出逻辑没法做确定性单测、同一份数据反复导出不可复现——
+// 注入固定时钟即可得到逐字节可复现的清单。
+func WithClock(now func() time.Time) Option {
+	return func(w *Writer) { w.now = now }
+}
+
 // NewWriter 创建迁移包写入器，底层数据写入 w。
 //
 // formatVersion 是清单格式版本，应传 CurrentFormatVersion；版本会被写进清单，
 // 读取方据此判断能否识别该包。
-func NewWriter(w io.Writer, formatVersion int) *Writer {
-	return &Writer{
+//
+// 可选项 WithClock 注入清单 created_at 的时刻来源（缺省 time.Now）。
+func NewWriter(w io.Writer, formatVersion int, opts ...Option) *Writer {
+	wr := &Writer{
 		zw:      zip.NewWriter(w),
 		version: formatVersion,
 		counts:  make(map[string]int),
 		files:   make(map[string]string),
-		created: time.Now(),
+		now:     time.Now,
 	}
+	for _, opt := range opts {
+		opt(wr)
+	}
+	if wr.now == nil {
+		wr.now = time.Now
+	}
+	// created_at 的时刻只从注入的时钟取（全包仅此一处），别处不再调 time.Now。
+	wr.created = wr.now()
+	return wr
 }
 
 // AddJSONL 把 rows 逐行编码成 JSONL 写入包内名为 name 的条目，返回写入行数。

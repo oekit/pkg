@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -33,7 +34,7 @@ const maxManifestSize = 8 << 20
 // Inspect 对迁移包做体检。
 //
 // 一次说清所有问题而不是遇到第一个错误就停：problems 里会同时列出缺失文件、摘要不符、
-// 条数不符、多余文件、非法文件名等；err 只在「包损坏」「版本不兼容」两类不可导原因时返回。
+// 条数不符、条数未核对、多余文件、非法文件名等；err 只在「包损坏」「版本不兼容」两类不可导原因时返回。
 func Inspect(r io.ReaderAt, size int64) (*Manifest, []string, error) {
 	return InspectVersion(r, size, CurrentFormatVersion)
 }
@@ -107,9 +108,18 @@ func readManifest(zr *zip.Reader, expected int) (*Manifest, error) {
 }
 
 // verifyEntries 逐项核对清单与包内容，返回问题清单。
+//
+// 条数核对覆盖两种键口径：先按**文件名精确匹配** counts，再按**「文件名去
+// 扩展名」的基名宽松匹配**（覆盖「键=类别名/基名」的生产者口径，如键 "raw"
+// 对应文件 "raw.jsonl"）。两种口径都匹配不上、或 counts 里的键匹配不上任何
+// 数据文件时，**都明确报出「条数未核对」**——绝不静默跳过一条检查却让
+// 体检报「通过」。
 func verifyEntries(zr *zip.Reader, m *Manifest) []string {
 	var problems []string
 	entries, names := indexEntries(zr)
+
+	// matched 记录已被某个数据文件认领的 counts 键（用于收尾报「键未匹配」）。
+	matched := make(map[string]bool, len(m.Counts))
 
 	// 清单里声明的数据文件：是否在、摘要对不对、条数对不对
 	for _, name := range sortedKeys(m.Files) {
@@ -117,6 +127,11 @@ func verifyEntries(zr *zip.Reader, m *Manifest) []string {
 		f, ok := entries[name]
 		if !ok {
 			problems = append(problems, fmt.Sprintf("缺少文件：%s", name))
+			// 文件不在包内，摘要与条数都无从核对；counts 的键仍算被本文件认领，
+			// 免得收尾时再报一条「键未匹配任何数据文件」的重复结论。
+			if key, _, hasCount := matchCountsKey(m.Counts, name); hasCount {
+				matched[key] = true
+			}
 			continue
 		}
 		got, lines, err := digestAndCount(f)
@@ -127,8 +142,23 @@ func verifyEntries(zr *zip.Reader, m *Manifest) []string {
 		if !strings.EqualFold(got, want) {
 			problems = append(problems, fmt.Sprintf("摘要不符：%s（清单 %s，实际 %s）", name, want, got))
 		}
-		if c, ok := m.Counts[name]; ok && c != lines {
+		key, c, ok := matchCountsKey(m.Counts, name)
+		if !ok {
+			// 没有可对应的 counts 条目 → 条数没核对过，明确报出，不静默放过。
+			problems = append(problems, fmt.Sprintf("条数未核对：%s（清单 counts 无对应条目）", name))
+			continue
+		}
+		matched[key] = true
+		if c != lines {
 			problems = append(problems, fmt.Sprintf("条数不符：%s（清单 %d，实际 %d）", name, c, lines))
+		}
+	}
+
+	// 清单 counts 里匹配不上任何数据文件的键 → 该键的条数从没被核对过
+	for _, key := range sortedKeys(m.Counts) {
+		if !matched[key] {
+			problems = append(problems,
+				fmt.Sprintf("清单 counts 的键 %s 未匹配任何数据文件（该键的条数未核对）", key))
 		}
 	}
 
@@ -152,6 +182,25 @@ func verifyEntries(zr *zip.Reader, m *Manifest) []string {
 		}
 	}
 	return problems
+}
+
+// matchCountsKey 返回适用于数据文件 name 的 counts 键与条数。
+//
+// 先按**文件名精确匹配**；精确匹配不上时按**「文件名去扩展名」的基名宽松
+// 匹配**——覆盖「键=类别名/基名」的生产者口径（如键 "raw" 对应文件
+// "raw.jsonl"）。两种都匹配不上时返回 ok=false（调用方必须报出「条数未核对」，
+// 不许静默跳过这条检查）。
+func matchCountsKey(counts map[string]int, name string) (string, int, bool) {
+	if c, ok := counts[name]; ok {
+		return name, c, true
+	}
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	if base != "" && base != name {
+		if c, ok := counts[base]; ok {
+			return base, c, true
+		}
+	}
+	return "", 0, false
 }
 
 // indexEntries 建立条目名索引（同名条目取第一个）并返回全部条目名。

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/oekit/pkg/encoding"
 	"github.com/oekit/pkg/errors"
@@ -420,7 +421,174 @@ func TestArchiveVerify(t *testing.T) {
 	}
 }
 
+// TestInspectCountsKeyVariants 契约（pkg#32）：条数核对覆盖三种 counts 键口径——
+// 文件名（精确）、基名（去扩展名，宽松）、完全对不上的名字；counts 缺键时同样
+// 必须报出「条数未核对」。
+//
+// 回归背景：旧实现只在 counts 的键恰好是文件名时才核对条数；键对不上就
+// **静默跳过**这条检查、还不给任何提示——体检报「通过」，实际从没核对过。
+func TestInspectCountsKeyVariants(t *testing.T) {
+	const fileName = "raw.jsonl"
+	rows := []map[string]any{{"id": 1}, {"id": 2}, {"id": 3}} // 真实 3 行
+
+	tests := []struct {
+		name string
+		// counts 是清单里的 counts 条目（键口径由生产者决定）。
+		counts map[string]int
+		// want 是期望出现的问题片段（至少命中一个）。
+		want []string
+		// notWant 是**不得**出现的问题片段（不得给出假结论）。
+		notWant []string
+	}{
+		{
+			name:    "键=文件名",
+			counts:  map[string]int{fileName: 2},
+			want:    []string{"条数不符：raw.jsonl"},
+			notWant: []string{"条数未核对", "未匹配任何数据文件"},
+		},
+		{
+			name:    "键=基名（去扩展名）",
+			counts:  map[string]int{"raw": 2},
+			want:    []string{"条数不符：raw.jsonl"},
+			notWant: []string{"条数未核对", "未匹配任何数据文件"},
+		},
+		{
+			name:    "键=完全对不上的名字",
+			counts:  map[string]int{"mystery": 2},
+			want:    []string{"条数未核对", "未匹配任何数据文件"},
+			notWant: []string{"条数不符"},
+		},
+		{
+			name:    "counts 缺该键",
+			counts:  map[string]int{},
+			want:    []string{"条数未核对"},
+			notWant: []string{"条数不符"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := buildPackWithCounts(t, fileName, rows, tt.counts)
+			_, problems, err := Inspect(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatalf("Inspect: %v", err)
+			}
+			for _, w := range tt.want {
+				if !hasProblem(problems, w) {
+					t.Errorf("问题清单应含 %q：%v", w, problems)
+				}
+			}
+			for _, nw := range tt.notWant {
+				if hasProblem(problems, nw) {
+					t.Errorf("问题清单不应含 %q：%v", nw, problems)
+				}
+			}
+		})
+	}
+}
+
+// TestInspectCountsKeyVariantsCountOK 基名口径下条数**相符**时不得误报。
+func TestInspectCountsKeyVariantsCountOK(t *testing.T) {
+	data := buildPackWithCounts(t, "raw.jsonl",
+		[]map[string]any{{"id": 1}, {"id": 2}, {"id": 3}},
+		map[string]int{"raw": 3})
+	_, problems, err := Inspect(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if len(problems) != 0 {
+		t.Errorf("条数相符的包不应有问题，实际 %v", problems)
+	}
+}
+
+// TestWriterClockInjection 契约（pkg#33）：清单 created_at 的时刻来源可注入——
+// 注入固定时钟 → created_at 精确等于注入时刻；不注入 → 当前时间；
+// 同一份数据 + 同一固定时钟导出两次 → 两份清单逐字节相等（可复现）。
+func TestWriterClockInjection(t *testing.T) {
+	fixed := time.Date(2026, 10, 20, 3, 0, 0, 0, time.UTC)
+
+	// 注入固定时钟 → created_at 精确等于注入时刻（不是「大致是现在」）。
+	var buf bytes.Buffer
+	w := NewWriter(&buf, CurrentFormatVersion, WithClock(func() time.Time { return fixed }))
+	if _, err := w.AddJSONL("rows.jsonl", []map[string]any{{"id": 1}, {"id": 2}}); err != nil {
+		t.Fatalf("AddJSONL: %v", err)
+	}
+	m, err := w.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !m.CreatedAt.Equal(fixed) {
+		t.Errorf("created_at = %v, want %v", m.CreatedAt, fixed)
+	}
+	if got := m.CreatedAt.UTC().Format(time.RFC3339Nano); got != "2026-10-20T03:00:00Z" {
+		t.Errorf("created_at 格式化 = %q, want %q", got, "2026-10-20T03:00:00Z")
+	}
+
+	// 不注入 → 仍是当前时间（不报错）。
+	var buf2 bytes.Buffer
+	w2 := NewWriter(&buf2, CurrentFormatVersion) // 旧的两参写法仍可用（向后兼容）
+	before := time.Now().UTC().Add(-time.Second)
+	if _, addErr := w2.AddJSONL("rows.jsonl", []int{1}); addErr != nil {
+		t.Fatalf("AddJSONL: %v", addErr)
+	}
+	m2, err := w2.Close()
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if m2.CreatedAt.Before(before) || m2.CreatedAt.After(time.Now().UTC().Add(time.Second)) {
+		t.Errorf("未注入时钟时 created_at 应是当前时间，实际 %v", m2.CreatedAt)
+	}
+
+	// 注入 nil → 退化为 time.Now，不 panic。
+	var buf3 bytes.Buffer
+	w3 := NewWriter(&buf3, CurrentFormatVersion, WithClock(nil))
+	if _, err := w3.AddJSONL("rows.jsonl", []int{1}); err != nil {
+		t.Fatalf("AddJSONL: %v", err)
+	}
+	if _, err := w3.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// 同一份数据 + 同一固定时钟 → 两份清单逐字节相等（可复现）。
+	build := func() []byte {
+		var b bytes.Buffer
+		w := NewWriter(&b, CurrentFormatVersion, WithClock(func() time.Time { return fixed }))
+		if _, err := w.AddJSONL("rows.jsonl", []map[string]any{{"id": 1}, {"id": 2}}); err != nil {
+			t.Fatalf("AddJSONL: %v", err)
+		}
+		if _, err := w.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		return b.Bytes()
+	}
+	p1, p2 := build(), build()
+	mb1 := readEntries(t, p1)[manifestName]
+	mb2 := readEntries(t, p2)[manifestName]
+	if !bytes.Equal(mb1, mb2) {
+		t.Errorf("同一固定时钟下两份清单应逐字节相等:\n--- 1 ---\n%s\n--- 2 ---\n%s", mb1, mb2)
+	}
+}
+
 // --- 测试辅助 ---
+
+// buildPackWithCounts 造一个包，并把清单的 counts 换成给定的键值对
+// （用来模拟「键=类别名/基名」等不同生产口径）。
+func buildPackWithCounts(t *testing.T, name string, rows any, counts map[string]int) []byte {
+	t.Helper()
+	data, _ := buildPack(t, CurrentFormatVersion, map[string]any{name: rows})
+	entries := readEntries(t, data)
+	var m Manifest
+	if err := json.Unmarshal(entries[manifestName], &m); err != nil {
+		t.Fatalf("解析清单: %v", err)
+	}
+	m.Counts = counts
+	mb, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("序列化清单: %v", err)
+	}
+	entries[manifestName] = mb
+	return buildRawZip(t, entries)
+}
 
 // buildPack 造一个迁移包，返回包字节与清单。
 func buildPack(t *testing.T, version int, files map[string]any) ([]byte, *Manifest) {

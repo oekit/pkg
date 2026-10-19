@@ -17,6 +17,13 @@
 //	n, err := w.AddJSONL("users.jsonl", rows)
 //	m, err := w.Close() // 清单落盘并返回
 //
+// 清单里的 created_at 取自 Writer 的时刻来源，缺省 time.Now；需要确定性导出
+// （单测、逐字节可复现的包）时注入固定时钟：
+//
+//	w := pack.NewWriter(f, pack.CurrentFormatVersion, pack.WithClock(func() time.Time {
+//		return fixed
+//	}))
+//
 // # 读
 //
 //	arc, err := pack.Open(r, size)
@@ -26,11 +33,16 @@
 //
 //	m, problems, err := pack.Inspect(r, size)
 //
-// Inspect 一次说清所有问题（缺哪几个文件、哪个摘要不符、哪个条数对不上），
-// 而不是遇到第一个错误就停；err 只在两类「不可导」原因时返回，且可用 errors.Is 区分：
+// Inspect 一次说清所有问题（缺哪几个文件、哪个摘要不符、哪个条数对不上、
+// 哪个条数没核对上），而不是遇到第一个错误就停；err 只在两类「不可导」原因时返回，且可用 errors.Is 区分：
 //
 //	ErrCorrupt           包损坏：zip 读不开、清单缺失/损坏、清单 JSON 解析失败
 //	ErrUnsupportedVersion 版本不认识：清单的 format_version 与调用方期望不符
+//
+// 条数核对覆盖两种键口径：先按文件名精确匹配清单 counts，再按「文件名去扩展名」
+// 的基名宽松匹配（覆盖「键=类别名/基名」的生产者口径）。两种都匹配不上时，Inspect
+// 会明确报出「条数未核对」而不是静默跳过这条检查——体检报「通过」意味着每条
+// 检查都真的跑过了。
 //
 // # rows 支持范围
 //
