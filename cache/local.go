@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"container/list"
 	"context"
 	"log/slog"
 	"runtime/debug"
@@ -42,6 +43,19 @@ func (e *localEntry[T]) isExpired(now time.Time) bool {
 	return !e.expiresAt.IsZero() && now.After(e.expiresAt)
 }
 
+// EvictPolicy 淘汰策略（LocalConfig.EvictPolicy，pkg#25）。
+type EvictPolicy int
+
+const (
+	// EvictFIFO 写序淘汰（缺省）：FIFO + 重写提升，读命中不提升。
+	// 达到 MaxSize 后淘汰「最早写入且未被重写刷新」的条目。
+	EvictFIFO EvictPolicy = iota
+
+	// EvictLRU 读序淘汰：读命中同样提升顺序（最近最少使用的条目先淘汰）。
+	// 锁代价：读命中需在读锁之外取写锁完成顺序提升（见 promoteOnRead 注释）。
+	EvictLRU
+)
+
 // LocalConfig 配置本地缓存实例。
 type LocalConfig[T any] struct {
 	// TTL 缓存过期时间。0 表示不过期。
@@ -79,21 +93,45 @@ type LocalConfig[T any] struct {
 	// OnStale stale 命中回调（观测：打点/告警；nil = no-op）。
 	// value 所有权与缓存值一致（共享引用、调用方只读）。
 	OnStale func(ctx context.Context, key string, stale *T)
+
+	// NoBackgroundSweep 关闭后台清扫 goroutine（pkg#25）：置 true 时
+	// NewLocalCache 之后进程内不新增任何 goroutine——短命命令行/宿主内嵌
+	// 场景不该为缓存常驻一个清扫协程。此时过期条目由惰性删除（Get/Exists
+	// 读路径）与调用方显式调用 Sweep 回收。Close 仍安全且幂等。
+	NoBackgroundSweep bool
+
+	// CloneOnRead 读命中返回副本（pkg#25；nil = 保持零拷贝）。
+	// 开启后 Get/GetOrLoad（命中与 stale 路径）/MGet 返回的是副本，调用方
+	// 改写返回值不会污染缓存里的那份。克隆函数返回 nil 时视为不克隆
+	// （返回原值）。回源路径（GetOrLoad 未命中时从 Source 取到的值）不克隆
+	// ——那是调用方自己的值。OnStale 回调同样不克隆（回调值所有权与缓存值一致）。
+	CloneOnRead func(*T) *T
+
+	// EvictPolicy 淘汰策略（pkg#25；缺省 EvictFIFO）。
+	//   - EvictFIFO：写序淘汰（FIFO + 重写提升，读命中不提升）——历史行为；
+	//   - EvictLRU：读命中也提升顺序（最近最少使用先淘汰）。
+	EvictPolicy EvictPolicy
 }
 
 // LocalCache 是基于内存的本地缓存实现。
 // 适用于单实例场景或作为二级缓存。
-// 淘汰策略为写序淘汰（FIFO + 重写提升，读命中不提升——非严格 LRU）：
-// 达到 MaxSize 后淘汰最早写入（且未被重写刷新）的条目。
-// 使用 Close(ctx) 方法停止后台清理 goroutine；Close 可安全重复调用，
-// 签名对齐仓库硬规则 Close(ctx context.Context) error。
+//
+// 淘汰策略由 LocalConfig.EvictPolicy 决定：
+//   - EvictFIFO（缺省）：写序淘汰（FIFO + 重写提升，读命中不提升——非严格 LRU）：
+//     达到 MaxSize 后淘汰最早写入（且未被重写刷新）的条目；
+//   - EvictLRU：读命中也提升顺序，最近最少使用的条目先淘汰。
+//
+// 后台清理：TTL>0 时默认起一个后台清扫 goroutine，NoBackgroundSweep 置 true
+// 可关闭它（进程内不新增任何 goroutine，过期条目由惰性删除与调用方显式
+// Sweep 回收）。使用 Close(ctx) 停止后台清理 goroutine；Close 可安全重复
+// 调用，签名对齐仓库硬规则 Close(ctx context.Context) error。
 type LocalCache[T any] struct {
 	mu        sync.RWMutex
 	data      map[string]*localEntry[T]
 	cfg       LocalConfig[T]
-	now       func() time.Time // 规范化后的时钟（cfg.Now nil → time.Now）
-	order     []string         // 写序淘汰队列（尾部最新；重写提升，读命中不提升）
-	orderIdx  map[string]int   // key → order 切片索引，O(1) 移除
+	now       func() time.Time         // 规范化后的时钟（cfg.Now nil → time.Now）
+	order     *list.List               // 顺序队列：front 最旧（先淘汰），back 最新
+	orderIdx  map[string]*list.Element // key → order 元素（O(1) 定位）
 	done      chan struct{}
 	closeOnce sync.Once
 }
@@ -108,20 +146,23 @@ func NewLocalCache[T any](cfg LocalConfig[T]) *LocalCache[T] {
 		data:     make(map[string]*localEntry[T]),
 		cfg:      cfg,
 		now:      now,
-		orderIdx: make(map[string]int),
+		order:    list.New(),
+		orderIdx: make(map[string]*list.Element),
 		done:     make(chan struct{}),
 	}
 
-	// 启动过期清理
-	if cfg.TTL > 0 {
+	// 启动过期清理（NoBackgroundSweep 时不起后台件——pkg#25：
+	// 短命 CLI/宿主内嵌场景不该为缓存常驻清扫协程）
+	if cfg.TTL > 0 && !cfg.NoBackgroundSweep {
 		goSafe(func() { c.cleanup() })
 	}
 
 	return c
 }
 
-// Close 停止后台清理 goroutine（TTL>0 时构造启动的那个）。
+// Close 停止后台清理 goroutine（TTL>0 且未开 NoBackgroundSweep 时构造启动的那个）。
 // sync.Once 保证幂等：重复 Close 不 panic、不返回错误。
+// 无后台件时（NoBackgroundSweep=true）Close 同样安全且幂等。
 //
 // ctx 预留：当前实现同步返回 nil，ctx 不阻塞——本实现无外部资源需要
 // 排空，仅关闭内部 done channel 通知 cleanup goroutine 退出。
@@ -137,14 +178,84 @@ func (c *LocalCache[T]) Close(ctx context.Context) error {
 // 两种情况；GetOrLoad 会区分二者实现防穿透。
 //
 // ⚠️ 返回的是缓存内部的 *T（零拷贝，热路径设计）：调用方不得修改指向的
-// 值——会污染缓存并与并发读形成 data race。需要可变副本时自行拷贝。
+// 值——会污染缓存并与并发读形成 data race。需要可变副本时自行拷贝，
+// 或配置 LocalConfig.CloneOnRead 让读命中返回副本（pkg#25）。
 // （RedisCache 每次反序列化返回新副本，两实现语义差异见各自身文档。）
 func (c *LocalCache[T]) Get(ctx context.Context, key string) (*T, error) {
 	entry, ok := c.getEntry(key)
 	if !ok || entry.isNull {
 		return nil, nil
 	}
-	return entry.value, nil
+	return c.cloneOnRead(entry.value), nil
+}
+
+// GetEx 获取缓存并区分「不存在」与「有值但值为 nil」（pkg#25）。
+//
+// 返回 (value, hit, err)：
+//   - hit=true：命中真值条目——value 可能为 nil（调用方显式存了 nil 值）；
+//   - hit=false：key 不存在、已过期，或命中 null marker（null marker 表示
+//     「数据不存在」，按未命中处理——与 Get 返回 (nil, nil) 同口径）。
+//
+// 既有 Get 签名不变（下游在用），需要区分三种「拿不到值」的情形时用本方法。
+func (c *LocalCache[T]) GetEx(ctx context.Context, key string) (*T, bool, error) {
+	entry, ok := c.getEntry(key)
+	if !ok || entry.isNull {
+		return nil, false, nil
+	}
+	return c.cloneOnRead(entry.value), true, nil
+}
+
+// cloneOnRead 按 CloneOnRead 配置克隆读命中的值（pkg#25）。
+//   - 未配置 CloneOnRead：原样返回（零拷贝，保持历史行为）；
+//   - 克隆函数返回 nil：视为不克隆，返回原值。
+//
+// 克隆在锁外调用（用户代码不进临界区）。
+func (c *LocalCache[T]) cloneOnRead(v *T) *T {
+	if c.cfg.CloneOnRead == nil || v == nil {
+		return v
+	}
+	if cloned := c.cfg.CloneOnRead(v); cloned != nil {
+		return cloned
+	}
+	return v
+}
+
+// readHit 记录一次读命中（key + 命中的 entry 指针）。
+type readHit[T any] struct {
+	key   string
+	entry *localEntry[T]
+}
+
+// promoteOnRead 读命中提升顺序（仅 EvictLRU；FIFO 下直接返回）。
+//
+// 锁纪律：读路径**不能**持有读锁再取写锁（Go 的 RWMutex 在写者排队时会
+// 死锁同 goroutine 的读锁升级），因此调用方必须先释放读锁再调用本方法。
+// 提升前二次检查条目仍是同一个（期间可能被并发删除/替换）。
+func (c *LocalCache[T]) promoteOnRead(hits []readHit[T]) {
+	if c.cfg.EvictPolicy != EvictLRU || len(hits) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, h := range hits {
+		if cur, ok := c.data[h.key]; !ok || cur != h.entry {
+			continue
+		}
+		c.moveToBack(h.key)
+	}
+}
+
+// promoteOne 单键读命中提升顺序（仅 EvictLRU）。
+func (c *LocalCache[T]) promoteOne(key string, entry *localEntry[T]) {
+	if c.cfg.EvictPolicy != EvictLRU {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cur, ok := c.data[key]; !ok || cur != entry {
+		return
+	}
+	c.moveToBack(key)
 }
 
 // getEntry 内部方法：返回有效 entry 及其是否存在（含 null marker）。
@@ -170,6 +281,8 @@ func (c *LocalCache[T]) getEntry(key string) (*localEntry[T], bool) {
 		return nil, false
 	}
 
+	// LRU：读命中提升顺序（先释放读锁，再取写锁）
+	c.promoteOne(key, entry)
 	return entry, true
 }
 
@@ -183,6 +296,12 @@ func (c *LocalCache[T]) getEntry(key string) (*localEntry[T], bool) {
 //
 // stale-if-error（StaleIfError，pkg#11）：回源失败且存在已过期的历史真值时
 // 返回陈旧值并触发 OnStale 回调（fail-open，语义详见 LocalConfig 字段注释）。
+//
+// 读路径行为（pkg#25）：
+//   - 命中路径与 stale 路径都算「读命中」——EvictLRU 下提升顺序，
+//     CloneOnRead 开启时返回副本；
+//   - 回源路径（未命中时从 Source 取到的值）不算读命中——那是调用方
+//     自己的值，不克隆。
 func (c *LocalCache[T]) GetOrLoad(ctx context.Context, key string) (*T, error) {
 	// 1. 非删除式查看：未过期直接返回（null marker 命中 → (nil, nil) 防穿透）。
 	//    过期条目保留在表内——StaleIfError 需要过期真值在回源失败时仍可读
@@ -198,7 +317,9 @@ func (c *LocalCache[T]) GetOrLoad(ctx context.Context, key string) (*T, error) {
 			if entry.isNull {
 				return nil, nil
 			}
-			return entry.value, nil
+			// 读命中：LRU 提升顺序 + 按 CloneOnRead 决定返回副本还是共享引用
+			c.promoteOne(key, entry)
+			return c.cloneOnRead(entry.value), nil
 		}
 		stale = !entry.isNull && !entry.expiresAt.IsZero()
 	}
@@ -224,7 +345,9 @@ func (c *LocalCache[T]) GetOrLoad(ctx context.Context, key string) (*T, error) {
 			if c.cfg.OnStale != nil {
 				c.cfg.OnStale(ctx, key, entry.value)
 			}
-			return entry.value, nil
+			// stale 兜底同样是读命中：提升顺序 + 按 CloneOnRead 决定返回值
+			c.promoteOne(key, entry)
+			return c.cloneOnRead(entry.value), nil
 		}
 		return nil, err
 	}
@@ -278,7 +401,7 @@ func (c *LocalCache[T]) setNullMarker(key string, ttl time.Duration) {
 		isNull:    true,
 		expiresAt: expiresAt,
 	}
-	c.moveToFront(key)
+	c.moveToBack(key)
 }
 
 // Set 设置缓存（使用默认 TTL）。
@@ -309,7 +432,7 @@ func (c *LocalCache[T]) SetWithTTL(ctx context.Context, key string, value *T, tt
 	}
 
 	// 更新访问顺序
-	c.moveToFront(key)
+	c.moveToBack(key)
 	return nil
 }
 
@@ -339,17 +462,29 @@ func (c *LocalCache[T]) DelBatch(ctx context.Context, keys ...string) error {
 // 与 (nil, nil) 双关一致：不存在与 null marker 一律缺席；纯读不回填，
 // 已过期条目按缺席处理，回收留给 Get/Exists 的双检路径——TTL=0 时无
 // cleanup goroutine，过期条目仅在这些路径被惰性回收）。
+//
+// CloneOnRead 开启时按配置返回副本（pkg#25）；EvictLRU 策略下批量命中同样
+// 提升顺序（读锁区间之外一次性提升，避免逐键取写锁）。
 func (c *LocalCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T, error) {
-	out := make(map[string]*T, len(keys))
 	now := c.now()
 	c.mu.RLock()
-	defer c.mu.RUnlock()
+	items := make([]readHit[T], 0, len(keys))
 	for _, key := range keys {
 		entry, ok := c.data[key]
 		if !ok || entry.isNull || entry.isExpired(now) {
 			continue
 		}
-		out[key] = entry.value
+		items = append(items, readHit[T]{key: key, entry: entry})
+	}
+	c.mu.RUnlock()
+
+	// LRU：批量读命中提升顺序（写锁一次）
+	c.promoteOnRead(items)
+
+	out := make(map[string]*T, len(items))
+	for _, it := range items {
+		// 命中真值但值为 nil 的条目同样进 map（键在场，值为 nil）
+		out[it.key] = c.cloneOnRead(it.entry.value)
 	}
 	return out, nil
 }
@@ -401,12 +536,26 @@ func (c *LocalCache[T]) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.data = make(map[string]*localEntry[T])
-	c.order = nil
-	c.orderIdx = make(map[string]int)
+	c.order.Init()
+	c.orderIdx = make(map[string]*list.Element)
+}
+
+// Sweep 手动清扫过期条目，返回本次清除的条目数（pkg#25）。
+//
+// 供「不起后台清扫协程」模式（LocalConfig.NoBackgroundSweep）下由调用方
+// 在合适时机回收过期条目——短命 CLI/宿主内嵌场景不必常驻清扫协程。
+// 过期判定走注入时钟（LocalConfig.Now），与后台清扫同一口径。
+//
+// ctx 已取消时直接返回 0（不执行清扫）。可与后台清扫并存——两者各自
+// 独立判定，重复清扫不会重复计数（已被回收的条目不在表内）。
+func (c *LocalCache[T]) Sweep(ctx context.Context) int {
+	if ctx != nil && ctx.Err() != nil {
+		return 0
+	}
+	return c.sweepExpired(c.now())
 }
 
 // cleanup 定期清理过期条目。
-// 分两阶段：读锁收集过期 key，写锁批量删除，减少写锁持有时间。
 // ticker 只定节奏，过期判定一律走注入时钟——假时钟下真实 ticker 的时间戳
 // 不可比（直接比较会把全部条目误判为过期而清空）。
 func (c *LocalCache[T]) cleanup() {
@@ -424,64 +573,74 @@ func (c *LocalCache[T]) cleanup() {
 		case <-c.done:
 			return
 		case <-ticker.C:
-			now := c.now()
-			// 阶段 1：读锁扫描，收集过期 key
-			c.mu.RLock()
-			var expired []string
-			for key, entry := range c.data {
-				if !entry.expiresAt.IsZero() && now.After(entry.expiresAt) {
-					expired = append(expired, key)
-				}
-			}
-			c.mu.RUnlock()
-
-			if len(expired) == 0 {
-				continue
-			}
-
-			// 阶段 2：写锁批量删除
-			c.mu.Lock()
-			for _, key := range expired {
-				// 二次检查：可能已被其他 goroutine 更新
-				if entry, ok := c.data[key]; ok && entry.isExpired(now) {
-					delete(c.data, key)
-					c.removeFromOrder(key)
-				}
-			}
-			c.mu.Unlock()
+			c.sweepExpired(c.now())
 		}
 	}
 }
 
+// sweepExpired 清扫过期条目，返回实际清除的条目数。
+// 分两阶段：读锁收集过期 key，写锁批量删除，减少写锁持有时间。
+func (c *LocalCache[T]) sweepExpired(now time.Time) int {
+	c.mu.RLock()
+	expired := make([]string, 0, 8)
+	for key, entry := range c.data {
+		if !entry.expiresAt.IsZero() && now.After(entry.expiresAt) {
+			expired = append(expired, key)
+		}
+	}
+	c.mu.RUnlock()
+
+	if len(expired) == 0 {
+		return 0
+	}
+
+	c.mu.Lock()
+	removed := 0
+	for _, key := range expired {
+		// 二次检查：可能已被其他 goroutine 更新
+		if entry, ok := c.data[key]; ok && entry.isExpired(now) {
+			delete(c.data, key)
+			c.removeFromOrder(key)
+			removed++
+		}
+	}
+	c.mu.Unlock()
+	return removed
+}
+
 // evictOldest 淘汰最旧的条目（调用者需持有锁）。
+// FIFO 下队头是最早写入且未被重写刷新的条目；LRU 下队头是最久未被读到的条目。
 func (c *LocalCache[T]) evictOldest() {
-	if len(c.order) == 0 {
+	elem := c.order.Front()
+	if elem == nil {
 		return
 	}
-	oldest := c.order[0]
-	delete(c.data, oldest)
-	c.removeFromOrder(oldest)
+	key, ok := elem.Value.(string)
+	if !ok {
+		c.order.Remove(elem)
+		return
+	}
+	c.order.Remove(elem)
+	delete(c.orderIdx, key)
+	delete(c.data, key)
 }
 
-// moveToFront 将 key 移到队列尾部（最新，调用者需持有锁）。
-func (c *LocalCache[T]) moveToFront(key string) {
-	c.removeFromOrder(key)
-	c.orderIdx[key] = len(c.order)
-	c.order = append(c.order, key)
+// moveToBack 把 key 移到顺序队列尾部（最新，调用者需持有锁）。
+// FIFO 策略下仅写入路径调用（重写提升）；LRU 策略下读命中也会调用。
+func (c *LocalCache[T]) moveToBack(key string) {
+	if elem, ok := c.orderIdx[key]; ok {
+		c.order.MoveToBack(elem)
+		return
+	}
+	c.orderIdx[key] = c.order.PushBack(key)
 }
 
-// removeFromOrder 从队列中移除 key（O(1)，调用者需持有锁）。
+// removeFromOrder 从顺序队列中移除 key（O(1)，调用者需持有锁）。
 func (c *LocalCache[T]) removeFromOrder(key string) {
-	idx, ok := c.orderIdx[key]
+	elem, ok := c.orderIdx[key]
 	if !ok {
 		return
 	}
+	c.order.Remove(elem)
 	delete(c.orderIdx, key)
-	// 用最后一个元素填补空位，保持切片紧凑
-	last := len(c.order) - 1
-	if idx < last {
-		c.order[idx] = c.order[last]
-		c.orderIdx[c.order[idx]] = idx
-	}
-	c.order = c.order[:last]
 }

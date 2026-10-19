@@ -36,3 +36,75 @@ func TestContract_SingleFlightCache_LocalCache(t *testing.T) {
 		return cache.NewSingleFlightCache(inner)
 	})
 }
+
+// TestContract_LocalCache_Extras 跑 pkg#25 的可选能力契约（手动清扫、
+// 命中语义、读命中返回副本、读命中提升顺序、无后台 goroutine）——
+// 这些是 LocalCache 显式提供的能力，套件硬断言（能力缺失即红）。
+func TestContract_LocalCache_Extras(t *testing.T) {
+	// 手动清扫（无后台件，由调用方显式回收）
+	cachetest.RunSweepWithClock(t, cachetest.Comparable[string](),
+		func(t *testing.T, source cache.SourceFunc[string], clock *cachetest.FakeClock) cache.CacheAside[string] {
+			c := cache.NewLocalCache(cache.LocalConfig[string]{
+				TTL:               30 * time.Second,
+				NullTTL:           time.Minute,
+				Source:            source,
+				Now:               clock.Now,
+				NoBackgroundSweep: true,
+			})
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+			return c
+		})
+
+	// 命中语义（GetEx）
+	cachetest.RunHitWithClock(t, cachetest.Comparable[string](),
+		func(t *testing.T, source cache.SourceFunc[string], clock *cachetest.FakeClock) cache.CacheAside[string] {
+			c := cache.NewLocalCache(cache.LocalConfig[string]{
+				TTL:     30 * time.Second,
+				NullTTL: time.Minute,
+				Source:  source,
+				Now:     clock.Now,
+			})
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+			return c
+		})
+
+	// 读命中返回副本
+	cachetest.RunReadIsolation(t, cachetest.Comparable[string](),
+		func(t *testing.T, source cache.SourceFunc[string]) cache.CacheAside[string] {
+			c := cache.NewLocalCache(cache.LocalConfig[string]{
+				TTL:    5 * time.Minute,
+				Source: source,
+				CloneOnRead: func(v *string) *string {
+					cp := *v
+					return &cp
+				},
+			})
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+			return c
+		})
+
+	// 读命中提升顺序（LRU，容量 3）
+	cachetest.RunReadPromotion(t, cachetest.Comparable[string](), 3,
+		func(t *testing.T, source cache.SourceFunc[string]) cache.CacheAside[string] {
+			c := cache.NewLocalCache(cache.LocalConfig[string]{
+				TTL:         5 * time.Minute,
+				MaxSize:     3,
+				EvictPolicy: cache.EvictLRU,
+				Source:      source,
+			})
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+			return c
+		})
+
+	// 无后台 goroutine
+	cachetest.RunNoBackgroundGoroutine(t,
+		func(t *testing.T, source cache.SourceFunc[string]) cache.CacheAside[string] {
+			c := cache.NewLocalCache(cache.LocalConfig[string]{
+				TTL:               5 * time.Minute,
+				Source:            source,
+				NoBackgroundSweep: true,
+			})
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+			return c
+		})
+}
