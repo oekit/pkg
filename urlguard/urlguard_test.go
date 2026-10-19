@@ -245,3 +245,21 @@ func TestShortcuts(t *testing.T) {
 		t.Fatal("SafeDialFunc 应返回非 nil 包装")
 	}
 }
+
+// TestCheckURL_ReservedRanges 钉住 v0.15.1：文档保留/基准测试段并入缺省阻断
+// （对齐 httpx 侧参考实现的保留段清单），.localdomain 后缀一并拦截。
+func TestCheckURL_ReservedRanges(t *testing.T) {
+	g := mustGuard(t)
+	for _, raw := range []string{
+		"http://192.0.2.1/hook",    // TEST-NET-1
+		"http://198.51.100.7/hook", // TEST-NET-2
+		"http://203.0.113.9/hook",  // TEST-NET-3
+		"http://198.18.0.1/hook",   // benchmarking
+		"http://192.0.0.8/hook",    // IETF 协议指定
+		"http://svc.localdomain/hook",
+	} {
+		if err := g.CheckURL(raw); err == nil {
+			t.Errorf("%s 应被阻断，实际放行", raw)
+		}
+	}
+}

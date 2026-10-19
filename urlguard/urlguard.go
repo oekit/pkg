@@ -15,7 +15,9 @@
 // 默认阻断范围：未指定地址（0.0.0.0/8、::）、loopback（127.0.0.0/8、::1）、
 // RFC1918 私网（10/8、172.16/12、192.168/16）、链路本地（169.254/16——含云元数据端点
 // 169.254.169.254、fe80::/10）、CGNAT（100.64/10）、ULA（fc00::/7）、组播/保留
-// （224/4、240/4、ff00::/8）；域名 .internal / .local / localhost（含子域）。
+// （224/4、240/4、ff00::/8、192.0.0.0/24、TEST-NET 192.0.2.0/24·198.51.100.0/24·
+// 203.0.113.0/24、基准测试 198.18.0.0/15）；域名 .internal / .local / .localdomain /
+// localhost（含子域）。
 // IPv4-mapped IPv6（::ffff:10.0.0.1）先归一化为 IPv4 再判定。
 //
 // Guard 在 New 之后只读，可并发共享。仅依赖标准库（pkg 零第三方依赖红线）。
@@ -45,24 +47,29 @@ type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 // blockedCIDRs 是缺省阻断网段（见包文档）。固定清单而非可变注册表——
 // 需要放行某网段走 WithAllowCIDRs 显式豁免，宁可白名单也不要运行时改黑名单。
 var blockedCIDRs = mustParseCIDRs(
-	"0.0.0.0/8",      // "this network"（含 0.0.0.0）
-	"127.0.0.0/8",    // loopback
-	"10.0.0.0/8",     // RFC1918 私网
-	"172.16.0.0/12",  // RFC1918 私网
-	"192.168.0.0/16", // RFC1918 私网
-	"169.254.0.0/16", // 链路本地（含云元数据 169.254.169.254）
-	"100.64.0.0/10",  // CGNAT 共享地址
-	"224.0.0.0/4",    // IPv4 组播
-	"240.0.0.0/4",    // IPv4 保留/广播
-	"::1/128",        // IPv6 loopback
-	"::/128",         // IPv6 未指定
-	"fe80::/10",      // IPv6 链路本地
-	"fc00::/7",       // IPv6 ULA
-	"ff00::/8",       // IPv6 组播
+	"0.0.0.0/8",       // "this network"（含 0.0.0.0）
+	"127.0.0.0/8",     // loopback
+	"10.0.0.0/8",      // RFC1918 私网
+	"172.16.0.0/12",   // RFC1918 私网
+	"192.168.0.0/16",  // RFC1918 私网
+	"169.254.0.0/16",  // 链路本地（含云元数据 169.254.169.254）
+	"100.64.0.0/10",   // CGNAT 共享地址
+	"192.0.0.0/24",    // IETF 协议指定
+	"192.0.2.0/24",    // TEST-NET-1（文档保留）
+	"198.18.0.0/15",   // 网络基准测试保留
+	"198.51.100.0/24", // TEST-NET-2（文档保留）
+	"203.0.113.0/24",  // TEST-NET-3（文档保留）
+	"224.0.0.0/4",     // IPv4 组播
+	"240.0.0.0/4",     // IPv4 保留/广播
+	"::1/128",         // IPv6 loopback
+	"::/128",          // IPv6 未指定
+	"fe80::/10",       // IPv6 链路本地
+	"fc00::/7",        // IPv6 ULA
+	"ff00::/8",        // IPv6 组播
 )
 
 // blockedDomainSuffixes 是缺省阻断域名后缀（小写；host 等于后缀或以其为点分后缀均命中）。
-var blockedDomainSuffixes = []string{"localhost", "internal", "local"}
+var blockedDomainSuffixes = []string{"localhost", "internal", "local", "localdomain"}
 
 // defaultSchemes 是 CheckURL 缺省允许的 scheme。出站 webhook 场景下 file://、
 // gopher:// 等一律拒绝；需要其它 scheme 用 WithAllowedSchemes 显式放行。
