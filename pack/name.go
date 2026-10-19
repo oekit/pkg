@@ -25,7 +25,7 @@ func sanitizeName(name string) (string, error) {
 		return "", fmt.Errorf("pack: 非法文件名 %q：不允许包含路径分隔符", name)
 	}
 	if strings.Contains(name, "..") {
-		return "", fmt.Errorf("pack: 非法文件名 %q：不允许包含 ..", name)
+		return "", fmt.Errorf("pack: 非法文件名 %q：不允许包含连续点序列", name)
 	}
 	if strings.HasPrefix(name, "/") {
 		return "", fmt.Errorf("pack: 非法文件名 %q：不允许绝对路径", name)
