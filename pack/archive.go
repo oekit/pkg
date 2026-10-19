@@ -58,7 +58,7 @@ func (a *Archive) Names() []string {
 // Verify 对已打开的包做体检，返回问题清单（与 Inspect 同一套规则）。
 //
 // 与 Inspect 不同的是：这里包已经打开成功，因此不会出现「包损坏 / 版本不兼容」两类错误，
-// 只返回软问题清单（缺文件、摘要不符、条数不符、多余文件、非法文件名）。
+// 只返回软问题清单（缺文件、摘要不符、条数不符、条数未核对、多余文件、非法文件名）。
 func (a *Archive) Verify() []string {
 	return verifyEntries(a.zr, a.manifest)
 }

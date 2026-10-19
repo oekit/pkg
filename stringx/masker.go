@@ -16,8 +16,8 @@ import (
 //
 // # 掩码格式
 //
-//	«name:****»           Keep=0（全掩）
-//	head«name:****»tail   Keep=N（首尾各保留 N 个字符作定位线索）
+//	«name:****»           全掩（Keep=0，或命中长度不足 Keep*4）
+//	head«name:****»tail   Keep=N 且命中长度 >= N*4（首尾各保留 N 个字符作定位线索）
 //
 // name 是规则的形态标签（Rule.Name），原样出现在输出里供审计读；掩码主体
 // 恒为 4 个 '*'，长度固定，不随原值长度变化。
@@ -26,9 +26,16 @@ import (
 //
 // Keep 是「保留位数」的**封顶**：首尾各保留 Keep 个字符，保留的字符总数与
 // 原值长度无关——原值越长，被隐藏的部分越多，掩码因此不可复原。
-//   - n >= 2*Keep：保留首 Keep 个字符 + 尾 Keep 个字符。
-//   - n <  2*Keep：实际保留位数收缩为 min(Keep, n/2)（首尾相同、互不重叠），
-//     按实际长度处理，不补位、不越界；n < 2 时退化为全掩。
+//   - Keep == 0：整段全量打码。
+//   - 命中长度 n >= Keep*4：保留首 Keep 个字符 + 尾 Keep 个字符。
+//   - 命中长度 n <  Keep*4：**整段全量打码**（不做头尾保留）。
+//
+// 短值全掩是安全底线，不是保守：「留 8 藏 1 等于没藏」。命中长度不足
+// Keep*4 倍时，首尾两段保留位会首尾相接覆盖整段原文（掩码主体只是插在
+// 中间的装饰），原值会完整留在输出里，掩码形同虚设——因此这种值一律
+// 整段打码，输出里不含任何原值字符。
+//
+// 长度判据由库负责，调用方不必自己判断命中长度。
 //
 // # 规则顺序与相互污染
 //
@@ -59,6 +66,9 @@ const (
 	maskLabelClose = '»'
 	// maskBody 掩码主体，固定 4 个 '*'，不随原值长度变化。
 	maskBody = "****"
+	// maskKeepMinRatio 保留位的安全比例：命中长度不足 Keep*maskKeepMinRatio
+	// 倍时整段全量打码（不做头尾保留）。
+	maskKeepMinRatio = 4
 )
 
 // Rule 一条脱敏规则。
@@ -77,6 +87,11 @@ type Rule struct {
 	Re *regexp.Regexp
 	// Keep 掩码保留首尾各几个字符作定位线索；0 = 全掩。
 	// 语义是**封顶**：保留的字符数不随原值长度变化（见包内说明）。
+	//
+	// **命中长度不足 Keep*4 时整段全量打码（不做头尾保留）**——短值的头尾
+	// 保留会首尾相接覆盖整段原文，原值会完整留在输出里，掩码形同虚设。
+	// 调用方不必自己判断命中长度。
+	//
 	// 负数视为非法，NewMasker 报错。
 	Keep int
 }
@@ -154,7 +169,8 @@ func validMaskName(name string) error {
 // Mask 对 text 做形态脱敏，返回打码后的文本。
 //
 // 打码是单次扫描合并：命中某条规则后，该段文本被替换为
-// head + «name:****» + tail，替换结果不再参与任何规则的匹配。
+// head + «name:****» + tail（命中长度不足 Keep*4 时退化为 «name:****»），
+// 替换结果不再参与任何规则的匹配。
 // 未命中任何规则的文本原样保留。
 func (m *Masker) Mask(text string) string {
 	if m == nil || len(m.rules) == 0 || text == "" {
@@ -231,19 +247,21 @@ func (r *maskRule) find(text string, pos int, st *maskState) (int, int, bool) {
 
 // maskValue 生成一段匹配文本的掩码表示。
 //
-// Keep 是封顶：实际保留位 = min(Keep, n/2)（n 为原值 rune 数），首尾相同
-// 且互不重叠——短于 2*Keep 的值按实际长度收缩，不补位、不越界。
+// 判据（写死，调用方不必自己判断长度）：
+//   - keep == 0：整段全量打码。
+//   - 命中长度 n >= keep*maskKeepMinRatio：保留首 keep 个字符 + 尾 keep 个字符。
+//   - 命中长度 n <  keep*maskKeepMinRatio：**整段全量打码**（不做头尾保留）。
+//
+// 短值全掩是安全底线：「留 8 藏 1 等于没藏」——头尾保留位会首尾相接覆盖
+// 整段原文，输出里会完整留着原值。
 func (m *Masker) maskValue(idx int, matched string) string {
 	r := &m.rules[idx]
 	keep := r.keep
 	if keep > 0 {
 		runes := []rune(matched)
-		if n := len(runes); n/2 < keep {
-			keep = n / 2
-		}
-		if keep > 0 {
+		if n := len(runes); n >= keep*maskKeepMinRatio {
 			head := string(runes[:keep])
-			tail := string(runes[len(runes)-keep:])
+			tail := string(runes[n-keep:])
 			return head + string(maskLabelOpen) + r.name + ":" + maskBody + string(maskLabelClose) + tail
 		}
 	}
