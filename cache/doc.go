@@ -5,8 +5,10 @@
 //   - Cache[T] / CacheAside[T] / SourceFunc[T] 接口：实现契约统一收拢在
 //     interface.go 的接口 godoc（值语义、(nil, nil) 双关、回填 best-effort、
 //     TTL 来源、生命周期、null marker）
-//   - LocalCache[T]：基于内存的本地缓存（写序淘汰——FIFO + 重写提升，读
-//     命中不提升；MaxSize、TTL、空值防穿透）
+//   - LocalCache[T]：基于内存的本地缓存（MaxSize、TTL、空值防穿透；
+//     淘汰策略 EvictFIFO（缺省，写序）/ EvictLRU（读命中也提升顺序）；
+//     NoBackgroundSweep 关闭后台清扫协程（改由调用方 Sweep 手动回收）；
+//     CloneOnRead 让读命中返回副本；GetEx 区分「不存在」与「有值但值为 nil」）
 //   - SingleFlightCache[T]：装饰器，并发回源合并防击穿（内部 singleflight
 //     fork 于 concurrency/singleflight，见 internal/singleflight）
 //   - Checker：进程内检查缓存原语（TTL 缓存 + 刷新合并 + 失败短 TTL）

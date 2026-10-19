@@ -1,6 +1,6 @@
 # pkg
 
-> 微工具集 21 合 1（零第三方依赖，仅标准库）——errors/bloomx/bufiox/cache/container/contextx/convert/encoding/enumx/errors/httpjson/jsonrepair/mathx/pagination/pathx/ptrx/singleflighttest/slicex/stringx/strmap/timex/urlguard
+> 微工具集 23 合 1（零第三方依赖，仅标准库）——bloomx/bufiox/cache/cli/container/contextx/convert/encoding/enumx/errors/httpjson/jsonrepair/mathx/pack/pagination/pathx/ptrx/singleflighttest/slicex/stringx/strmap/timex/urlguard
 
 > 🌐 项目主页：**https://oekit.github.io/** · 名称由来：**O**pen **E**asy **Kit**（开源 · 易用 · 工具集合）
 > 🤖 AI Agent：本仓规范与硬规则见 [AGENTS.md](AGENTS.md)；机器可读索引见 [llms.txt](https://oekit.github.io/llms.txt)（接口签名以源码为准）。
@@ -13,16 +13,16 @@ go get github.com/oekit/pkg@v0.15.1
 
 ## 这个仓库做什么
 
-`pkg` 是 oekit 的**基础工具集**：19 个经过生产验证的小工具包合成一个 module，
+`pkg` 是 oekit 的**基础工具集**：23 个经过生产验证的小工具包合成一个 module，
 覆盖错误处理、字符串/切片/类型转换、泛型容器、时间与 cron、JSON 修复、
-HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO、GC 友好只读字典
-等日常高频需求。标识与校验（uidgen/validator）已拆分至 [kitx](https://github.com/oekit/kitx)。
+HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO、GC 友好只读字典、
+CLI 子命令分发、迁移包容器等日常高频需求。标识与校验（uidgen/validator）已拆分至 [kitx](https://github.com/oekit/kitx)。
 
 设计原则：
 
 - **按包编译**：import 哪个子包用哪个，go.mod 只多一条 require，二进制零冗余
 - **零第三方依赖（本仓硬规则，CI 强制）**：go.mod 永不出现 require——全部子包仅依赖标准库；需要三方能力的基础工具拆独立仓（先例：validator/uidgen → [kitx](https://github.com/oekit/kitx)）
-- **生产验证**：全部代码源自 enjoydream 后端服务多年共用积累，带完整单元测试（19/19 包）
+- **生产验证**：全部代码源自 enjoydream 后端服务多年共用积累，带完整单元测试（23/23 包）
 
 ## 包清单
 
@@ -31,7 +31,7 @@ HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO�
 | `errors` | 错误链 `Wrap`/`Cause`（nil-safe）、`BizError`（业务码/HTTP 码双轨）、`Chain`/`In` 组合工具、sentinel 错误。整个矩阵的错误处理基座 |
 | `bloomx` | 本地布隆过滤器：FNV-1a 双哈希、RWMutex 并发安全，缓存穿透防护/去重预检（非法入参归一默认值） |
 | `contextx` | `ValueOnlyFrom` 只传值轻量 ctx：剥离 Done/Err/Deadline，把请求值交给后台任务而不继承取消/超时 |
-| `stringx` | ID 生成、关键词包含匹配、缩进、英文复数化、`{key}` 模板替换 |
+| `stringx` | ID 生成、关键词包含匹配、缩进、英文复数化、`{key}` 模板替换；trie 多模式替换器 `Replacer`（字面量、最长匹配）、`NewMask` 词表遮罩；`Masker` 正则脱敏（v0.16.0 起）——按**形态**分类打码（形态标签进掩码供审计读），保留首尾各 ≤4 字符作定位线索且**不可复原**（保留位封顶、不随长度变化），规则表由调用方完全提供、库不内置任何业务词表 |
 | `slicex` | `Partition` 二分组（保序）、GroupBy 等切片操作 |
 | `container` | 泛型容器（v0.9.0 起，收编原 `collectionx`）：`Set`（集合代数并/交/差）、`Ring` 定长环形缓冲、`Queue` 阻塞队列、`SafeMap`（RWMutex）、`Map`（sync.Map 背书，读多写少）、`Slice` 并发安全切片——参考 go-kratos/kit container 设计 |
 | `enumx` | 枚举：确定性顺序的 All/Values/解析（map 遍历乱序问题的解法） |
@@ -44,9 +44,12 @@ HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO�
 | `pagination` | `PageRequest`/`PageResponse` 分页换算 |
 | `ptrx` | 指针 To/From 与安全解引用 |
 | `timex`（+`cron`） | 时间格式化/解析/时间戳 + cron 表达式 |
-| `cache` | 刷新检查器：TTL 后台刷新、失败按 failTTL 降级、并发请求合并为一次刷新 |
+| `cache` | 缓存接口 `CacheAside` + `BatchGetter` 批量能力（MGet）+ `LocalCache`/`SingleFlightCache` + 刷新检查器 `Checker`（TTL 后台刷新、失败按 failTTL 降级、并发请求合并为一次刷新）；`LocalCache` 内置 null marker 防穿透、stale-if-error、单飞、批量 MGet、时钟注入（`LocalConfig.Now`）；v0.16.0 起**可选形状**：`NoBackgroundSweep` 关闭后台清扫 goroutine（嵌入式/短命进程场景，公开 `Sweep` 手动清扫口）、`CloneOnRead` 读命中返回副本（调用方可改写返回值不污染缓存）、`EvictPolicy` 可选 LRU（默认 FIFO 写序淘汰不变）、`GetEx` 区分「未命中」与「命中但值为 nil」（既有 `Get` 签名不变，新增能力以可选接口 `Sweeper`/`HitGetter` 外置，不破坏其它后端实现） |
 | `bufiox` | 面向协议编解码的零拷贝缓冲 IO：读侧 Next/Peek 返回缓冲视图，写侧 Malloc/WriteBinary 攒批一次 Flush（`bytes` 与 `io.Reader/Writer` 双实现） |
 | `strmap` | GC 友好的只读字符串 map：键打包 + int32 哈希表 + maphash，海量静态映射（header/字典表）零 GC 扫描开销 |
+| `singleflighttest` | singleflight 共享契约测试套件（internal 与 concurrency 双侧引用）：同一份断言跑不同 singleflight 实现，行为漂移即红 |
+| `cli` | 框架无关、可单测的子命令分发原语（v0.16.0 起）——`App`/`Command` + 退出码约定写死在包里（0 成功 / 1 运行失败 / 2 用法错误，未知子命令与参数不合法均归 2），usage 由 `Command.Summary` 自动生成；`Run` **不读 os.Args、不调 os.Exit**，参数与 stdout/stderr 全由调用方给（因此命令逻辑可被单元测试直接调用，不必起子进程）；配套 `NewFlagSet` 把 `flag` 的错误输出重定向到调用方给的 stderr |
+| `pack` | 迁移包容器原语（v0.16.0 起）——zip 容器 + manifest 清单（格式版本 / 来源 / 各类条数 / 每文件 SHA-256）+ JSONL 流式读写（逐行编码，不整包进内存）+ `Inspect` 体检：一次列全问题（缺文件、摘要不符、条数不符、多余文件、非法文件名）而不是遇到第一个就停，且用哨兵错误区分「包损坏」与「版本不认识」两类不可导原因；文件名净化防 zip 路径穿越 |
 | `urlguard` | 出站 URL 的 SSRF 防护原语：层 1 `CheckURL` 字面量校验（私网/loopback/链路本地含云元数据 169.254.169.254/CGNAT/ULA、`.internal`/`.local`/`localhost` 域名、scheme 白名单）；层 2 `DialFunc` 拨号包装——解析出的每个 IP 预检 + 实际 RemoteAddr 端点核对（闭合重解析 TOCTOU 窗口，覆盖 Happy-Eyeballs）；IPv4-mapped IPv6 归一；构造态豁免 `WithAllowPrivate`/`WithAllowCIDRs`/`WithAllowDomains`；与 httpx `WithDialFunc` 一行组合 |
 
 ## 快速使用

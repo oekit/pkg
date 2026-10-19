@@ -1,3 +1,47 @@
+## [v0.16.0] — 2026-10-19
+
+### feat(cli)：可单测的子命令分发原语（[#27](https://github.com/oekit/pkg/issues/27)）
+- `App`/`Command` 骨架：退出码约定写死在包里（`ExitOK`=0 / `ExitError`=1 / `ExitUsage`=2），
+  未知子命令与参数不合法均归 2；usage 由 `Command.Summary` 自动生成，不要求调用方手写
+- `Run` 不读 `os.Args`、不调 `os.Exit`：参数与 stdout/stderr 全部由调用方给——命令逻辑因此
+  可被单元测试直接调用（不必起子进程、不必解析 os.Args、不必捕获 stdout）
+- `NewFlagSet` 把 `flag` 的错误输出重定向到调用方给的 stderr（默认 flag 打 os.Stderr，
+  会破坏「输出流由调用方给」的约定）
+- 契约测试：未知子命令→2 / 空 args→2 且打印 usage / 子命令返回码原样透传 /
+  AST 源码断言（代码真调用 os.Exit·os.Args 才报，文档注释里的字样不误伤）
+
+### feat(stringx)：正则脱敏 Masker——形态标签 + 保定位线索 + 不可复原（[#26](https://github.com/oekit/pkg/issues/26)）
+- `NewMasker(rules []Rule) (*Masker, error)` + `Mask(text string) string`；
+  `Rule{Name 形态标签, Re *regexp.Regexp, Keep 保留位数}`
+- 掩码形如 `«name:****»` / `head«name:****»tail`：形态标签进掩码供审计读「打的是哪一类」
+- 不可复原：保留位数封顶、不随原值长度变化（实际保留位 = min(Keep, n/2)），掩码主体恒为
+  4 个 `*`；保留位按 rune 边界切（中文不切半个字）
+- 单次扫描合并所有规则（起点最左 → 长度最长 → 注册顺序最前），替换结果不再参与匹配——
+  形态标签不会被后一条规则二次处理
+- 规则表完全由调用方提供，库不内置任何业务词表；`Name` 重复/为空、`Re` 为 nil 一律报错
+  （形态标签重复会让审计结果有歧义）
+
+### feat(cache)：LocalCache 可选形状——无后台 goroutine / 读命中返回副本 / LRU（[#25](https://github.com/oekit/pkg/issues/25)）
+- `NoBackgroundSweep`：不起后台清扫 goroutine（嵌入式/短命命令行场景不该为缓存起常驻件），
+  公开 `Sweep(ctx)` 手动清扫口；关闭后 `NewLocalCache` 之后进程内不新增 goroutine
+- `CloneOnRead func(*T) *T`：读命中返回副本，调用方可随意改写返回值而不污染缓存条目
+  （覆盖 Get / GetOrLoad 命中与 stale 兜底 / MGet；克隆在锁外执行）
+- `EvictPolicy`：可选 `EvictLRU`（读命中也提升顺序），默认 `EvictFIFO` 行为与现状一致
+- `GetEx(ctx, key) (*T, bool, error)`：区分「未命中」与「命中但值为 nil」；既有 `Get` 签名与行为不变
+- 新增能力以可选接口 `Sweeper`/`HitGetter` 外置，不加入 `Cache[T]`——不破坏其它后端实现
+- fix(cache)：顺序结构由「切片 + swap-remove」改为 `container/list`——原实现在删除队头时用
+  末位元素填补空位，会打乱相对顺序（本就偏离文档声明的 FIFO 口径）；既有淘汰测试原样通过
+- cachetest 契约套件新增 5 个条目（Sweep / 命中标志 / 读隔离 / 读提升 / 无后台 goroutine）
+
+### feat(pack)：迁移包容器原语（[#24](https://github.com/oekit/pkg/issues/24)）
+- zip 容器 + manifest 清单（格式版本 / 创建时间 / 各类条数 / 每文件 SHA-256）
+- `AddJSONL(name, rows)` 逐行编码流式写出（不整包进内存）；`Close()` 写回 manifest 自身
+- `Inspect` 体检**一次列全**问题（缺文件 / 摘要不符 / 条数不符 / 多余文件 / 非法文件名），
+  而不是遇到第一个错误就停；哨兵错误 `ErrCorrupt` / `ErrUnsupportedVersion` 区分
+  「包损坏」与「版本不认识」两类不可导原因，报错文案带实际与期望版本号
+- 文件名净化防 zip 路径穿越（`..` / 绝对路径 / 路径分隔符一律拒绝）
+- 摘要统一走 `encoding.Sha256Hex`（不各自实现）；`Open`/`ReadJSONL` 读回逐条相等
+
 ## [v0.15.1] — 2026-10-19
 
 ### fix(urlguard)：缺省阻断清单补齐保留段与 .localdomain（对齐 httpx#11 参考实现）

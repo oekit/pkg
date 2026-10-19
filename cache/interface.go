@@ -18,6 +18,9 @@ import (
 //	序列化型实现（如 Redis 后端）每次反序列化返回新副本，天然无别名。
 //	同一接口允许两种别名语义，因此调用方一律按"只读"对待返回值。
 //	Set/SetWithTTL 传入的 value 同理：实现不拷贝时调用方此后不得改写。
+//	实现可以额外提供「读命中返回副本」的可选开关（LocalCache：
+//	LocalConfig.CloneOnRead）——开启后读命中返回副本，调用方可改写
+//	返回值而不污染缓存条目；未开启时按上面的共享引用口径。
 //
 // (nil, nil) 双关：
 //
@@ -126,4 +129,27 @@ type CacheAside[T any] interface {
 type BatchGetter[T any] interface {
 	// MGet 批量获取。keys 为空时返回空 map。
 	MGet(ctx context.Context, keys ...string) (map[string]*T, error)
+}
+
+// Sweeper 是可选能力接口：支持手动清扫过期条目（LocalCache 实现）。
+//
+// 供「不起后台清扫协程」的部署形态使用——短命命令行/宿主内嵌场景
+// 由调用方在合适时机调用 Sweep 回收过期条目，避免为缓存常驻后台
+// goroutine。实现须保证 Sweep 可重复调用（幂等：已回收的条目不再计数）。
+type Sweeper interface {
+	// Sweep 清扫过期条目，返回本次清除的条目数。
+	Sweep(ctx context.Context) int
+}
+
+// HitGetter 是可选能力接口：取值时可区分「未命中」与「命中但值为 nil」。
+//
+// 既有 Cache[T].Get 以 (nil, nil) 同时表达「key 不存在」「命中 null
+// marker」「命中但值为 nil」三种情况；实现本接口的方法额外给出命中
+// 标志位（LocalCache：GetEx）。既有 Get 签名不变——本接口是可选能力，
+// 不加入 Cache[T]（避免破坏其他后端实现）。
+type HitGetter[T any] interface {
+	// GetEx 获取缓存，第二个返回值为是否命中真值条目。
+	// hit=false 表示未命中（不存在/已过期/null marker）；hit=true 时
+	// 返回值可能为 nil（命中但值为 nil）。
+	GetEx(ctx context.Context, key string) (*T, bool, error)
 }
