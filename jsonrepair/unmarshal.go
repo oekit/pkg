@@ -62,7 +62,14 @@ func unmarshal(text string, v any, o unmarshalOpts) (bool, error) {
 	}
 	// 宽松收尾：仅当 EOF 处确有截断迹象才闭合（闭合一个均衡文本只会掩盖
 	// 中段损坏，违背「修复器的错误成功比失败更贵」纪律）。
-	for _, c := range [2]string{ExtractJSON(text), ExtractObject(stripCodeFence(text))} {
+	// 候选三件与抽取面对称：ExtractJSON（首个 {/[ 起）、ExtractObject、ExtractArray
+	// ——散文里先出现 '{' 时 ExtractJSON 会挑中散文那个 '{'，数组候选补位
+	// （issue #37）。
+	for _, c := range [3]string{
+		ExtractJSON(text),
+		ExtractObject(stripCodeFence(text)),
+		ExtractArray(stripCodeFence(text)),
+	} {
 		if c == "" {
 			continue
 		}
