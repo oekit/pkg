@@ -1,4 +1,4 @@
-// Package jsonrepair LLM 输出宽容 JSON 修复骨架：栅栏剥离 → 散文抽对象 →
+// Package jsonrepair LLM 输出宽容 JSON 修复骨架：栅栏剥离 → 散文抽对象/抽数组 →
 // 语法级修复 → 标量归一。报告/领域 schema 由调用方持有；本包只做格式宽容。
 package jsonrepair
 
@@ -47,6 +47,61 @@ func ExtractObject(s string) string {
 	// 未闭合（截断）：剪掉最后一个 '}' 之后的垃圾，剩余缺口交 Repair 补全。
 	tail := s[start:]
 	if i := strings.LastIndex(tail, "}"); i >= 0 {
+		tail = tail[:i+1]
+	}
+	return tail
+}
+
+// ExtractArray 提取文本中第一个平衡的 JSON 数组（字符串字面量感知；
+// 未闭合则返回剩余文本由 Repair 补全括号）。无数组返回 ""。
+//
+// 与 ExtractObject 对称的一对面（issue #37）：对象面有抽取件、数组面此前没有——
+// 数组文本只能被 ExtractObject 抽成「数组里的第一个对象」，对数组语义是错的
+// （ExtractObject(`[{"a":1}]`) = `{"a":1}`）。调用方要抽数组只能自己手搓
+// IndexAny + 深度扫描。
+//
+// 括号栈而非单一深度计数：数组可嵌套数组（`[[1,2],3]`）也可含对象字段数组
+// （`[{"b":[2]}]`），只数 '[' 会把内层 ']' 当作数组收尾、切出半截。
+func ExtractArray(s string) string {
+	start := strings.IndexByte(s, '[')
+	if start < 0 {
+		return ""
+	}
+	// 栈存期望的闭合符：'[' → ']'，'{' → '}'。
+	var stack []byte
+	inStr, esc := false, false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			switch {
+			case esc:
+				esc = false
+			case c == '\\':
+				esc = true
+			case c == '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '[':
+			stack = append(stack, ']')
+		case '{':
+			stack = append(stack, '}')
+		case ']', '}':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+				if len(stack) == 0 {
+					return s[start : i+1]
+				}
+			}
+		}
+	}
+	// 未闭合（截断）：剪掉最后一个 ']' 之后的垃圾，剩余缺口交 Repair 补全。
+	tail := s[start:]
+	if i := strings.LastIndexByte(tail, ']'); i >= 0 {
 		tail = tail[:i+1]
 	}
 	return tail
@@ -246,9 +301,15 @@ func walkNormalize(m map[string]any, schema *Schema) {
 	}
 }
 
-// ParseLenient 栅栏剥离 → 直接解析 → Repair 重试 → ExtractObject+Repair 重试。
-// schema 为 nil 时跳过 Normalize（空 schema 下归一仍是 Unmarshal+递归+Marshal
-// 三趟纯开销，对解析结果无贡献）。
+// ParseLenient 栅栏剥离 → 直接解析 → Repair 重试 → ExtractObject+Repair 重试
+// → ExtractArray+Repair 重试。schema 为 nil 时跳过 Normalize（空 schema 下归一
+// 仍是 Unmarshal+递归+Marshal 三趟纯开销，对解析结果无贡献）。
+//
+// 抽取兜底对象面/数组面对称（issue #37）：此前只有 ExtractObject 一件，多段数组
+// 与散文含 '{' 的数组文本整段作废。顺序固定为「对象面先、数组面后」——目标类型
+// 决定哪个形状能解析成功（[]T 只吃数组、map 只吃对象），而 any/json.RawMessage
+// 这类通吃形状的目标必须保住对象面既有行为（`{"items":[1,2]}` 仍抽成整个对象，
+// 不能被内层数组抢走）。
 func ParseLenient(raw string, v any, schema *Schema) error {
 	candidate := stripCodeFence(raw)
 	if candidate == "" {
@@ -270,6 +331,14 @@ func ParseLenient(raw string, v any, schema *Schema) error {
 		return nil
 	}
 	if extracted := ExtractObject(candidate); extracted != "" {
+		if tryParse(extracted) {
+			return nil
+		}
+		if tryParse(Repair(extracted)) {
+			return nil
+		}
+	}
+	if extracted := ExtractArray(candidate); extracted != "" {
 		if tryParse(extracted) {
 			return nil
 		}
