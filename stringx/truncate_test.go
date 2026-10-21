@@ -48,3 +48,28 @@ func TestTruncEllipsis(t *testing.T) {
 		t.Fatalf("rune 安全截断: %q", got)
 	}
 }
+
+// n 的语义 = "截断到 n 个 rune"，**不含省略号**：返回值长度为 n（未截断）或
+// n+1（发生截断）。文档里写明了这条口径，这里把它钉住——调用方若把 n 当
+// "总长度预算"用，差的这 1 个字符就是超预算。
+func TestTruncEllipsis_NIsRuneBudgetNotTotal(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		n    int
+		want int // 返回值的 rune 数
+	}{
+		{"truncated", "一二三四五六七八九十", 5, 6},
+		{"not truncated", "abc", 5, 3},
+		{"exactly n", "abcde", 5, 5},
+		{"zero n", "abc", 0, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TruncEllipsis(tt.in, tt.n)
+			if n := len([]rune(got)); n != tt.want {
+				t.Errorf("TruncEllipsis(%q, %d) = %q（%d runes），want %d runes", tt.in, tt.n, got, n, tt.want)
+			}
+		})
+	}
+}

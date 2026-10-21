@@ -36,6 +36,11 @@ func TruncBytes(s string, budget int) (string, bool) {
 
 // TruncEllipsis 截断并追加省略号（列表/标题/事件载荷展示面统一语义）。
 // n<=0 返回省略号；无需截断时原样返回。
+//
+// **n 的语义是「截断到 n 个 rune」，不含省略号**：返回值长度为 n（未截断）或
+// n+1（发生截断，省略号算 1 个 rune）。若调用方的 n 是"总长度预算"
+// （如提交状态描述的 140 字符上限），本函数会超出预算 1 个字符——那种场景用
+// TruncRunes 自行拼接，或先按预算减 1 再调用。
 func TruncEllipsis(s string, n int) string {
 	if n <= 0 {
 		return "…"
