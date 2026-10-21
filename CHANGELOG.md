@@ -1,3 +1,9 @@
+## [v0.19.0] — 2026-10-21
+
+- fix(httpjson): 指数退避改用乘法+饱和封顶，移位溢出不再产出负延迟——base << (attempt-1) 在 attempt 较大时 int64 溢出成负数，负数不满足 > maxDelay 于是绕过 MaxDelay 封顶，time.After(负数) 立刻返回，该轮退避彻底消失（默认 BaseDelay=200ms 时溢出点落在 attempt=37/39/40），封顶承诺同时被破坏；改用乘法+饱和封顶，先封顶再放大，MaxDelay 成为真正的上界，抖动叠加同样饱和，与同族 concurrency/retry 收敛到同一口径（#45）
+
+feat(errors): 补 Errorf——带格式化的构造原语，支持 %w 包装——pkg/errors 此前只有 msg 不可插值的 Wrap，消费方拼带动态信息的错误链只能先 Sprintf 再 Wrap（格式化动词与参数分离，易错）或绕回 stdlib fmt.Errorf（放弃 kv 上下文），本仓自身 fmt.Errorf 有 76 处；Errorf 与 fmt.Errorf 同型、支持 %w（可出现多个）、nil-safe（%w 实参为 nil 时不进包装链、消息按 %v 渲染为 "<nil>"，不产出 "%!w(<nil>)" 噪声）、格式化结果为空串时返回 nil、多个 %w 时包装链为 Unwrap() []error，消息渲染与 fmt.Errorf 逐字一致（差分测试以 stdlib 为参照实现对照）（#47）
+
 ## [v0.18.0] — 2026-10-20
 
 - jsonrepair 补抽数组原语 ExtractArray，数组面兜底与对象面对称——多段数组与散文含 '{' 的数组文本不再整段作废（取首个口径与对象面一致）(#37)
