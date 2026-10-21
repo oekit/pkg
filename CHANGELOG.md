@@ -1,3 +1,9 @@
+## [v0.20.0] — 2026-10-21
+
+- feat(pathx): 仓库相对路径清洗与 traversal 拒绝原语 SanitizeRel / SanitizeRelStrict——全家族无对应件，消费方各写各的（实测同一仓内三档口径漂移：宽松 / 严格 / 只看 Clean 后的结果），本原语给基线、调用方在基线上选严格档；统一分隔符（正斜杠与反斜杠同为分隔符，跨平台同判——按平台解释会让同一段载荷在 Linux 与 Windows 得到不同结论，而 Linux 才是服务端主环境，那正是双点反斜杠形绕过最容易漏掉的地方）、消除 . 与 .. 段，绝对路径（/foo、UNC、Windows 盘符）、越出根目录（../x、a/../../x）、清洗后为空（.、a/..）一律拒绝；严格档额外拒绝输入中显式出现的 .. 段（a/../b 直接拒绝），防符号链接等文本 Clean 简化不掉的绕过形态；零第三方依赖（#46）
+- feat(urlguard): 精确 host 白名单 WithExactHosts——WithAllowDomains 是后缀豁免，只能放宽某域及其全部子域，无法钉死到具体 host；而 urlguard 是放行型模型（默认只阻断私网/回环/保留段与约定域名），白名单外的任意公网域默认放行，于是「host 必须完全等于管理员配的那个 host」（webhook 出口签名绑 host、内部平台多一个子域就多一个未审计入口、凭据与端点绑定）在既有配置里根本没有对应表达；authority（host[:port]）必须完全等于列表中某项，与后缀豁免独立可叠加（域豁免不解除钉死），命中后仍走 scheme 白名单与私网判定（钉死 host 不等于放行私网）；host 大小写与尾点不敏感、端口按数值比较且参与比较、userinfo 不参与比较（url.Parse 已把 https://h@evil.com/ 的 userinfo 拆开，authority 是 evil.com——正是钉死 host 要挡的逃逸形态）；条目文法非法时 New 报错 fail-fast，未设置时行为与既有完全一致（#48）
+- docs(stringx): 明确 TruncEllipsis 的 n 语义——n 是「截断到 n 个 rune」、不含省略号，因此返回值可达 n+1 个 rune；调用方若把 n 当「总长度预算」用（如提交状态描述的 140 字符上限）会超预算 1 个字符，此前文档未写明，现写进文档并补测试钉住该口径（#46）
+
 ## [v0.19.0] — 2026-10-21
 
 - fix(httpjson): 指数退避改用乘法+饱和封顶，移位溢出不再产出负延迟——base << (attempt-1) 在 attempt 较大时 int64 溢出成负数，负数不满足 > maxDelay 于是绕过 MaxDelay 封顶，time.After(负数) 立刻返回，该轮退避彻底消失（默认 BaseDelay=200ms 时溢出点落在 attempt=37/39/40），封顶承诺同时被破坏；改用乘法+饱和封顶，先封顶再放大，MaxDelay 成为真正的上界，抖动叠加同样饱和，与同族 concurrency/retry 收敛到同一口径（#45）
