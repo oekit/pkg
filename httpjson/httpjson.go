@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -138,15 +139,12 @@ func DoJSONWithRetry(ctx context.Context, client *http.Client, reqFn func() (Req
 		if attempt == attempts || !retryable(err, cfg.Retryable) {
 			break
 		}
-		delay := base << (attempt - 1) // 指数退避
-		if delay > maxDelay {
-			delay = maxDelay
-		}
+		delay := exponentialDelay(base, attempt, maxDelay)
 		if hint := RetryAfterFrom(ctx); hint > 0 {
 			delay = SelectRetryDelay(delay, hint)
 		}
 		if jitter > 0 {
-			delay += time.Duration(rand.Int64N(int64(jitter)))
+			delay = addJitter(delay, int64(jitter))
 		}
 		select {
 		case <-ctx.Done():
@@ -155,6 +153,46 @@ func DoJSONWithRetry(ctx context.Context, client *http.Client, reqFn func() (Req
 		}
 	}
 	return lastErr
+}
+
+// exponentialDelay 算指数退避 base*2^(attempt-1)，**先封顶再放大**，饱和而非回绕。
+//
+// 移位写法（base << (attempt-1)）在 attempt 较大时 int64 溢出成负数——
+// 负数不满足「> maxDelay」，于是绕过 MaxDelay 封顶，time.After(负数) 立刻
+// 返回，该轮退避彻底消失（#45）。改用乘法 + 饱和封顶后，MaxDelay 才是
+// 真正的上界。
+//
+// 与 concurrency/retry 的指数退避同口径（同一家族两处退避行为一致）。
+func exponentialDelay(base time.Duration, attempt int, maxDelay time.Duration) time.Duration {
+	delay := base
+	for i := 1; i < attempt; i++ {
+		if delay >= maxDelay {
+			break
+		}
+		if delay > time.Duration(1<<62) { // 饱和而非回绕为负
+			delay = time.Duration(1<<63 - 1)
+			break
+		}
+		delay *= 2
+	}
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	return delay
+}
+
+// addJitter 给 delay 加一段 [0, n) 的随机抖动，**饱和**而非回绕成负数。
+//
+// 「delay + 抖动」本身也会溢出：delay 接近 MaxInt64 时相加得到负 duration
+// → time.After(负数) 立刻返回 → 退避形同虚设（与 #45 的溢出路径同源）。
+func addJitter(delay time.Duration, n int64) time.Duration {
+	if n <= 0 {
+		return delay
+	}
+	if delay > time.Duration(math.MaxInt64)-time.Duration(n-1) {
+		return time.Duration(math.MaxInt64)
+	}
+	return delay + time.Duration(rand.Int64N(n))
 }
 
 // retryable 判定一次错误是否值得重试：自定义判定优先；缺省网络超时/5xx/429
