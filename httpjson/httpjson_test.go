@@ -3,6 +3,7 @@ package httpjson
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -203,5 +204,82 @@ func TestDoJSONDecodeAndTransportErrors(t *testing.T) {
 	// 不可达端点 → 传输错误
 	if err := DoJSON(context.Background(), srv.Client(), Request{URL: "http://127.0.0.1:1/x"}, &out); err == nil {
 		t.Fatal("传输错误应上抛")
+	}
+}
+
+// ---- #45：指数退避移位溢出产出负延迟 ----
+
+// TestExponentialDelay_NeverNegativeAndAlwaysCapped 回归 #45：移位写法
+// （base << (attempt-1)）在 attempt 较大时 int64 溢出成负数，负数不满足
+// 「> maxDelay」于是绕过封顶，time.After(负数) 立刻返回——该轮退避消失。
+// 判据：任意 attempt 下退避非负、且恒 ≤ MaxDelay。
+func TestExponentialDelay_NeverNegativeAndAlwaysCapped(t *testing.T) {
+	base := 200 * time.Millisecond
+	maxDelay := 2 * time.Second
+	for attempt := 1; attempt <= 200; attempt++ {
+		d := exponentialDelay(base, attempt, maxDelay)
+		if d < 0 {
+			t.Fatalf("attempt=%d 退避为负：%v", attempt, d)
+		}
+		if d > maxDelay {
+			t.Fatalf("attempt=%d 越过 MaxDelay 封顶：%v > %v", attempt, d, maxDelay)
+		}
+	}
+}
+
+// TestExponentialDelay_OverflowPointPinned 钉住 issue 复现的溢出点：
+// BaseDelay=200ms 时移位写法在 attempt=37/39/40 产出负延迟。
+func TestExponentialDelay_OverflowPointPinned(t *testing.T) {
+	base := 200 * time.Millisecond
+	maxDelay := 2 * time.Second
+	for _, attempt := range []int{36, 37, 38, 39, 40, 64, 100} {
+		d := exponentialDelay(base, attempt, maxDelay)
+		if d <= 0 {
+			t.Fatalf("attempt=%d 退避消失：%v", attempt, d)
+		}
+		if d != maxDelay {
+			t.Fatalf("attempt=%d 应封顶到 %v，实得 %v", attempt, maxDelay, d)
+		}
+	}
+}
+
+// TestExponentialDelay_MonotonicUpToCap 封顶前必须单调递增（指数语义）。
+func TestExponentialDelay_MonotonicUpToCap(t *testing.T) {
+	base := 50 * time.Millisecond
+	maxDelay := 10 * time.Second
+	prev := time.Duration(0)
+	for attempt := 1; attempt <= 20; attempt++ {
+		d := exponentialDelay(base, attempt, maxDelay)
+		if d < prev {
+			t.Fatalf("attempt=%d 退避回退：%v < %v", attempt, d, prev)
+		}
+		if d > maxDelay {
+			t.Fatalf("attempt=%d 越过封顶：%v", attempt, d)
+		}
+		prev = d
+	}
+}
+
+// TestAddJitter_SaturatesInsteadOfOverflowing 退避 + 抖动不得回绕成负数：
+// 负 duration 传给 time.After 会立刻返回，退避形同虚设。
+func TestAddJitter_SaturatesInsteadOfOverflowing(t *testing.T) {
+	d := addJitter(time.Duration(math.MaxInt64), int64(math.MaxInt64))
+	if d < 0 {
+		t.Fatalf("抖动后不应为负：%v", d)
+	}
+	if d != time.Duration(math.MaxInt64) {
+		t.Fatalf("应饱和到 MaxInt64：%v", d)
+	}
+}
+
+// TestAddJitter_StaysInRange 抖动幅度口径不变：结果落在 [delay, delay+n)。
+func TestAddJitter_StaysInRange(t *testing.T) {
+	base := 100 * time.Millisecond
+	n := int64(20 * time.Millisecond)
+	for i := 0; i < 50; i++ {
+		d := addJitter(base, n)
+		if d < base || d >= base+time.Duration(n) {
+			t.Fatalf("抖动越界：%v 不在 [%v, %v)", d, base, base+time.Duration(n))
+		}
 	}
 }
