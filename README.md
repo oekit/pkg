@@ -40,7 +40,7 @@ CLI 子命令分发、迁移包容器等日常高频需求。标识与校验（u
 | `jsonrepair` | LLM 输出等脏 JSON 的宽容修复链（围栏/尾逗号/单引号/括号闭合），修复永不失败——异常时回退原文；`UnmarshalLenient` 宽松模式尽力闭合截断的数组/对象（半截字符串/键位补 null/悬空逗号）并回报 partial |
 | `httpjson` | 带 JSON 解析的 HTTP 调用助手 |
 | `mathx` | 安全随机、平均值等统计助手 + `Unstable` 抖动值（`Around` 对称打散缓存 TTL 防雪崩 / `Upward` 单边向上，重试退避「不得早于基准」） |
-| `pathx` | glob 路径匹配（`vendor/**`、`*.test`）+ 仓库相对路径清洗与 traversal 拒绝 `SanitizeRel`/`SanitizeRelStrict`（统一分隔符、消除 `.`/`..` 段，绝对路径与越出根目录一律拒绝；`/` 与 `\` 同为分隔符，跨平台同判；严格档连显式 `..` 段一并拒绝） |
+| `pathx` | glob 路径匹配（`vendor/**`、`*.test`）+ 仓库相对路径清洗与 traversal 拒绝 `SanitizeRel`/`SanitizeRelStrict`（统一分隔符、消除 `.`/`..` 段，绝对路径与越出根目录一律拒绝；`/` 与 `\` 同为分隔符，跨平台同判；严格档连显式 `..` 段一并拒绝）+ **文件名**消毒 `SanitizeFileName`（展示/存储用：目录成分丢弃只取最后一段、控制字符丢弃、Windows 保留字符 `: * ? " < > |` 替换为 `_`、去首尾空白与结尾的点、空名/纯符号名回退、超长按**字节**截断并保留扩展名且不砍半个 UTF-8 字符） |
 | `pagination` | `PageRequest`/`PageResponse` 分页换算 |
 | `ptrx` | 指针 To/From 与安全解引用 |
 | `timex`（+`cron`） | 时间格式化/解析/时间戳 + cron 表达式 |
