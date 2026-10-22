@@ -1,3 +1,7 @@
+## [v0.22.0] — 2026-10-22
+
+- feat(pathx): 补两个缺失原语——名字通配匹配 MatchGlob 与单段文件名合法性判定 IsSafeFileName；feat(stringx): 补 CSV 拆分原语 SplitCSVNonEmpty——拆 + trim + 丢空项，空串返回 nil（#63、#64、#65）
+
 ## [v0.21.0] — 2026-10-22
 
 ### feat(pathx)：文件名消毒原语 `SanitizeFileName`——展示 / 存储 / 上传原始名这条面此前是空的（[#58](https://github.com/oekit/pkg/issues/58)）
