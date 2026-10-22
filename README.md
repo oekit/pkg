@@ -31,7 +31,7 @@ CLI 子命令分发、迁移包容器等日常高频需求。标识与校验（u
 | `errors` | 错误链 `Wrap`/`Cause`（nil-safe）、`BizError`（业务码/HTTP 码双轨）、`Chain`/`In` 组合工具、sentinel 错误。整个矩阵的错误处理基座 |
 | `bloomx` | 本地布隆过滤器：FNV-1a 双哈希、RWMutex 并发安全，缓存穿透防护/去重预检（非法入参归一默认值） |
 | `contextx` | `ValueOnlyFrom` 只传值轻量 ctx：剥离 Done/Err/Deadline，把请求值交给后台任务而不继承取消/超时 |
-| `stringx` | ID 生成、关键词包含匹配、缩进、英文复数化、`{key}` 模板替换；trie 多模式替换器 `Replacer`（字面量、最长匹配）、`NewMask` 词表遮罩；`Masker` 正则脱敏（v0.16.0 起）——按**形态**分类打码（形态标签进掩码供审计读），保留首尾各 ≤4 字符作定位线索且**不可复原**（保留位封顶、不随长度变化），规则表由调用方完全提供、库不内置任何业务词表 |
+| `stringx` | ID 生成、关键词包含匹配、缩进、英文复数化、`{key}` 模板替换；trie 多模式替换器 `Replacer`（字面量、最长匹配）、`NewMask` 词表遮罩；`Masker` 正则脱敏（v0.16.0 起）——按**形态**分类打码（形态标签进掩码供审计读），保留首尾各 ≤4 字符作定位线索且**不可复原**（保留位封顶、不随长度变化），规则表由调用方完全提供、库不内置任何业务词表；CSV 拆分 `SplitCSVNonEmpty`（拆 + trim + 丢空项，空串返回 **nil** 而非空切片——`SplitByComma` 只是 `strings.Split`，`SplitWith` 按空白切会拆坏含空格的值） |
 | `slicex` | `Partition` 二分组（保序）、GroupBy 等切片操作 |
 | `container` | 泛型容器（v0.9.0 起，收编原 `collectionx`）：`Set`（集合代数并/交/差）、`Ring` 定长环形缓冲、`Queue` 阻塞队列、`SafeMap`（RWMutex）、`Map`（sync.Map 背书，读多写少）、`Slice` 并发安全切片——参考 go-kratos/kit container 设计 |
 | `enumx` | 枚举：确定性顺序的 All/Values/解析（map 遍历乱序问题的解法） |
