@@ -143,15 +143,16 @@ func TestWithExactHosts_EmptyListDeniesAll(t *testing.T) {
 }
 
 func TestWithExactHosts_IPv6Literal(t *testing.T) {
-	g := mustGuard(t, WithExactHosts("[2001:db8::1]:8080"))
+	// 用全球可达 IPv6（2001:db8::/32 文档段已进阻断清单，见 literal_test.go）
+	g := mustGuard(t, WithExactHosts("[2606:4700:4700::1111]:8080"))
 
-	if err := g.CheckURL("http://[2001:db8::1]:8080/hook"); err != nil {
+	if err := g.CheckURL("http://[2606:4700:4700::1111]:8080/hook"); err != nil {
 		t.Errorf("IPv6 字面量 + 端口应放行：%v", err)
 	}
-	if err := g.CheckURL("http://[2001:db8::1]/hook"); err == nil {
+	if err := g.CheckURL("http://[2606:4700:4700::1111]/hook"); err == nil {
 		t.Error("端口不一致应拒绝")
 	}
-	if err := g.CheckURL("http://[2001:db8::2]:8080/hook"); err == nil {
+	if err := g.CheckURL("http://[2606:4700:4700::1112]:8080/hook"); err == nil {
 		t.Error("地址不一致应拒绝")
 	}
 }

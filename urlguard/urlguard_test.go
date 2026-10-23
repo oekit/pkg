@@ -48,8 +48,8 @@ func TestCheckURL_AllowsPublic(t *testing.T) {
 	allowed := []string{
 		"https://example.com/hook",
 		"http://8.8.8.8/hook",
-		"http://example.com:8443/hook", // 带端口
-		"http://[2001:db8::1]/hook",    // 文档保留段不在阻断清单
+		"http://example.com:8443/hook",       // 带端口
+		"http://[2606:4700:4700::1111]/hook", // 全球可达 IPv6（文档段 2001:db8::/32 已阻断，见 literal_test.go）
 	}
 	for _, raw := range allowed {
 		if err := g.CheckURL(raw); err != nil {

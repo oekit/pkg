@@ -50,7 +50,7 @@ CLI 子命令分发、迁移包容器等日常高频需求。标识与校验（u
 | `singleflighttest` | singleflight 共享契约测试套件（internal 与 concurrency 双侧引用）：同一份断言跑不同 singleflight 实现，行为漂移即红 |
 | `cli` | 框架无关、可单测的子命令分发原语（v0.16.0 起）——`App`/`Command` + 退出码约定写死在包里（0 成功 / 1 运行失败 / 2 用法错误，未知子命令与参数不合法均归 2），usage 由 `Command.Summary` 自动生成；`Run` **不读 os.Args、不调 os.Exit**，参数与 stdout/stderr 全由调用方给（因此命令逻辑可被单元测试直接调用，不必起子进程）；配套 `NewFlagSet` 把 `flag` 的错误输出重定向到调用方给的 stderr |
 | `pack` | 迁移包容器原语（v0.16.0 起）——zip 容器 + manifest 清单（格式版本 / 来源 / 各类条数 / 每文件 SHA-256）+ JSONL 流式读写（逐行编码，不整包进内存）+ `Inspect` 体检：一次列全问题（缺文件、摘要不符、条数不符、多余文件、非法文件名）而不是遇到第一个就停，且用哨兵错误区分「包损坏」与「版本不认识」两类不可导原因；文件名净化防 zip 路径穿越 |
-| `urlguard` | 出站 URL 的 SSRF 防护原语：层 1 `CheckURL` 字面量校验（私网/loopback/链路本地含云元数据 169.254.169.254/CGNAT/ULA、`.internal`/`.local`/`localhost` 域名、scheme 白名单）；层 2 `DialFunc` 拨号包装——解析出的每个 IP 预检 + 实际 RemoteAddr 端点核对（闭合重解析 TOCTOU 窗口，覆盖 Happy-Eyeballs）；IPv4-mapped IPv6 归一；构造态豁免 `WithAllowPrivate`/`WithAllowCIDRs`/`WithAllowDomains`；精确 host 白名单 `WithExactHosts`（host[:port] 必须完全相等——后缀豁免只能"放宽某域及其子域"，钉死到具体 host 需要这一档；与豁免维度独立，命中后仍走 scheme 与私网判定）；与 httpx `WithDialFunc` 一行组合 |
+| `urlguard` | 出站 URL 的 SSRF 防护原语：层 1 `CheckURL` 字面量校验（私网/loopback/链路本地含云元数据 169.254.169.254/CGNAT/ULA、`.internal`/`.local`/`localhost` 域名、scheme 白名单、IPv6 特殊用途段与 NAT64 段——`64:ff9b::/96`（`64:ff9b::7f00:1` 即 127.0.0.1 的 IPv6 写法）等可指向回环/内网、exotic IPv4 字面量形态 `0x7f000001`/`127.1`/`2130706433` 一律拒——标准库解析器不认、宽松解析器当地址）；层 2 `DialFunc` 拨号包装——解析出的每个 IP 预检 + 实际 RemoteAddr 端点核对（闭合重解析 TOCTOU 窗口，覆盖 Happy-Eyeballs）；IPv4-mapped IPv6 归一；构造态豁免 `WithAllowPrivate`/`WithAllowCIDRs`/`WithAllowDomains`；精确 host 白名单 `WithExactHosts`（host[:port] 必须完全相等——后缀豁免只能"放宽某域及其子域"，钉死到具体 host 需要这一档；与豁免维度独立，命中后仍走 scheme 与私网判定）；与 httpx `WithDialFunc` 一行组合 |
 
 ## 快速使用
 
