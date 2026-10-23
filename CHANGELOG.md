@@ -1,3 +1,7 @@
+## [v0.23.0] — 2026-10-24
+
+- fix(cache): SingleFlightCache 包装 LocalCache 时静默废掉 StaleIfError——前置检查走 Get（LocalCache 的惰性删除路径）把 stale 兜底需要的过期真值提前删掉；新增 LocalCache.Peek 非删除式读（可选接口 PeekGetter 外置，不破坏其它后端实现）+ SingleFlightCache 前置检查改走 Peek；cachetest 补 RunStaleIfErrorWithClock / RunStaleIfErrorRepeatedWithClock 两条契约（钉住「装饰器不得改变内层语义」）
+
 ## [v0.22.1] — 2026-10-24
 
 - fix(urlguard): exotic IPv4 字面量形态一律拒——0x7f000001 / 0177.0.0.1 / 127.1 / 2130706433 等形态 net.ParseIP 一律返回 nil，旧实现把它们当普通域名放行，但宽松解析器（cgo resolver 的 inet_aton 语义、浏览器 URL 解析器）会当地址，写面放行 + 拨号层放行 = 一条回环绕过路径；新增 looksLikeExoticIPv4 词法级判定，命中即拒（fail-closed——不尝试解码成 IPv4 再走范围判定），拨号层 resolve 同步同源判定，不把它推给 DNS（#73）
