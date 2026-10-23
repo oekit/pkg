@@ -153,3 +153,19 @@ type HitGetter[T any] interface {
 	// 返回值可能为 nil（命中但值为 nil）。
 	GetEx(ctx context.Context, key string) (*T, bool, error)
 }
+
+// PeekGetter 是可选能力接口：非删除式读取（LocalCache 实现：Peek）。
+//
+// 与 Get 的唯一差别是**读到过期条目时不删除它**：Get 走惰性删除路径
+// （读路径顺带回收过期条目），而 stale-if-error 兜底（回源失败回退已过期
+// 的历史真值）需要那份值仍留在表内。装饰器的前置检查若走 Get，会提前把
+// 它删掉，使 StaleIfError 形同虚设（pkg#72）。
+//
+// 命中语义与 HitGetter 一致：hit=false 表示未命中（不存在/已过期/null
+// marker）；hit=true 时返回值可能为 nil（命中但值为 nil）。
+type PeekGetter[T any] interface {
+	// Peek 非删除式获取缓存，第二个返回值为是否命中真值条目。
+	// 命中真值条目时行为与 Get 一致（含读命中顺序提升与 CloneOnRead）；
+	// 过期条目只算不命中，且**留在表内不被删除**。
+	Peek(ctx context.Context, key string) (*T, bool, error)
+}

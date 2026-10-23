@@ -378,3 +378,70 @@ func TestLocalCache_GetEx(t *testing.T) {
 		t.Fatalf("过期应按未命中处理 (nil, false, nil)，got (%v, %v, %v)", v, hit, err)
 	}
 }
+
+// TestLocalCache_Peek 非删除式读取（pkg#72）：与 Get 的唯一差别是**读到过期
+// 条目时不删除它**——过期真值留在表内，stale-if-error 兜底才有值可退。
+//
+// 对照点：Get 读同一过期 key 会惰性删除（条目从表内消失），Peek 不删。
+func TestLocalCache_Peek(t *testing.T) {
+	ctx := context.Background()
+	clock := &fakeNowClock{t: nowTestStart}
+	c := NewLocalCache(LocalConfig[string]{
+		TTL: 30 * time.Second,
+		Now: clock.Now,
+		Source: func(ctx context.Context, key string) (*string, error) {
+			return nil, nil // null marker
+		},
+	})
+	t.Cleanup(func() { _ = c.Close(ctx) })
+
+	// 1. 不存在
+	if v, hit, err := c.Peek(ctx, "missing"); err != nil || hit || v != nil {
+		t.Fatalf("不存在应返回 (nil, false, nil)，got (%v, %v, %v)", v, hit, err)
+	}
+
+	// 2. 命中真值
+	if err := c.Set(ctx, "value", ptr("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if v, hit, err := c.Peek(ctx, "value"); err != nil || !hit || v == nil || *v != "v" {
+		t.Fatalf("真值应命中 (v, true, nil)，got (%v, %v, %v)", v, hit, err)
+	}
+
+	// 3. 命中显式 nil 值（真值条目，值为 nil）——与 GetEx 同口径
+	if err := c.Set(ctx, "nil-value", nil); err != nil {
+		t.Fatalf("Set(nil): %v", err)
+	}
+	if v, hit, err := c.Peek(ctx, "nil-value"); err != nil || !hit || v != nil {
+		t.Fatalf("显式 nil 值应命中 (nil, true, nil)，got (%v, %v, %v)", v, hit, err)
+	}
+
+	// 4. null marker：按未命中处理
+	if _, err := c.GetOrLoad(ctx, "null"); err != nil {
+		t.Fatalf("GetOrLoad: %v", err)
+	}
+	if v, hit, err := c.Peek(ctx, "null"); err != nil || hit || v != nil {
+		t.Fatalf("null marker 应按未命中处理 (nil, false, nil)，got (%v, %v, %v)", v, hit, err)
+	}
+
+	// 5. 过期条目：Peek 不命中，但**条目留在表内**（不被删除）
+	if err := c.SetWithTTL(ctx, "ttl", ptr("v"), 30*time.Second); err != nil {
+		t.Fatalf("SetWithTTL: %v", err)
+	}
+	clock.Advance(31 * time.Second)
+	sizeBefore := c.Size()
+	if v, hit, err := c.Peek(ctx, "ttl"); err != nil || hit || v != nil {
+		t.Fatalf("过期应按未命中处理 (nil, false, nil)，got (%v, %v, %v)", v, hit, err)
+	}
+	if got := c.Size(); got != sizeBefore {
+		t.Fatalf("Peek 不得删除过期条目：Size %d → %d", sizeBefore, got)
+	}
+
+	// 对照：Get 读同一过期 key 会惰性删除（条目从表内消失）
+	if _, err := c.Get(ctx, "ttl"); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got := c.Size(); got != sizeBefore-1 {
+		t.Fatalf("Get 读过期条目应惰性删除：Size %d → %d（want %d）", sizeBefore, got, sizeBefore-1)
+	}
+}

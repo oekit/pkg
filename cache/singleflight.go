@@ -31,6 +31,21 @@ func (sf *SingleFlightCache[T]) Get(ctx context.Context, key string) (*T, error)
 	return sf.inner.Get(ctx, key)
 }
 
+// Peek 非删除式读取（pkg#72）：读到过期条目时**不删除**它，只是不命中。
+//
+// 装饰器必须透明：内层支持 cache.PeekGetter 时原样委托；否则退化为 Get
+// 语义（内层可能惰性删除过期条目——回收口径由内层决定）。内层不支持时
+// 仍返回本方法，是为了让「装饰器不丢能力」这条约束成立：外层再包一层
+// 装饰器时，前置检查仍能走非删除式读路径，不会再次废掉 stale-if-error
+// 兜底（内层的 Peek 缺失时，兜底本就无从谈起——退化是能力缺失，不是
+// 装饰器引入的偏差）。
+//
+// 命中语义与内层的 Peek 一致：hit=false 表示未命中（不存在/已过期/null
+// marker）；hit=true 时返回值可能为 nil（命中但值为 nil）。
+func (sf *SingleFlightCache[T]) Peek(ctx context.Context, key string) (*T, bool, error) {
+	return sf.peek(ctx, key)
+}
+
 // Set 设置缓存。
 func (sf *SingleFlightCache[T]) Set(ctx context.Context, key string, value *T) error {
 	return sf.inner.Set(ctx, key, value)
@@ -64,14 +79,18 @@ func (sf *SingleFlightCache[T]) Exists(ctx context.Context, key string) (bool, e
 //  2. 未命中时通过 singleflight 去重，只有一个 goroutine 调用 Source
 //  3. Source 返回后回填缓存
 //  4. 其他 goroutine 共享同一份结果
+//
+// ⚠️ 前置检查走**非删除式**读路径（Peek，pkg#72）：走 Get 会命中 LocalCache
+// 的惰性删除路径，把 stale-if-error 兜底需要的过期真值删掉 ⇒ 包装 LocalCache
+// 后 StaleIfError 形同虚设（回源失败直接抛错，不再兜底历史真值）。
 func (sf *SingleFlightCache[T]) GetOrLoad(ctx context.Context, key string) (*T, error) {
 	// 1. 先查缓存
-	result, err := sf.inner.Get(ctx, key)
+	value, hit, err := sf.peek(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	if result != nil {
-		return result, nil
+	if hit && value != nil {
+		return value, nil
 	}
 
 	// 2. singleflight 去重，调用 inner 的 GetOrLoad
@@ -82,6 +101,23 @@ func (sf *SingleFlightCache[T]) GetOrLoad(ctx context.Context, key string) (*T, 
 		return nil, err
 	}
 	return val, nil
+}
+
+// peek 是前置检查的读路径：内层支持非删除式读（PeekGetter）时用它——读到
+// 过期条目时不删除它（stale-if-error 兜底需要那份值留在表内，pkg#72）；
+// 内层不支持时退回 Get（历史行为：由内层自行决定过期条目的回收口径）。
+//
+// 命中判定与历史实现一致：拿到非 nil 值才算命中（null marker 与「命中但
+// 值为 nil」都按未命中走，由 inner.GetOrLoad 给出最终结果）。
+func (sf *SingleFlightCache[T]) peek(ctx context.Context, key string) (*T, bool, error) {
+	if pg, ok := sf.inner.(PeekGetter[T]); ok {
+		return pg.Peek(ctx, key)
+	}
+	v, err := sf.inner.Get(ctx, key)
+	if err != nil {
+		return nil, false, err
+	}
+	return v, v != nil, nil
 }
 
 // MGet 批量获取：内层具备批量能力时直接委托（装饰器不得退化批量）；
