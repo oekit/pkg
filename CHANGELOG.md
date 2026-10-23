@@ -1,3 +1,8 @@
+## [v0.22.1] — 2026-10-24
+
+- fix(urlguard): exotic IPv4 字面量形态一律拒——0x7f000001 / 0177.0.0.1 / 127.1 / 2130706433 等形态 net.ParseIP 一律返回 nil，旧实现把它们当普通域名放行，但宽松解析器（cgo resolver 的 inet_aton 语义、浏览器 URL 解析器）会当地址，写面放行 + 拨号层放行 = 一条回环绕过路径；新增 looksLikeExoticIPv4 词法级判定，命中即拒（fail-closed——不尝试解码成 IPv4 再走范围判定），拨号层 resolve 同步同源判定，不把它推给 DNS（#73）
+- fix(urlguard): 缺省阻断清单补齐 IPv6 特殊用途段与 NAT64 段——64:ff9b::/96（NAT64 well-known prefix，64:ff9b::7f00:1 即 127.0.0.1 的 IPv6 写法）、64:ff9b:1::/48（NAT64 local-use）、100::/64（discard-only）、2001::/32（Teredo）、2001:2::/48（benchmarking）、2001:10::/28（ORCHID）、2001:20::/28（ORCHIDv2）、2001:db8::/32（文档段）、2002::/16（6to4，可内嵌任意 IPv4 含私网/回环）此前一律放行；纯收紧型变更，无合理场景受影响（#75）
+
 ## [v0.22.0] — 2026-10-22
 
 - feat(pathx): 补两个缺失原语——名字通配匹配 MatchGlob 与单段文件名合法性判定 IsSafeFileName；feat(stringx): 补 CSV 拆分原语 SplitCSVNonEmpty——拆 + trim + 丢空项，空串返回 nil（#63、#64、#65）
