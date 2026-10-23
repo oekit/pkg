@@ -1,3 +1,7 @@
+## [v0.23.1] — 2026-10-24
+
+- feat(jsonrepair): 导出 StripCodeFence 原语——围栏语义单源从下游副本落回上游，下游 3 处 textutil.StripCodeFence 改为委托即可（#74）
+
 ## [v0.23.0] — 2026-10-24
 
 - fix(cache): SingleFlightCache 包装 LocalCache 时静默废掉 StaleIfError——前置检查走 Get（LocalCache 的惰性删除路径）把 stale 兜底需要的过期真值提前删掉；新增 LocalCache.Peek 非删除式读（可选接口 PeekGetter 外置，不破坏其它后端实现）+ SingleFlightCache 前置检查改走 Peek；cachetest 补 RunStaleIfErrorWithClock / RunStaleIfErrorRepeatedWithClock 两条契约（钉住「装饰器不得改变内层语义」）
