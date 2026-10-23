@@ -20,6 +20,16 @@
 // localhost（含子域）。
 // IPv4-mapped IPv6（::ffff:10.0.0.1）先归一化为 IPv4 再判定。
 //
+// IPv6 特殊用途段与 NAT64 段同样阻断：64:ff9b::/96（NAT64 well-known prefix——
+// 64:ff9b::7f00:1 即 127.0.0.1 的 IPv6 写法）、64:ff9b:1::/48（NAT64 local-use）、
+// 100::/64（discard-only）、2001::/32（Teredo）、2001:2::/48（benchmarking）、
+// 2001:10::/28（ORCHID）、2001:20::/28（ORCHIDv2）、2001:db8::/32（文档段）、
+// 2002::/16（6to4——可内嵌任意 IPv4，含私网/回环）。
+//
+// exotic IPv4 字面量形态（0x7f000001 / 0177.0.0.1 / 127.1 / 2130706433）一律拒绝：
+// 标准库 net.ParseIP 不认它们，但宽松解析器（cgo resolver 的 inet_aton 语义、
+// 浏览器 URL 解析器）会当地址——写面放行等于把判定推给拨号层，构成回环绕过路径。
+//
 // 构造态豁免：WithAllowPrivate / WithAllowCIDRs / WithAllowDomains。
 // **精确 host 白名单**：WithExactHosts —— "host 必须完全等于管理员配的那个 host"
 // 这类判据在放行型模型下没有对应表达（后缀豁免只能放宽域及其全部子域，无法钉死
@@ -72,6 +82,15 @@ var blockedCIDRs = mustParseCIDRs(
 	"fe80::/10",       // IPv6 链路本地
 	"fc00::/7",        // IPv6 ULA
 	"ff00::/8",        // IPv6 组播
+	"64:ff9b::/96",    // NAT64 well-known prefix（64:ff9b::7f00:1 即 127.0.0.1 的 IPv6 写法）
+	"64:ff9b:1::/48",  // NAT64 local-use prefix（RFC 8215，本机翻译前缀）
+	"100::/64",        // discard-only（非全球可达）
+	"2001::/32",       // Teredo（可内嵌 IPv4）
+	"2001:2::/48",     // benchmarking（非全球可达）
+	"2001:10::/28",    // ORCHID（非全球可达）
+	"2001:20::/28",    // ORCHIDv2（非全球可达）
+	"2001:db8::/32",   // 文档段（不该出现在出站目标）
+	"2002::/16",       // 6to4（可内嵌任意 IPv4，含私网/回环）
 )
 
 // blockedDomainSuffixes 是缺省阻断域名后缀（小写；host 等于后缀或以其为点分后缀均命中）。
@@ -298,6 +317,12 @@ func (g *Guard) checkHostLiteral(host string) error {
 	if g.allowPrivate {
 		return nil
 	}
+	// exotic IPv4 字面量：标准库解析器不认，但宽松解析器（cgo resolver 的
+	// inet_aton 语义、浏览器 URL 解析器）会当地址——字面量层直接拒，
+	// 不把它推给 DNS（判据见 looksLikeExoticIPv4）。
+	if looksLikeExoticIPv4(host) {
+		return fmt.Errorf("urlguard: host %q is an exotic IPv4 literal form", host)
+	}
 	if _, ok := g.allowDomains[host]; ok {
 		return nil
 	}
@@ -312,6 +337,81 @@ func (g *Guard) checkHostLiteral(host string) error {
 		}
 	}
 	return nil
+}
+
+// ipv4PartKind 是 IPv4 字面量单段的进制种类。
+type ipv4PartKind int
+
+const (
+	ipv4PartDecimal ipv4PartKind = iota // 十进制
+	ipv4PartOctal                       // 八进制（前导 0）
+	ipv4PartHex                         // 十六进制（前导 0x）
+)
+
+// looksLikeExoticIPv4 判定 host 是否是「宽松解析器会当成 IPv4 地址、但
+// net.ParseIP 不认」的 exotic 字面量形态：
+//
+//	0x7f000001      十六进制 32 位        → 127.0.0.1
+//	0177.0.0.1      八进制逐段            → 127.0.0.1
+//	127.1           两段式（末段 24 位）  → 127.0.0.1
+//	2130706433      十进制 32 位          → 127.0.0.1
+//
+// 写面放行不等于能连上，但它把判定推给了拨号层：拨号层同样是 net.ParseIP == nil
+// ⇒ 走 DNS 解析 ⇒ 这类形态在 cgo resolver（inet_aton 语义）下会被解析成
+// 127.0.0.1 ⇒ 写面放行 + 拨号层放行 = 一条回环绕过路径，而本包的定位正是
+// 「SSRF 防护的单源判定」。
+//
+// 口径（fail-closed）：命中即拒，不解码成 IPv4 再走范围判定——cgo resolver
+// 语义更宽，字面量层防护必须 fail-closed（同族 oagentkit/guardx/egress 的
+// looksLikeExoticIPv4 同款）。正常点分十进制由 net.ParseIP 先判，不走这里。
+func looksLikeExoticIPv4(host string) bool {
+	parts := strings.Split(host, ".")
+	if len(parts) == 0 || len(parts) > 4 {
+		return false // inet_aton 最多四段
+	}
+	nonDecimal := false
+	for _, p := range parts {
+		kind, ok := parseIPv4Part(p)
+		if !ok {
+			return false // 不是 IPv4 字面量候选（正常域名走 DNS 路径）
+		}
+		if kind != ipv4PartDecimal {
+			nonDecimal = true
+		}
+	}
+	// 段数 < 4 也是 inet_aton 可解析的形态（末段补齐到 16/24/32 位）；
+	// 任一段带八进制/十六进制标记同样是非十进制形态。
+	return nonDecimal || len(parts) < 4
+}
+
+// parseIPv4Part 判定单段是否为 inet_aton 接受的数字形态，返回其进制种类；
+// 不接受时 ok=false（该 host 不是 IPv4 字面量候选）。
+func parseIPv4Part(part string) (ipv4PartKind, bool) {
+	if part == "" {
+		return 0, false
+	}
+	if len(part) > 2 && (part[0] == '0') && (part[1] == 'x' || part[1] == 'X') {
+		for i := 2; i < len(part); i++ {
+			if !isHexDigit(part[i]) {
+				return 0, false
+			}
+		}
+		return ipv4PartHex, true
+	}
+	for i := 0; i < len(part); i++ {
+		if part[i] < '0' || part[i] > '9' {
+			return 0, false
+		}
+	}
+	if len(part) > 1 && part[0] == '0' {
+		return ipv4PartOctal, true
+	}
+	return ipv4PartDecimal, true
+}
+
+// isHexDigit 判定是否为十六进制数字字符。
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
 
 // CheckURL 做层 1 字面量校验（nil 返回 = 放行）：scheme 必须在白名单内，
@@ -382,6 +482,12 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 func (g *Guard) resolve(ctx context.Context, host string) ([]net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return []net.IP{ip}, nil
+	}
+	// exotic IPv4 字面量：标准库解析器不认 → 本会走 DNS 解析，但宽松解析器
+	// （cgo resolver 的 inet_aton 语义）会把它当地址（127.1 → 127.0.0.1）。
+	// 字面量层直接拒，不把它推给 DNS——拨号层与写面同源判定。
+	if !g.allowPrivate && looksLikeExoticIPv4(host) {
+		return nil, fmt.Errorf("urlguard: host %q is an exotic IPv4 literal form", host)
 	}
 	addrs, err := g.lookup(ctx, host)
 	if err != nil {
