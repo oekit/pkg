@@ -108,3 +108,62 @@ func TestContract_LocalCache_Extras(t *testing.T) {
 			return c
 		})
 }
+
+// TestContract_StaleIfError 跑 pkg#72 的 stale-if-error 契约（回源失败回退
+// 已过期的历史真值，fail-open）——LocalCache 直连与 SingleFlightCache 包装
+// LocalCache 两个形态都跑。
+//
+// 包装形态是这条契约的重点：「装饰器不得改变内层语义」。修复前
+// SingleFlightCache.GetOrLoad 的前置检查走 Get（惰性删除路径），把 stale
+// 兜底需要的那份过期真值提前删掉 ⇒ 兜底失效 ⇒ 回源错误被原样抛出。
+//
+// 套件入口硬失败（能力缺失即红）：显式调用即视为声明该能力。
+func TestContract_StaleIfError(t *testing.T) {
+	// LocalCache 直连
+	t.Run("LocalCache", func(t *testing.T) {
+		cachetest.RunStaleIfErrorWithClock(t, cachetest.Comparable[int](),
+			func(t *testing.T, source cache.SourceFunc[int], clock *cachetest.FakeClock) cache.CacheAside[int] {
+				c := cache.NewLocalCache(cache.LocalConfig[int]{
+					TTL:          30 * time.Second,
+					NullTTL:      time.Minute,
+					Source:       source,
+					Now:          clock.Now,
+					StaleIfError: true,
+				})
+				t.Cleanup(func() { _ = c.Close(context.Background()) })
+				return c
+			})
+	})
+
+	// SingleFlightCache 包装 LocalCache（装饰器透明性——pkg#72 的回归场景）
+	t.Run("SingleFlightCache_LocalCache", func(t *testing.T) {
+		cachetest.RunStaleIfErrorWithClock(t, cachetest.Comparable[int](),
+			func(t *testing.T, source cache.SourceFunc[int], clock *cachetest.FakeClock) cache.CacheAside[int] {
+				inner := cache.NewLocalCache(cache.LocalConfig[int]{
+					TTL:          30 * time.Second,
+					NullTTL:      time.Minute,
+					Source:       source,
+					Now:          clock.Now,
+					StaleIfError: true,
+				})
+				t.Cleanup(func() { _ = inner.Close(context.Background()) })
+				return cache.NewSingleFlightCache(inner)
+			})
+	})
+
+	// stale 兜底必须可反复生效（兜底值留在表内，不是只生效一次）
+	t.Run("RepeatedFallback", func(t *testing.T) {
+		cachetest.RunStaleIfErrorRepeatedWithClock(t, cachetest.Comparable[int](),
+			func(t *testing.T, source cache.SourceFunc[int], clock *cachetest.FakeClock) cache.CacheAside[int] {
+				inner := cache.NewLocalCache(cache.LocalConfig[int]{
+					TTL:          30 * time.Second,
+					NullTTL:      time.Minute,
+					Source:       source,
+					Now:          clock.Now,
+					StaleIfError: true,
+				})
+				t.Cleanup(func() { _ = inner.Close(context.Background()) })
+				return cache.NewSingleFlightCache(inner)
+			})
+	})
+}

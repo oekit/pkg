@@ -205,6 +205,34 @@ func (c *LocalCache[T]) GetEx(ctx context.Context, key string) (*T, bool, error)
 	return c.cloneOnRead(entry.value), true, nil
 }
 
+// Peek 非删除式读取（pkg#72）：读到过期条目时**不删除**它，只是不命中。
+//
+// 与 Get 的差别：Get 走 getEntry 的双检路径，命中过期条目时会惰性删除
+// （回收过期条目）；Peek 只看不删——过期真值留在表内，stale-if-error 兜底
+// （回源失败时回退历史真值）才有值可退。装饰器的前置检查必须走本方法：
+// 走 Get 会提前删掉 stale 兜底需要的那份值，使 StaleIfError 形同虚设。
+//
+// 命中语义与 GetEx 一致：
+//   - hit=true：命中真值条目——value 可能为 nil（调用方显式存了 nil 值）；
+//   - hit=false：key 不存在、已过期，或命中 null marker。
+//
+// 命中真值条目时行为与 Get 一致（LRU 顺序提升 + CloneOnRead 返回副本）。
+func (c *LocalCache[T]) Peek(ctx context.Context, key string) (*T, bool, error) {
+	now := c.now()
+	c.mu.RLock()
+	entry, ok := c.data[key]
+	c.mu.RUnlock()
+
+	if !ok || entry.isNull || entry.isExpired(now) {
+		// 过期条目保留在表内（不删除）——stale 兜底要用。
+		return nil, false, nil
+	}
+
+	// LRU：读命中提升顺序（先释放读锁，再取写锁）
+	c.promoteOne(key, entry)
+	return c.cloneOnRead(entry.value), true, nil
+}
+
 // cloneOnRead 按 CloneOnRead 配置克隆读命中的值（pkg#25）。
 //   - 未配置 CloneOnRead：原样返回（零拷贝，保持历史行为）；
 //   - 克隆函数返回 nil：视为不克隆，返回原值。
@@ -491,6 +519,9 @@ func (c *LocalCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T
 
 // 编译期能力契约：LocalCache 具备批量读取能力。
 var _ BatchGetter[int] = (*LocalCache[int])(nil)
+
+// 编译期能力契约：LocalCache 具备非删除式读取能力（pkg#72）。
+var _ PeekGetter[int] = (*LocalCache[int])(nil)
 
 // Exists 检查缓存是否存在。
 func (c *LocalCache[T]) Exists(ctx context.Context, key string) (bool, error) {
