@@ -1,3 +1,8 @@
+## [v0.25.0] — 2026-10-24
+
+- fix(cache): SingleFlightCache 把一次未命中计成两次 Misses（#90）
+- feat(urlguard): 补自定义 IP/host 判定钩子（pkg#91）
+
 ## [v0.24.0] — 2026-10-24
 
 - feat(cache): 补观测计数面 Stats 与按调用注入回源——新增 cache.Stats 观测计数快照（Hits/Misses/Evictions/Expirations/Size）与可选能力接口 cache.StatsProvider（读路径计数，null marker 按未命中口径，容量淘汰与 TTL 过期回收分开计）；新增可选能力接口 cache.SourceInjector 与 GetOrLoadWithSource / GetOrLoadWithSourceTTL（回源函数由调用方在调用点给出，SingleFlightCache 保持单飞语义）；cachetest 补 RunStatsWithClock 与 RunSourceInjectionWithClock 两条契约（#76、#77）
