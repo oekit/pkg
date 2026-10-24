@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -134,6 +135,13 @@ type LocalCache[T any] struct {
 	orderIdx  map[string]*list.Element // key → order 元素（O(1) 定位）
 	done      chan struct{}
 	closeOnce sync.Once
+
+	// 观测计数（pkg#76）：读命中/读未命中、容量淘汰、TTL 过期回收。
+	// 原子计数——读路径无锁递增，不给热路径加锁竞争。
+	hits        atomic.Int64
+	misses      atomic.Int64
+	evictions   atomic.Int64
+	expirations atomic.Int64
 }
 
 // NewLocalCache 创建一个本地缓存实例。
@@ -184,8 +192,10 @@ func (c *LocalCache[T]) Close(ctx context.Context) error {
 func (c *LocalCache[T]) Get(ctx context.Context, key string) (*T, error) {
 	entry, ok := c.getEntry(key)
 	if !ok || entry.isNull {
+		c.misses.Add(1)
 		return nil, nil
 	}
+	c.hits.Add(1)
 	return c.cloneOnRead(entry.value), nil
 }
 
@@ -200,8 +210,10 @@ func (c *LocalCache[T]) Get(ctx context.Context, key string) (*T, error) {
 func (c *LocalCache[T]) GetEx(ctx context.Context, key string) (*T, bool, error) {
 	entry, ok := c.getEntry(key)
 	if !ok || entry.isNull {
+		c.misses.Add(1)
 		return nil, false, nil
 	}
+	c.hits.Add(1)
 	return c.cloneOnRead(entry.value), true, nil
 }
 
@@ -225,11 +237,13 @@ func (c *LocalCache[T]) Peek(ctx context.Context, key string) (*T, bool, error) 
 
 	if !ok || entry.isNull || entry.isExpired(now) {
 		// 过期条目保留在表内（不删除）——stale 兜底要用。
+		c.misses.Add(1)
 		return nil, false, nil
 	}
 
 	// LRU：读命中提升顺序（先释放读锁，再取写锁）
 	c.promoteOne(key, entry)
+	c.hits.Add(1)
 	return c.cloneOnRead(entry.value), true, nil
 }
 
@@ -304,6 +318,7 @@ func (c *LocalCache[T]) getEntry(key string) (*localEntry[T], bool) {
 		if cur, exists := c.data[key]; exists && cur == entry {
 			delete(c.data, key)
 			c.removeFromOrder(key)
+			c.expirations.Add(1)
 		}
 		c.mu.Unlock()
 		return nil, false
@@ -330,7 +345,54 @@ func (c *LocalCache[T]) getEntry(key string) (*localEntry[T], bool) {
 //     CloneOnRead 开启时返回副本；
 //   - 回源路径（未命中时从 Source 取到的值）不算读命中——那是调用方
 //     自己的值，不克隆。
+//
+// 按调用注入回源见 GetOrLoadWithSource / GetOrLoadWithSourceTTL（pkg#77）。
 func (c *LocalCache[T]) GetOrLoad(ctx context.Context, key string) (*T, error) {
+	return c.getOrLoad(ctx, key, loadSpec[T]{})
+}
+
+// GetOrLoadWithSource 按调用注入的 source 回源（pkg#77）。
+//
+// 与 GetOrLoad 的差别只有一处：回源函数由**调用方在调用点**给出，而不是
+// 构造期固定。面向「回源依赖 key / 依赖调用上下文」的形态（token / 凭据 /
+// 租户级缓存）——同一 key 的不同调用方可以给出各自的回源函数，不必在缓存
+// 外再包一层 key→source 注册表。
+//
+// source 为 nil 时退回构造期的 Source/SourceWithTTL（与 GetOrLoad 同口径）。
+// 回填 TTL 取构造期默认 TTL（需要按调用指定 TTL 见 GetOrLoadWithSourceTTL）。
+//
+// 命中路径与 GetOrLoad 完全一致（不注入回源函数时不会被调用）。
+func (c *LocalCache[T]) GetOrLoadWithSource(ctx context.Context, key string, source SourceFunc[T]) (*T, error) {
+	return c.getOrLoad(ctx, key, loadSpec[T]{source: source})
+}
+
+// GetOrLoadWithSourceTTL 按调用注入的 source 回源并按 ttl 回填（pkg#77）。
+//
+// 与 GetOrLoadWithSource 的差别：回源函数可携带动态 TTL（SourceFuncWithTTL），
+// 且 ttl > 0 时**覆盖**回源给出的 TTL（ttl <= 0 时按回源给出的 TTL，
+// 仍无则退回构造期默认 TTL）。
+//
+// source 为 nil 时退回构造期的 Source/SourceWithTTL；此时 ttl > 0 仍生效
+// （覆盖构造期回源给出的 TTL）。
+//
+// 典型场景：第三方 token 的 expires_in 随租户而异——回源函数按 key 取凭据、
+// 动态 TTL 与调用点注入的凭据来源一并给出。
+func (c *LocalCache[T]) GetOrLoadWithSourceTTL(ctx context.Context, key string, source SourceFuncWithTTL[T], ttl time.Duration) (*T, error) {
+	return c.getOrLoad(ctx, key, loadSpec[T]{sourceTTL: source, ttl: ttl})
+}
+
+// loadSpec 描述一次回源用哪个函数、按什么 TTL 回填（pkg#77）。
+// 全零值 = 构造期口径（SourceWithTTL 优先于 Source）。
+type loadSpec[T any] struct {
+	source    SourceFunc[T]        // 按调用注入的回源函数（nil = 退回构造期）
+	sourceTTL SourceFuncWithTTL[T] // 按调用注入的动态 TTL 回源函数（nil = 退回构造期）
+	ttl       time.Duration        // 回填 TTL 覆盖（<= 0 = 按回源给出的 / 构造期默认）
+}
+
+// getOrLoad 是 GetOrLoad / GetOrLoadWithSource / GetOrLoadWithSourceTTL 的
+// 共同实现（pkg#77）：回源函数与回填 TTL 由 spec 指定，spec 为零值时
+// 行为与历史 GetOrLoad 完全一致。
+func (c *LocalCache[T]) getOrLoad(ctx context.Context, key string, spec loadSpec[T]) (*T, error) {
 	// 1. 非删除式查看：未过期直接返回（null marker 命中 → (nil, nil) 防穿透）。
 	//    过期条目保留在表内——StaleIfError 需要过期真值在回源失败时仍可读
 	//    （惰性删除在此让位，回收交给后台清扫与其他读路径）
@@ -343,22 +405,30 @@ func (c *LocalCache[T]) GetOrLoad(ctx context.Context, key string) (*T, error) {
 	if exists {
 		if !entry.isExpired(now) {
 			if entry.isNull {
+				c.misses.Add(1)
 				return nil, nil
 			}
 			// 读命中：LRU 提升顺序 + 按 CloneOnRead 决定返回副本还是共享引用
 			c.promoteOne(key, entry)
+			c.hits.Add(1)
 			return c.cloneOnRead(entry.value), nil
 		}
 		stale = !entry.isNull && !entry.expiresAt.IsZero()
 	}
+	c.misses.Add(1)
 
-	// 2. 回源（SourceWithTTL 优先；统一到 (val, ttl, err)）
+	// 2. 回源（按调用注入优先于构造期；SourceWithTTL 优先于 Source）
 	var (
 		val *T
 		ttl time.Duration
 		err error
 	)
 	switch {
+	case spec.sourceTTL != nil:
+		val, ttl, err = spec.sourceTTL(ctx, key)
+	case spec.source != nil:
+		val, err = spec.source(ctx, key)
+		ttl = c.cfg.TTL
 	case c.cfg.SourceWithTTL != nil:
 		val, ttl, err = c.cfg.SourceWithTTL(ctx, key)
 	case c.cfg.Source != nil:
@@ -375,6 +445,7 @@ func (c *LocalCache[T]) GetOrLoad(ctx context.Context, key string) (*T, error) {
 			}
 			// stale 兜底同样是读命中：提升顺序 + 按 CloneOnRead 决定返回值
 			c.promoteOne(key, entry)
+			c.hits.Add(1)
 			return c.cloneOnRead(entry.value), nil
 		}
 		return nil, err
@@ -391,6 +462,10 @@ func (c *LocalCache[T]) GetOrLoad(ctx context.Context, key string) (*T, error) {
 
 	if ttl <= 0 {
 		ttl = c.cfg.TTL
+	}
+	// 按调用指定的 TTL 覆盖（pkg#77——ttl > 0 时生效）。
+	if spec.ttl > 0 {
+		ttl = spec.ttl
 	}
 	if e := c.SetWithTTL(ctx, key, val, ttl); e != nil {
 		cacheLog.Warn("local cache backfill failed", "key", key, "err", e)
@@ -500,6 +575,7 @@ func (c *LocalCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T
 	for _, key := range keys {
 		entry, ok := c.data[key]
 		if !ok || entry.isNull || entry.isExpired(now) {
+			c.misses.Add(1)
 			continue
 		}
 		items = append(items, readHit[T]{key: key, entry: entry})
@@ -508,6 +584,9 @@ func (c *LocalCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T
 
 	// LRU：批量读命中提升顺序（写锁一次）
 	c.promoteOnRead(items)
+
+	// 批量读命中逐键计数（口径与单键读一致：命中真值条目计命中）。
+	c.hits.Add(int64(len(items)))
 
 	out := make(map[string]*T, len(items))
 	for _, it := range items {
@@ -539,6 +618,7 @@ func (c *LocalCache[T]) Exists(ctx context.Context, key string) (bool, error) {
 		if cur, exists := c.data[key]; exists && cur == entry {
 			delete(c.data, key)
 			c.removeFromOrder(key)
+			c.expirations.Add(1)
 		}
 		c.mu.Unlock()
 		return false, nil
@@ -561,6 +641,27 @@ func (c *LocalCache[T]) Size() int {
 	defer c.mu.RUnlock()
 	return len(c.data)
 }
+
+// Stats 返回当前观测计数快照（pkg#76）。
+//
+// 口径见 cache.Stats：Hits/Misses 是读路径的命中与未命中计数，Evictions 是
+// 容量淘汰次数，Expirations 是 TTL 过期回收次数，Size 是条目数。
+// 各计数单调不减；快照为近似一致（并发下各字段可能来自略有差别的时刻）。
+func (c *LocalCache[T]) Stats() Stats {
+	c.mu.RLock()
+	size := int64(len(c.data))
+	c.mu.RUnlock()
+	return Stats{
+		Hits:        c.hits.Load(),
+		Misses:      c.misses.Load(),
+		Evictions:   c.evictions.Load(),
+		Expirations: c.expirations.Load(),
+		Size:        size,
+	}
+}
+
+// 编译期能力契约：LocalCache 具备观测计数能力（pkg#76）。
+var _ StatsProvider = (*LocalCache[int])(nil)
 
 // Clear 清空缓存。
 func (c *LocalCache[T]) Clear() {
@@ -636,6 +737,7 @@ func (c *LocalCache[T]) sweepExpired(now time.Time) int {
 		}
 	}
 	c.mu.Unlock()
+	c.expirations.Add(int64(removed))
 	return removed
 }
 
@@ -653,7 +755,11 @@ func (c *LocalCache[T]) evictOldest() {
 	}
 	c.order.Remove(elem)
 	delete(c.orderIdx, key)
-	delete(c.data, key)
+	if _, existed := c.data[key]; existed {
+		delete(c.data, key)
+		// 容量淘汰计数（pkg#76）——与 TTL 过期回收（Expirations）分开计。
+		c.evictions.Add(1)
+	}
 }
 
 // moveToBack 把 key 移到顺序队列尾部（最新，调用者需持有锁）。

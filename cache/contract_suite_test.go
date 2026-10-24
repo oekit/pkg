@@ -167,3 +167,76 @@ func TestContract_StaleIfError(t *testing.T) {
 			})
 	})
 }
+
+// TestContract_LocalCache_Stats 跑 pkg#76 的观测计数契约（读命中/未命中
+// 计数口径自洽、单调不减）——LocalCache 直连与 SingleFlightCache 包装
+// LocalCache 两个形态都跑。
+//
+// 包装形态是这条契约的重点：「装饰器不得丢能力」——内层实现
+// cache.StatsProvider 时装饰器原样透出内层快照。
+//
+// 套件入口硬失败（能力缺失即红）：显式调用即视为声明该能力。
+func TestContract_LocalCache_Stats(t *testing.T) {
+	t.Run("LocalCache", func(t *testing.T) {
+		cachetest.RunStatsWithClock(t, cachetest.Comparable[string](),
+			func(t *testing.T, source cache.SourceFunc[string], clock *cachetest.FakeClock) cache.CacheAside[string] {
+				c := cache.NewLocalCache(cache.LocalConfig[string]{
+					TTL:     30 * time.Second,
+					NullTTL: time.Minute,
+					Source:  source,
+					Now:     clock.Now,
+				})
+				t.Cleanup(func() { _ = c.Close(context.Background()) })
+				return c
+			})
+	})
+
+	t.Run("SingleFlightCache_LocalCache", func(t *testing.T) {
+		cachetest.RunStatsWithClock(t, cachetest.Comparable[string](),
+			func(t *testing.T, source cache.SourceFunc[string], clock *cachetest.FakeClock) cache.CacheAside[string] {
+				inner := cache.NewLocalCache(cache.LocalConfig[string]{
+					TTL:     30 * time.Second,
+					NullTTL: time.Minute,
+					Source:  source,
+					Now:     clock.Now,
+				})
+				t.Cleanup(func() { _ = inner.Close(context.Background()) })
+				return cache.NewSingleFlightCache(inner)
+			})
+	})
+}
+
+// TestContract_SourceInjection 跑 pkg#77 的「按调用注入回源」契约——
+// LocalCache 直连与 SingleFlightCache 包装 LocalCache 两个形态都跑。
+//
+// 覆盖：注入的 source 生效、命中时不回源、注入为 nil 时退回构造期 source、
+// 注入的动态 TTL 生效、显式 ttl 覆盖动态 TTL。
+func TestContract_SourceInjection(t *testing.T) {
+	t.Run("LocalCache", func(t *testing.T) {
+		cachetest.RunSourceInjectionWithClock(t, cachetest.Comparable[int](),
+			func(t *testing.T, source cache.SourceFunc[int], clock *cachetest.FakeClock) cache.CacheAside[int] {
+				c := cache.NewLocalCache(cache.LocalConfig[int]{
+					TTL:     30 * time.Second,
+					NullTTL: time.Minute,
+					Source:  source,
+					Now:     clock.Now,
+				})
+				t.Cleanup(func() { _ = c.Close(context.Background()) })
+				return c
+			})
+	})
+
+	t.Run("SingleFlightCache_LocalCache", func(t *testing.T) {
+		cachetest.RunSourceInjectionWithClock(t, cachetest.Comparable[int](),
+			func(t *testing.T, source cache.SourceFunc[int], clock *cachetest.FakeClock) cache.CacheAside[int] {
+				inner := cache.NewLocalCache(cache.LocalConfig[int]{
+					TTL:     30 * time.Second,
+					NullTTL: time.Minute,
+					Source:  source,
+					Now:     clock.Now,
+				})
+				t.Cleanup(func() { _ = inner.Close(context.Background()) })
+				return cache.NewSingleFlightCache(inner)
+			})
+	})
+}

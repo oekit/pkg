@@ -169,3 +169,68 @@ type PeekGetter[T any] interface {
 	// 过期条目只算不命中，且**留在表内不被删除**。
 	Peek(ctx context.Context, key string) (*T, bool, error)
 }
+
+// Stats 是缓存的观测计数快照（pkg#76）。
+//
+// 口径（LocalCache 实现；各计数单调不减，只增不减）：
+//
+//   - Hits：读命中次数——读到**未过期的真值条目**。计入的读路径：
+//     Get / GetEx / Peek / MGet（逐键）/ GetOrLoad（含按调用注入回源的变体）。
+//   - Misses：读未命中次数——key 不存在、已过期，或命中 null marker。
+//     null marker 表示「数据不存在」、无值可返 ⇒ 计入未命中（与 GetEx/Peek
+//     的 hit=false 口径一致）。
+//   - Evictions：容量淘汰次数——MaxSize 触发的 FIFO/LRU 淘汰。
+//   - Expirations：TTL 过期回收次数——过期条目被移除（惰性删除或清扫）。
+//   - Size：快照时刻的条目数。
+//
+// **不计入**：Exists（存在性探测，不是取值读路径）、Set/Del（写路径）。
+//
+// 快照语义：各计数字段分别原子读取、Size 在读锁下取——并发读写下快照是
+// 近似一致的（各字段可能来自略有差别的时刻），但计数本身单调不减。
+//
+// 装饰器叠加的已知口径：SingleFlightCache 的 GetOrLoad 先做一次非删除式
+// 前置检查（Peek），未命中时**内层还会再读一次**⇒ 该路径记两次未命中
+// （命中路径只记一次）。装饰器自身不另设计数，Stats 原样透出内层快照；
+// 需要精确命中率的消费方直接读内层缓存的 Stats。
+type Stats struct {
+	Hits        int64
+	Misses      int64
+	Evictions   int64
+	Expirations int64
+	Size        int64
+}
+
+// StatsProvider 是可选能力接口：暴露缓存的观测计数快照（LocalCache 实现）。
+//
+// 消费方经类型断言探测选用（与 BatchGetter/Sweeper/HitGetter/PeekGetter
+// 同款「可选能力接口 + 类型断言」哲学）——不加入 Cache[T]，不破坏其它后端
+// 实现。典型用法：Prometheus GaugeFunc 在采集时读 Stats() 导出命中率。
+type StatsProvider interface {
+	// Stats 返回当前观测计数快照。
+	Stats() Stats
+}
+
+// SourceInjector 是可选能力接口：支持「按调用注入回源函数」的缓存实现
+// （LocalCache 实现）。
+//
+// 面向「回源依赖 key / 依赖调用上下文」的缓存形态（token / 凭据 / 租户级
+// 缓存）：构造期固定的 Source 只能覆盖「一个函数管全部 key」，按调用注入则
+// 让调用方在**调用点**给出本次回源函数——不必在缓存外再包一层
+// key→source 注册表（那等于又自己写了一份缓存）。
+//
+// 注意：构造期 Source 本就收 key（SourceFunc 形如 func(ctx, key)），
+// 「按 key 分派」一直可做；本接口补的是**按调用注入**这一层——
+// 同一 key 的不同调用方可以给出不同的回源函数。
+//
+// 未实现本接口的后端：装饰器（SingleFlightCache）退回内层的构造期 Source
+// ——能力缺失是内层的事实，不是装饰器引入的偏差。
+type SourceInjector[T any] interface {
+	// GetOrLoadWithSource 按调用注入的 source 回源（source 为 nil 时退回
+	// 构造期 Source/SourceWithTTL）。
+	GetOrLoadWithSource(ctx context.Context, key string, source SourceFunc[T]) (*T, error)
+
+	// GetOrLoadWithSourceTTL 按调用注入的 source 回源并按 ttl 回填
+	// （source 为 nil 时退回构造期回源；ttl <= 0 时按回源给出的 TTL，
+	// 仍无则退回构造期默认 TTL）。
+	GetOrLoadWithSourceTTL(ctx context.Context, key string, source SourceFuncWithTTL[T], ttl time.Duration) (*T, error)
+}
