@@ -120,6 +120,80 @@ func (sf *SingleFlightCache[T]) peek(ctx context.Context, key string) (*T, bool,
 	return v, v != nil, nil
 }
 
+// GetOrLoadWithSource 按调用注入的 source 回源（pkg#77，带 singleflight 保护）。
+//
+// 与 GetOrLoad 的差别只有一处：回源函数由**调用方在调用点**给出，而不是
+// 构造期固定——面向「回源依赖 key / 依赖调用上下文」的形态（token / 凭据 /
+// 租户级缓存）。单飞语义不变：同一 key 的并发请求只会有一个实际调用 source。
+//
+// 内层不支持按调用注入（未实现 cache.SourceInjector）时退回内层的构造期
+// Source——能力缺失是内层的事实，不是装饰器引入的偏差。
+func (sf *SingleFlightCache[T]) GetOrLoadWithSource(ctx context.Context, key string, source SourceFunc[T]) (*T, error) {
+	// 1. 前置检查走非删除式读路径（同 GetOrLoad——pkg#72）
+	value, hit, err := sf.peek(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if hit && value != nil {
+		return value, nil
+	}
+
+	// 2. singleflight 去重，按调用注入的 source 回源
+	val, err := sf.flight.Do(ctx, key, func(ctx context.Context) (*T, error) {
+		if si, ok := sf.inner.(SourceInjector[T]); ok {
+			return si.GetOrLoadWithSource(ctx, key, source)
+		}
+		return sf.inner.GetOrLoad(ctx, key)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return val, nil
+}
+
+// GetOrLoadWithSourceTTL 按调用注入的 source 回源并按 ttl 回填（pkg#77，
+// 带 singleflight 保护）。
+//
+// 与 GetOrLoadWithSource 的差别：回源函数可携带动态 TTL（SourceFuncWithTTL），
+// 且 ttl > 0 时覆盖回源给出的 TTL（ttl <= 0 时按回源给出的 TTL，仍无则
+// 退回构造期默认 TTL）。
+//
+// 内层不支持按调用注入（未实现 cache.SourceInjector）时退回内层的构造期
+// 回源；此时 ttl > 0 仍生效（覆盖构造期回源给出的 TTL）。
+func (sf *SingleFlightCache[T]) GetOrLoadWithSourceTTL(ctx context.Context, key string, source SourceFuncWithTTL[T], ttl time.Duration) (*T, error) {
+	// 1. 前置检查走非删除式读路径（同 GetOrLoad——pkg#72）
+	value, hit, err := sf.peek(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if hit && value != nil {
+		return value, nil
+	}
+
+	// 2. singleflight 去重，按调用注入的 source 回源
+	val, err := sf.flight.Do(ctx, key, func(ctx context.Context) (*T, error) {
+		if si, ok := sf.inner.(SourceInjector[T]); ok {
+			return si.GetOrLoadWithSourceTTL(ctx, key, source, ttl)
+		}
+		return sf.inner.GetOrLoad(ctx, key)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return val, nil
+}
+
+// Stats 返回内层缓存的观测计数快照（pkg#76）。
+//
+// 装饰器不得丢能力：内层实现 cache.StatsProvider 时原样委托；否则返回零值
+// 快照——能力缺失是内层的事实（同 MGet/Peek 的退化口径）。
+func (sf *SingleFlightCache[T]) Stats() Stats {
+	if sp, ok := sf.inner.(StatsProvider); ok {
+		return sp.Stats()
+	}
+	return Stats{}
+}
+
 // MGet 批量获取：内层具备批量能力时直接委托（装饰器不得退化批量）；
 // 内层无批量能力时退化为逐键 Get。
 func (sf *SingleFlightCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T, error) {
@@ -149,3 +223,10 @@ func (sf *SingleFlightCache[T]) Refresh(ctx context.Context, key string) (*T, er
 	}
 	return val, nil
 }
+
+// 编译期能力契约：SingleFlightCache 具备观测计数能力（pkg#76）与按调用
+// 注入回源的能力（pkg#77）——装饰器不丢能力。
+var (
+	_ StatsProvider       = (*SingleFlightCache[int])(nil)
+	_ SourceInjector[int] = (*SingleFlightCache[int])(nil)
+)
