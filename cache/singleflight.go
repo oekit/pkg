@@ -7,6 +7,23 @@ import (
 	"github.com/oekit/pkg/internal/singleflight"
 )
 
+// noMissLoader 是包内能力接口：回源加载且**不计入未命中计数**（pkg#90）。
+//
+// 存在的理由：装饰器的前置检查（Peek）已经计过一次未命中，内层加载路径
+// 再计一次 ⇒ 一次未命中被计成两次 ⇒ 命中率指标失真（pkg#90 实测 90% 的
+// 真实命中率被报成 81.8%）。
+//
+// 口径：只抑制未命中计数，命中计数照常（stale 兜底等读命中仍计入——
+// 与内层直连口径一致）。内层不实现该能力时，装饰器退回内层原有口径
+// （能力缺失是内层的事实），计数偏差按内层语义解释。
+//
+// 不进公共 API：这是「内层实现方与本包装饰器」之间的包内约定，
+// 外部后端无从实现（也无需实现——只有本包的 LocalCache 暴露计数面）。
+type noMissLoader[T any] interface {
+	// getOrLoadNoMiss 按 spec 回源加载，不计入未命中计数。
+	getOrLoadNoMiss(ctx context.Context, key string, spec loadSpec[T]) (*T, error)
+}
+
 // SingleFlightCache 是带 singleflight 保护的缓存装饰器。
 // 同一个 key 的并发请求只会有一个实际调用 Source，其他请求等待共享结果。
 // 防止缓存击穿（热点 key 过期时的雷群效应）。
@@ -94,7 +111,12 @@ func (sf *SingleFlightCache[T]) GetOrLoad(ctx context.Context, key string) (*T, 
 	}
 
 	// 2. singleflight 去重，调用 inner 的 GetOrLoad
+	//    （pkg#90：内层支持「加载不计未命中」时走该路径——前置检查已计过同一次
+	//    未命中，加载路径再计一次会把一次未命中计成两次，命中率指标失真）
 	val, err := sf.flight.Do(ctx, key, func(ctx context.Context) (*T, error) {
+		if nl, ok := sf.inner.(noMissLoader[T]); ok {
+			return nl.getOrLoadNoMiss(ctx, key, loadSpec[T]{})
+		}
 		return sf.inner.GetOrLoad(ctx, key)
 	})
 	if err != nil {
@@ -139,7 +161,11 @@ func (sf *SingleFlightCache[T]) GetOrLoadWithSource(ctx context.Context, key str
 	}
 
 	// 2. singleflight 去重，按调用注入的 source 回源
+	//    （pkg#90：内层支持「加载不计未命中」时走该路径）
 	val, err := sf.flight.Do(ctx, key, func(ctx context.Context) (*T, error) {
+		if nl, ok := sf.inner.(noMissLoader[T]); ok {
+			return nl.getOrLoadNoMiss(ctx, key, loadSpec[T]{source: source})
+		}
 		if si, ok := sf.inner.(SourceInjector[T]); ok {
 			return si.GetOrLoadWithSource(ctx, key, source)
 		}
@@ -171,7 +197,11 @@ func (sf *SingleFlightCache[T]) GetOrLoadWithSourceTTL(ctx context.Context, key 
 	}
 
 	// 2. singleflight 去重，按调用注入的 source 回源
+	//    （pkg#90：内层支持「加载不计未命中」时走该路径）
 	val, err := sf.flight.Do(ctx, key, func(ctx context.Context) (*T, error) {
+		if nl, ok := sf.inner.(noMissLoader[T]); ok {
+			return nl.getOrLoadNoMiss(ctx, key, loadSpec[T]{sourceTTL: source, ttl: ttl})
+		}
 		if si, ok := sf.inner.(SourceInjector[T]); ok {
 			return si.GetOrLoadWithSourceTTL(ctx, key, source, ttl)
 		}
@@ -187,6 +217,9 @@ func (sf *SingleFlightCache[T]) GetOrLoadWithSourceTTL(ctx context.Context, key 
 //
 // 装饰器不得丢能力：内层实现 cache.StatsProvider 时原样委托；否则返回零值
 // 快照——能力缺失是内层的事实（同 MGet/Peek 的退化口径）。
+//
+// 计数口径（pkg#90）：装饰器的前置检查计入内层计数，回源加载路径不再重复
+// 计未命中 ⇒ 一次读恰好计入命中或未命中之一（与内层直连一致）。
 func (sf *SingleFlightCache[T]) Stats() Stats {
 	if sp, ok := sf.inner.(StatsProvider); ok {
 		return sp.Stats()
