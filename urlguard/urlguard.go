@@ -35,6 +35,13 @@
 // 这类判据在放行型模型下没有对应表达（后缀豁免只能放宽域及其全部子域，无法钉死
 // 到具体 host），它与豁免维度独立可叠加，且命中后仍走 scheme 与私网判定。
 //
+// **自定义判定钩子**：WithCheckIPFunc / WithCheckHostFunc —— 放行型模型表达不了
+// 消费方常见的限制型策略（白名单只放行我的网段 / 黑名单屏蔽这些网段 / 域名
+// 白黑名单）。注入后消费方的策略成为**单一判定源**，且同时作用于「预检」与
+// 「建连后端点复核」两处——重解析窗口（DNS rebinding / TOCTOU）由消费方自己
+// 的策略闭合，不必在 urlguard 之外再叠一层自有端点判定。判定顺序：内置在前、
+// 自定义在后；构造态豁免只豁免内置判定，不再跳过自定义判定。
+//
 // Guard 在 New 之后只读，可并发共享。仅依赖标准库（pkg 零第三方依赖红线）。
 //
 // 用法（webhook 出口一行接入，[httpx](https://github.com/oekit/httpx) 的
@@ -115,6 +122,18 @@ type Guard struct {
 	exactEnabled  bool
 	rawExactHosts []string // New 里解析，文法非法 fail-fast
 	exactHosts    map[exactHost]struct{}
+
+	// 自定义判定钩子（pkg#91）：消费方自己的出站策略成为**单一判定源**。
+	//
+	// checkIPFunc 作用于所有 IP 判定点——拨号层预检（解析出的每个 IP）、
+	// 建连后的真实端点核对（RemoteAddr）、以及 URL 层的 IP 字面量判定：
+	// 消费方的策略因此在「预检」与「建连后端点复核」两处都生效，重解析窗口
+	// （DNS rebinding / TOCTOU）由**同一套策略**闭合。
+	//
+	// checkHostFunc 作用于所有 host 判定点——CheckHost、CheckURL、以及拨号层
+	// 的目标 host。
+	checkIPFunc   func(net.IP) error
+	checkHostFunc func(host string) error
 }
 
 // exactHost 是精确白名单条目：host（小写、去尾点、去 IPv6 方括号）+ 端口
@@ -210,6 +229,64 @@ func WithExactHosts(hosts ...string) Option {
 	}
 }
 
+// WithCheckIPFunc 注入**自定义 IP 判定**（pkg#91）：返回 nil = 放行，非 nil
+// = 拒绝。
+//
+// 为什么需要这一档：urlguard 是**纯放行型**防护——缺省阻断私网/loopback/
+// 保留段与约定域名后缀，除此之外的公网地址一律放行。它现有的三个 IP 维度
+// 都无法表达消费方常见的出站策略：
+//
+//   - WithAllowCIDRs：语义是「豁免私网阻断」，不是「限制到这些网段」——
+//     白名单外的任意公网 IP 仍默认放行；
+//   - blockedCIDRs：固定私网清单，没有运行时追加拒绝项的入口；
+//   - 整个包没有端口维度。
+//
+// 而消费方的出站防护通常是**两段式**：写面校验（请求发起前解析一次 DNS 按
+// 自己的策略判定 URL）+ 建连层复核（拨号时解析、再按同一套策略判定**真实
+// 连到的端点 IP**）。第 2 段不是冗余——第 1 段解析 DNS 与真正建连之间存在
+// 重解析窗口（DNS rebinding / TOCTOU），攻击者可在窗口内把 A 记录切到内网
+// 地址：校验层看到公网 IP、建连落到内网 IP。
+//
+// 注入本钩子后，消费方的策略成为**单一判定源**：拨号层预检与建连后的真实
+// 端点核对用的是同一个判定（Guard.DialFunc 已有的骨架：解析 → 预检 → 建连
+// → 以真实 conn.RemoteAddr() 复核），重解析窗口由消费方自己的策略闭合，
+// 不必在 urlguard 之外再叠一层自有端点判定。
+//
+// 判定顺序：**内置判定在前、自定义判定在后**。内置的私网/保留段阻断仍是
+// 兜底（fail-closed），自定义判定在其之后叠加（可白名单也可黑名单）。
+//
+// ⚠️ 构造态豁免的语义收敛（pkg#91）：WithAllowPrivate / WithAllowCIDRs
+// 只豁免**内置**的私网/保留段阻断，**不再跳过自定义判定**——注入钩子后，
+// 豁免不再意味着"整个 IP 判定被短路"。未注入钩子时行为与既有完全一致。
+//
+// 入参是**归一化后**的 IP：IPv4-mapped IPv6（::ffff:10.0.0.1）已归一化为
+// IPv4（与内置判定同一形态），消费方无需自己处理 mapped 绕过。
+//
+// 钩子可能被调用多次：拨号层对解析出的**每个** IP 各调一次（预检），
+// 建连成功后对真实端点再调一次（复核），URL 层的 IP 字面量判定也会调。
+// 钩子应是无副作用的纯判定。
+func WithCheckIPFunc(fn func(net.IP) error) Option {
+	return func(g *Guard) { g.checkIPFunc = fn }
+}
+
+// WithCheckHostFunc 注入**自定义 host 判定**（pkg#91）：返回 nil = 放行，
+// 非 nil = 拒绝。语义与 WithCheckIPFunc 同构，只是维度是 host 而非 IP。
+//
+// 为什么需要这一档：host 维度同样只有「放宽型」入口——WithAllowDomains 是
+// "放宽某些域的私网/约定域阻断"，WithExactHosts 是"只允许这些 authority"，
+// 没有"限制到这些域"的常规白/黑名单入口（域名后缀豁免表达不了黑名单）。
+//
+// 判定顺序：内置判定在前（精确白名单 → 字面量判定），自定义判定在后。
+//
+// 入参是**归一化后**的 host（小写、去尾点、去 IPv6 方括号），与 CheckHost
+// 的入参口径一致。IP 字面量同样以字符串形式传入（本维度不区分地址与域名）。
+//
+// 钩子可能被调用多次：CheckHost / CheckURL / 拨号层各判定一次。钩子应是
+// 无副作用的纯判定。
+func WithCheckHostFunc(fn func(host string) error) Option {
+	return func(g *Guard) { g.checkHostFunc = fn }
+}
+
 // New 构造 Guard。CIDR 文法非法时报错（fail-fast，不带病运行）。
 func New(opts ...Option) (*Guard, error) {
 	g := &Guard{
@@ -263,6 +340,11 @@ func SafeDialFunc(next DialFunc) DialFunc {
 
 // CheckIP 判定单个 IP 是否可放行（nil 返回 = 放行）。
 // IPv4-mapped IPv6 先归一化为 IPv4 再判定。
+//
+// 判定顺序（pkg#91）：**内置判定在前、自定义判定在后**——内置的私网/保留段
+// 阻断是兜底（fail-closed），自定义判定（WithCheckIPFunc）在其之后叠加。
+// 构造态豁免（WithAllowPrivate / WithAllowCIDRs）只豁免内置判定，不再跳过
+// 自定义判定。
 func (g *Guard) CheckIP(ip net.IP) error {
 	if ip == nil {
 		return fmt.Errorf("urlguard: nil ip")
@@ -270,20 +352,31 @@ func (g *Guard) CheckIP(ip net.IP) error {
 	if v4 := ip.To4(); v4 != nil {
 		ip = v4 // ::ffff:a.b.c.d 归一化，防 mapped 绕过
 	}
-	if g.allowPrivate {
-		return nil
-	}
-	for _, n := range g.allowCIDRs {
-		if n.Contains(ip) {
-			return nil
+	// 1. 内置判定：缺省阻断网段（构造态豁免只作用在这一层）
+	if !g.allowPrivate && !g.inAllowCIDRs(ip) {
+		for _, n := range blockedCIDRs {
+			if n.Contains(ip) {
+				return fmt.Errorf("urlguard: %s is in blocked range %s", ip, n)
+			}
 		}
 	}
-	for _, n := range blockedCIDRs {
-		if n.Contains(ip) {
-			return fmt.Errorf("urlguard: %s is in blocked range %s", ip, n)
+	// 2. 自定义判定（消费方策略，单一判定源）
+	if g.checkIPFunc != nil {
+		if err := g.checkIPFunc(ip); err != nil {
+			return fmt.Errorf("urlguard: ip %s rejected by policy: %w", ip, err)
 		}
 	}
 	return nil
+}
+
+// inAllowCIDRs 判定 IP 是否落在构造态豁免网段内（WithAllowCIDRs）。
+func (g *Guard) inAllowCIDRs(ip net.IP) bool {
+	for _, n := range g.allowCIDRs {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckHost 判定主机名/IP 字面量是否可放行（nil 返回 = 放行）。
@@ -307,6 +400,9 @@ func (g *Guard) CheckHost(host string) error {
 
 // checkHostLiteral 是 CheckHost 的字面量判定部分（不含精确白名单维度），
 // 供 CheckURL 复用——CheckURL 已在 authority 级完成白名单判定。
+//
+// 判定顺序（pkg#91）：内置判定在前（IP 字面量 → 私网/约定域阻断），
+// 自定义 host 判定（WithCheckHostFunc）在后。
 func (g *Guard) checkHostLiteral(host string) error {
 	if host == "" {
 		return fmt.Errorf("urlguard: empty host")
@@ -315,7 +411,7 @@ func (g *Guard) checkHostLiteral(host string) error {
 		return g.CheckIP(ip)
 	}
 	if g.allowPrivate {
-		return nil
+		return g.checkHostPolicy(host)
 	}
 	// exotic IPv4 字面量：标准库解析器不认，但宽松解析器（cgo resolver 的
 	// inet_aton 语义、浏览器 URL 解析器）会当地址——字面量层直接拒，
@@ -324,17 +420,29 @@ func (g *Guard) checkHostLiteral(host string) error {
 		return fmt.Errorf("urlguard: host %q is an exotic IPv4 literal form", host)
 	}
 	if _, ok := g.allowDomains[host]; ok {
-		return nil
+		return g.checkHostPolicy(host)
 	}
 	for d := range g.allowDomains {
 		if strings.HasSuffix(host, "."+d) {
-			return nil
+			return g.checkHostPolicy(host)
 		}
 	}
 	for _, suffix := range blockedDomainSuffixes {
 		if host == suffix || strings.HasSuffix(host, "."+suffix) {
 			return fmt.Errorf("urlguard: host %q uses blocked domain %q", host, suffix)
 		}
+	}
+	return g.checkHostPolicy(host)
+}
+
+// checkHostPolicy 是 host 维度的自定义判定（WithCheckHostFunc，pkg#91）——
+// 在内置 host 判定通过之后执行。未注入钩子时恒放行。
+func (g *Guard) checkHostPolicy(host string) error {
+	if g.checkHostFunc == nil {
+		return nil
+	}
+	if err := g.checkHostFunc(host); err != nil {
+		return fmt.Errorf("urlguard: host %q rejected by policy: %w", host, err)
 	}
 	return nil
 }
@@ -449,6 +557,11 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, fmt.Errorf("urlguard: split %q: %w", addr, err)
+		}
+		// host 维度的自定义判定（pkg#91）：拨号层也过一遍消费方策略——
+		// 消费方可能只挂 DialFunc（不挂 CheckURL），此时 host 判定不能缺席。
+		if herr := g.checkHostPolicy(canonicalHost(host)); herr != nil {
+			return nil, fmt.Errorf("urlguard: dial %q blocked: %w", addr, herr)
 		}
 		ips, err := g.resolve(ctx, host)
 		if err != nil {
