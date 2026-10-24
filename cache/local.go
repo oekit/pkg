@@ -393,6 +393,28 @@ type loadSpec[T any] struct {
 // 共同实现（pkg#77）：回源函数与回填 TTL 由 spec 指定，spec 为零值时
 // 行为与历史 GetOrLoad 完全一致。
 func (c *LocalCache[T]) getOrLoad(ctx context.Context, key string, spec loadSpec[T]) (*T, error) {
+	return c.load(ctx, key, spec, true)
+}
+
+// getOrLoadNoMiss 与 getOrLoad 同流程，但**不计入未命中计数**（pkg#90）。
+//
+// 用途：装饰器（SingleFlightCache）的前置探测已计过同一次未命中，加载路径
+// 再计一次会把一次未命中计成两次——命中率指标失真（实测 90% 真实命中率被
+// 报成 81.8%）。本方法让「前置探测计一次、加载路径不再计」成立，一次读
+// 恰好计入命中或未命中之一。
+//
+// **命中计数不受影响**：stale 兜底等读命中仍照常计入（与内层直连口径一致——
+// 内层直连的 stale 兜底路径同样是「一次未命中 + 一次读命中」）。
+//
+// 只供包内装饰器使用（能力随实现走，不进公共 API）：内层实现方不认这个
+// 能力时，装饰器退回内层原有口径（能力缺失是内层的事实）。
+func (c *LocalCache[T]) getOrLoadNoMiss(ctx context.Context, key string, spec loadSpec[T]) (*T, error) {
+	return c.load(ctx, key, spec, false)
+}
+
+// load 是 getOrLoad 的实现：countMiss=false 时不计入未命中计数（pkg#90，
+// 见 getOrLoadNoMiss），其余行为与计数口径完全一致。
+func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], countMiss bool) (*T, error) {
 	// 1. 非删除式查看：未过期直接返回（null marker 命中 → (nil, nil) 防穿透）。
 	//    过期条目保留在表内——StaleIfError 需要过期真值在回源失败时仍可读
 	//    （惰性删除在此让位，回收交给后台清扫与其他读路径）
@@ -405,7 +427,9 @@ func (c *LocalCache[T]) getOrLoad(ctx context.Context, key string, spec loadSpec
 	if exists {
 		if !entry.isExpired(now) {
 			if entry.isNull {
-				c.misses.Add(1)
+				if countMiss {
+					c.misses.Add(1)
+				}
 				return nil, nil
 			}
 			// 读命中：LRU 提升顺序 + 按 CloneOnRead 决定返回副本还是共享引用
@@ -415,7 +439,9 @@ func (c *LocalCache[T]) getOrLoad(ctx context.Context, key string, spec loadSpec
 		}
 		stale = !entry.isNull && !entry.expiresAt.IsZero()
 	}
-	c.misses.Add(1)
+	if countMiss {
+		c.misses.Add(1)
+	}
 
 	// 2. 回源（按调用注入优先于构造期；SourceWithTTL 优先于 Source）
 	var (
