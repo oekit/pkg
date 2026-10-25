@@ -1,3 +1,7 @@
+## [v0.26.0] — 2026-10-25
+
+- feat(convert): 客户端 IP 解析收紧——**默认不采信 X-Real-IP**（单跳头无法区分「代理写的」与「客户端自带的」，网关默认透传客户端自带的 ⇒ 客户端可任意改写自己的客户端 IP，限流/锁定绕过 + 审计 IP 可改写，#106）：ResolveClientIP 去掉 xri 入参（BREAKING），确需采信改用 ResolveClientIPWithXRI / GetClientIPWithXRI / GetClientIPWithProxiesAndXRI；**代理头候选值做合法性校验与端口归一**（任意字符串进限流/锁定键 = 计数桶绕过 + 日志注入；带端口的候选与裸 IP 是两个分桶键，非法段不再进返回值，#104）；**可信代理裸 IP 条目归一为单主机网段**（此前被静默忽略：配置不生效且无任何告警，#104），NewTrustedProxySet 构造期对非法条目 fail-fast；**可信代理预解析** TrustedProxySet（此前每请求逐条 ParseCIDR 整份清单，#107），ResolveClientIPWithSet 与清单形态采信结果逐字一致；feat(encoding): 补 base64 无填充 URL 安全变体的字节入口 Base64RawURLEncodeBytes / Base64RawURLDecodeBytes（#105）
+
 ## [v0.25.2] — 2026-10-25
 
 - feat(convert): 抽出框架无关的客户端 IP 解析纯函数 ResolveClientIP——GetClientIP/GetClientIPWithProxies 的入参都吃 *http.Request，非 net/http 框架（Hertz 等）用不了，于是每个仓都自己手写一份等价实现、可信代理采信口径逐仓漂移；新增纯函数承载全部采信判定（XFF 从右向左跳过可信代理、伪造值不采信、直连不可信时忽略一切代理头），net/http 适配层改为委托它，既有签名与行为逐字不变；另导出 DefaultTrustedProxies()（返回副本）供框架适配层取同一份默认可信网段（#95）
