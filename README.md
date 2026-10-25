@@ -1,6 +1,6 @@
 # pkg
 
-> 微工具集 23 合 1（零第三方依赖，仅标准库）——bloomx/bufiox/cache/cli/container/contextx/convert/encoding/enumx/errors/httpjson/jsonrepair/mathx/pack/pagination/pathx/ptrx/singleflighttest/slicex/stringx/strmap/timex/urlguard
+> 微工具集 24 合 1（零第三方依赖，仅标准库）——bloomx/bufiox/cache/cli/container/contextx/convert/encoding/enumx/errors/httpjson/jsonrepair/mathx/pack/pagination/pathx/ptrx/shellx/singleflighttest/slicex/stringx/strmap/timex/urlguard
 
 > 🌐 项目主页：**https://oekit.github.io/** · 名称由来：**O**pen **E**asy **Kit**（开源 · 易用 · 工具集合）
 > 🤖 AI Agent：本仓规范与硬规则见 [AGENTS.md](AGENTS.md)；机器可读索引见 [llms.txt](https://oekit.github.io/llms.txt)（接口签名以源码为准）。
@@ -41,6 +41,7 @@ CLI 子命令分发、迁移包容器等日常高频需求。标识与校验（u
 | `httpjson` | 带 JSON 解析的 HTTP 调用助手 |
 | `mathx` | 安全随机、平均值等统计助手 + `Unstable` 抖动值（`Around` 对称打散缓存 TTL 防雪崩 / `Upward` 单边向上，重试退避「不得早于基准」） |
 | `pathx` | glob 路径匹配（`vendor/**`、`*.test`）+ 仓库相对路径清洗与 traversal 拒绝 `SanitizeRel`/`SanitizeRelStrict`（统一分隔符、消除 `.`/`..` 段，绝对路径与越出根目录一律拒绝；`/` 与 `\` 同为分隔符，跨平台同判；严格档连显式 `..` 段一并拒绝）+ **文件名**消毒 `SanitizeFileName`（展示/存储用：目录成分丢弃只取最后一段、控制字符丢弃、Windows 保留字符 `: * ? " < > |` 替换为 `_`、去首尾空白与结尾的点、空名/纯符号名回退、超长按**字节**截断并保留扩展名且不砍半个 UTF-8 字符）+ **名字**通配匹配 `MatchGlob`（`*` 可跨 `/`、`?` 匹配一个 rune——分支名/ref 名/仓库全名这类含 `/` 的对象用路径段语义答不了，「排除所有」的 `*` 会静默失效）+ **单段文件名合法性**判定 `IsSafeFileName`（判定不改写：拒分隔符、`.`/`..` 段、绝对路径、盘符与 UNC，fail-closed） |
+| `shellx` | POSIX shell **参数转义**原语（v0.27.0 起，#112）：`Quote(s)` 把任意字符串转义成**一个** shell word——POSIX 单引号包裹（单引号内 shell 不做任何解释，唯一要照顾的是引号本身：关掉、转义、重新打开）；**空串返回 `''`**（空参数仍是一个参数，丢掉会让 `cmd '' arg` 变成 `cmd arg`、参数整体错位）；`QuoteArgv(args...)` 逐个转义后空格连接。纯转义、不做策略判断（换行/越界各有各的规则，由调用方决定）。与 `pathx` 是两个不同问题——pathx 问「路径合法吗」（越界即拒绝），shellx 问「怎么写进命令行才不被 shell 解释」，路径类输入通常两道都要过；不转义的实际后果见 issue #112 |
 | `pagination` | `PageRequest`/`PageResponse` 分页换算 + **服务级口径** `Policy`（v0.25.2 起）：默认页长/上限/超限语义由服务自己声明，零值口径等同包级默认；超限的两种语义都能表达——`OverMaxClamp`（钳到上限）与 `OverMaxFallback`（回退默认页长，响应条数不同，属可观测差异），`MaxPageSize < 0` 表示不限上限 |
 | `ptrx` | 指针 To/From 与安全解引用 |
 | `timex`（+`cron`） | 时间格式化/解析/时间戳 + cron 表达式 |
