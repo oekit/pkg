@@ -53,12 +53,43 @@ func TestBase64Raw_DifferentialAgainstStdlib(t *testing.T) {
 		if got, want := Base64RawURLEncode(in), base64.RawURLEncoding.EncodeToString(raw); got != want {
 			t.Errorf("Base64RawURLEncode(%q) = %q, want %q", in, got, want)
 		}
+		if got, want := Base64RawURLEncodeBytes(raw), base64.RawURLEncoding.EncodeToString(raw); got != want {
+			t.Errorf("Base64RawURLEncodeBytes(%q) = %q, want %q", in, got, want)
+		}
 		urlEnc := base64.RawURLEncoding.EncodeToString(raw)
 		if got, err := Base64RawURLDecode(urlEnc); err != nil {
 			t.Errorf("Base64RawURLDecode(%q) err = %v", urlEnc, err)
 		} else if got != in {
 			t.Errorf("Base64RawURLDecode(%q) = %q, want %q", urlEnc, got, in)
 		}
+		urlBytes, urlErr := Base64RawURLDecodeBytes(urlEnc)
+		if urlErr != nil {
+			t.Errorf("Base64RawURLDecodeBytes(%q) err = %v", urlEnc, urlErr)
+		} else if !bytes.Equal(urlBytes, raw) {
+			t.Errorf("Base64RawURLDecodeBytes(%q) = %v, want %v", urlEnc, urlBytes, raw)
+		}
+	}
+}
+
+// TestBase64RawURL_BytesRoundTrip 钉住 RawURL 两个字节入口的往返一致性。
+func TestBase64RawURL_BytesRoundTrip(t *testing.T) {
+	inputs := []string{"", "a", "ab", "abc", "hello", "你好，世界", strings.Repeat("x", 100)}
+	for _, in := range inputs {
+		raw := []byte(in)
+		enc := Base64RawURLEncodeBytes(raw)
+		got, err := Base64RawURLDecodeBytes(enc)
+		if err != nil {
+			t.Errorf("Base64RawURLDecodeBytes(%q) err = %v", enc, err)
+		} else if !bytes.Equal(got, raw) {
+			t.Errorf("Base64RawURLDecodeBytes(%q) = %v, want %v", enc, got, raw)
+		}
+	}
+}
+
+// 字节入口的失败出口与字符串入口同款（非法输入报错，不返回部分结果）。
+func TestBase64RawURL_BytesInvalidInput(t *testing.T) {
+	if _, err := Base64RawURLDecodeBytes("!!not-base64!!"); err == nil {
+		t.Error("非法输入必须报错")
 	}
 }
 
