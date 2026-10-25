@@ -3,7 +3,8 @@
 // 当前能力：JSON 编解码包装（MarshalJSON/UnmarshalJSON 等，UseNumber 语义
 // 有显式入口 UnmarshalUseNumber/UnmarshalFromStringUseNumber——数字保留为
 // json.Number，防 >2^53 float 精度丢失）、非加密哈希
-// （Fnv1a64）、加密级摘要（Sha256/Sha256Hex）、Base64（标准/URL 安全）。
+// （Fnv1a64）、加密级摘要（Sha256/Sha256Hex）、Base64（标准/URL 安全，
+// 各含**带填充**与**无填充**两套变体——JWT / OIDC / PKCE 协议段用无填充那套）。
 //
 // 历史说明：曾提供 Md5/Md5Hex/Md5Bytes/Sha1 弱哈希包装，2026-09-15 治理轮
 // 移除（共享 SDK 提供弱哈希入口容易被误用到凭据/签名场景）；确有 MD5/SHA-1
