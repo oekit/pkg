@@ -1,6 +1,7 @@
 ## [v0.26.0] — 2026-10-25
 
 - feat(convert): 客户端 IP 解析收紧——**默认不采信 X-Real-IP**（单跳头无法区分「代理写的」与「客户端自带的」，网关默认透传客户端自带的 ⇒ 客户端可任意改写自己的客户端 IP，限流/锁定绕过 + 审计 IP 可改写，#106）：ResolveClientIP 去掉 xri 入参（BREAKING），确需采信改用 ResolveClientIPWithXRI / GetClientIPWithXRI / GetClientIPWithProxiesAndXRI；**代理头候选值做合法性校验与端口归一**（任意字符串进限流/锁定键 = 计数桶绕过 + 日志注入；带端口的候选与裸 IP 是两个分桶键，非法段不再进返回值，#104）；**可信代理裸 IP 条目归一为单主机网段**（此前被静默忽略：配置不生效且无任何告警，#104），NewTrustedProxySet 构造期对非法条目 fail-fast；**可信代理预解析** TrustedProxySet（此前每请求逐条 ParseCIDR 整份清单，#107），ResolveClientIPWithSet 与清单形态采信结果逐字一致；feat(encoding): 补 base64 无填充 URL 安全变体的字节入口 Base64RawURLEncodeBytes / Base64RawURLDecodeBytes（#105）
+- **下游怎么改**：① 本就**不采信** X-Real-IP 的部署（如先前为绕开本缺口而显式传空串 xri 的）⇒ **删掉那个实参**即可（`ResolveClientIP(remote, xff, trusted)`）；**不要**改用 `ResolveClientIPWithXRI`——那等于把「客户端可任意改写自己的客户端 IP」这个洞请回来。② 确需采信 X-Real-IP 的部署才用 `ResolveClientIPWithXRI` / `GetClientIPWithXRI` / `GetClientIPWithProxiesAndXRI`，并自行承担「该头无法区分代理与客户端」的风险。
 
 ## [v0.25.2] — 2026-10-25
 
