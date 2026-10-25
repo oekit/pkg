@@ -35,7 +35,7 @@ CLI 子命令分发、迁移包容器等日常高频需求。标识与校验（u
 | `slicex` | `Partition` 二分组（保序）、GroupBy 等切片操作 |
 | `container` | 泛型容器（v0.9.0 起，收编原 `collectionx`）：`Set`（集合代数并/交/差）、`Ring` 定长环形缓冲、`Queue` 阻塞队列、`SafeMap`（RWMutex）、`Map`（sync.Map 背书，读多写少）、`Slice` 并发安全切片——参考 go-kratos/kit container 设计 |
 | `enumx` | 枚举：确定性顺序的 All/Values/解析（map 遍历乱序问题的解法） |
-| `convert` | 字符串/数字/布尔/切片的宽容转换（脏输入友好） |
+| `convert` | 字符串/数字/布尔/切片的宽容转换（脏输入友好）+ **可信代理客户端 IP 解析**（v0.25.2 起）：`ResolveClientIP(remote, xff, xri, trustedProxies)` 是**框架无关的纯函数**——XFF 从右向左跳过可信代理，伪造值不采信，直连不可信时忽略一切代理头；`GetClientIP`/`GetClientIPWithProxies` 是它的 net/http 适配层（签名与行为不变），Hertz 等非 net/http 框架复用同一份口径，不再各写一遍 |
 | `encoding` | JSON 序列化助手（`UnmarshalUseNumber` 系列保留 json.Number，防 >2^53 float 精度丢失）+ FNV-1a/SHA-256 摘要与 Base64 |
 | `jsonrepair` | LLM 输出等脏 JSON 的宽容修复链（围栏/尾逗号/单引号/括号闭合），修复永不失败——异常时回退原文；`UnmarshalLenient` 宽松模式尽力闭合截断的数组/对象（半截字符串/键位补 null/悬空逗号）并回报 partial |
 | `httpjson` | 带 JSON 解析的 HTTP 调用助手 |
