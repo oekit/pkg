@@ -1,3 +1,7 @@
+## [v0.25.1] — 2026-10-25
+
+- feat(encoding): 补 base64 无填充（Raw）变体——现有四个变体全是**带填充**形态（base64.StdEncoding / base64.URLEncoding），没有 Raw（无填充）那一套；而 JWT / OIDC / PKCE 协议用的就是无填充 base64url（base64.RawURLEncoding，RFC 7515 §2：base64url 编码时省略 '=' 填充，填充字符在 JWT 里不允许出现）——拿现有的 Base64URLDecode 去解 JWT 段会返回 "illegal base64 data at input byte N"，**包里的方法名与协议实际用到的变体不对应**，收编时极易踩坑（把 RawURLEncoding 换成 Base64URLDecode 就静默解不出来）。新增 Base64RawEncode / Base64RawDecode / Base64RawEncodeBytes / Base64RawDecodeBytes（base64.RawStdEncoding）与 Base64RawURLEncode / Base64RawURLDecode（base64.RawURLEncoding），命名与 stdlib 对齐；现有带填充方法的 godoc 点明「本方法是带填充变体，JWT/OIDC 协议段请用 Raw 变体」。纯新增，现有方法签名与行为不动（#96）
+
 ## [v0.25.0] — 2026-10-24
 
 - fix(cache): SingleFlightCache 把一次未命中计成两次 Misses（#90）
