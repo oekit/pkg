@@ -123,3 +123,21 @@ func (p Policy) Limit(page, pageSize int) int {
 	_, pageSize = p.Normalize(page, pageSize)
 	return pageSize
 }
+
+// NormalizeLimit 按「最多返回多少条」的口径归一化条数。
+//
+// 与 Normalize 的区别只在**口径维度**：Normalize 说的是「第几页、每页几条」
+// （两个参数）；本方法说的是「最多返回多少条」——**没有页的概念**，如工具的
+// limit 参数（语义是行数），或任何「只要前 N 条」的场景。
+//
+// 规则（页长档语义完全一致，字段复用 DefaultPageSize / MaxPageSize / OverMax，
+// 不另起一套几乎一样的口径）：
+//   - n <= 0 ⇒ 口径的默认条数。
+//   - n 超上限 ⇒ 按 OverMax 语义处理：钳到上限（OverMaxClamp）或回退到默认条数
+//     （OverMaxFallback）；口径不限上限时原样返回。
+//
+// 等价于 Limit(1, n)，但不必传一个恒为 1 的页码——把「第 1 页的页长」当「条数」
+// 用是拧的：读代码的人会先愣一下才反应过来这里没有页。
+func (p Policy) NormalizeLimit(n int) int {
+	return p.Limit(1, n)
+}
