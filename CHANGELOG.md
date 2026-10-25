@@ -1,3 +1,8 @@
+## [v0.25.2] — 2026-10-25
+
+- feat(convert): 抽出框架无关的客户端 IP 解析纯函数 ResolveClientIP——GetClientIP/GetClientIPWithProxies 的入参都吃 *http.Request，非 net/http 框架（Hertz 等）用不了，于是每个仓都自己手写一份等价实现、可信代理采信口径逐仓漂移；新增纯函数承载全部采信判定（XFF 从右向左跳过可信代理、伪造值不采信、直连不可信时忽略一切代理头），net/http 适配层改为委托它，既有签名与行为逐字不变；另导出 DefaultTrustedProxies()（返回副本）供框架适配层取同一份默认可信网段（#95）
+- feat(pagination): 分页口径可按服务声明——新增 Policy（默认页长/上限/超限语义由服务自己声明，零值口径等同包级默认），超限的两种语义都表达（OverMaxClamp 钳到上限 / OverMaxFallback 回退默认页长，响应条数不同属可观测差异），MaxPageSize < 0 表示不限上限；此前默认页长/上限写死在包级常量、超限只有一种语义，导致没有任何一个消费方能逐字等价切到上游实现（#100）
+
 ## [v0.25.1] — 2026-10-25
 
 - feat(encoding): 补 base64 无填充（Raw）变体——现有四个变体全是**带填充**形态（base64.StdEncoding / base64.URLEncoding），没有 Raw（无填充）那一套；而 JWT / OIDC / PKCE 协议用的就是无填充 base64url（base64.RawURLEncoding，RFC 7515 §2：base64url 编码时省略 '=' 填充，填充字符在 JWT 里不允许出现）——拿现有的 Base64URLDecode 去解 JWT 段会返回 "illegal base64 data at input byte N"，**包里的方法名与协议实际用到的变体不对应**，收编时极易踩坑（把 RawURLEncoding 换成 Base64URLDecode 就静默解不出来）。新增 Base64RawEncode / Base64RawDecode / Base64RawEncodeBytes / Base64RawDecodeBytes（base64.RawStdEncoding）与 Base64RawURLEncode / Base64RawURLDecode（base64.RawURLEncoding），命名与 stdlib 对齐；现有带填充方法的 godoc 点明「本方法是带填充变体，JWT/OIDC 协议段请用 Raw 变体」。纯新增，现有方法签名与行为不动（#96）
