@@ -35,13 +35,13 @@ CLI 子命令分发、迁移包容器等日常高频需求。标识与校验（u
 | `slicex` | `Partition` 二分组（保序）、GroupBy 等切片操作 |
 | `container` | 泛型容器（v0.9.0 起，收编原 `collectionx`）：`Set`（集合代数并/交/差）、`Ring` 定长环形缓冲、`Queue` 阻塞队列、`SafeMap`（RWMutex）、`Map`（sync.Map 背书，读多写少）、`Slice` 并发安全切片——参考 go-kratos/kit container 设计 |
 | `enumx` | 枚举：确定性顺序的 All/Values/解析（map 遍历乱序问题的解法） |
-| `convert` | 字符串/数字/布尔/切片的宽容转换（脏输入友好） |
+| `convert` | 字符串/数字/布尔/切片的宽容转换（脏输入友好）+ **可信代理客户端 IP 解析**（v0.25.2 起）：`ResolveClientIP(remote, xff, xri, trustedProxies)` 是**框架无关的纯函数**——XFF 从右向左跳过可信代理，伪造值不采信，直连不可信时忽略一切代理头；`GetClientIP`/`GetClientIPWithProxies` 是它的 net/http 适配层（签名与行为不变），Hertz 等非 net/http 框架复用同一份口径，不再各写一遍 |
 | `encoding` | JSON 序列化助手（`UnmarshalUseNumber` 系列保留 json.Number，防 >2^53 float 精度丢失）+ FNV-1a/SHA-256 摘要与 Base64 |
 | `jsonrepair` | LLM 输出等脏 JSON 的宽容修复链（围栏/尾逗号/单引号/括号闭合），修复永不失败——异常时回退原文；`UnmarshalLenient` 宽松模式尽力闭合截断的数组/对象（半截字符串/键位补 null/悬空逗号）并回报 partial |
 | `httpjson` | 带 JSON 解析的 HTTP 调用助手 |
 | `mathx` | 安全随机、平均值等统计助手 + `Unstable` 抖动值（`Around` 对称打散缓存 TTL 防雪崩 / `Upward` 单边向上，重试退避「不得早于基准」） |
 | `pathx` | glob 路径匹配（`vendor/**`、`*.test`）+ 仓库相对路径清洗与 traversal 拒绝 `SanitizeRel`/`SanitizeRelStrict`（统一分隔符、消除 `.`/`..` 段，绝对路径与越出根目录一律拒绝；`/` 与 `\` 同为分隔符，跨平台同判；严格档连显式 `..` 段一并拒绝）+ **文件名**消毒 `SanitizeFileName`（展示/存储用：目录成分丢弃只取最后一段、控制字符丢弃、Windows 保留字符 `: * ? " < > |` 替换为 `_`、去首尾空白与结尾的点、空名/纯符号名回退、超长按**字节**截断并保留扩展名且不砍半个 UTF-8 字符）+ **名字**通配匹配 `MatchGlob`（`*` 可跨 `/`、`?` 匹配一个 rune——分支名/ref 名/仓库全名这类含 `/` 的对象用路径段语义答不了，「排除所有」的 `*` 会静默失效）+ **单段文件名合法性**判定 `IsSafeFileName`（判定不改写：拒分隔符、`.`/`..` 段、绝对路径、盘符与 UNC，fail-closed） |
-| `pagination` | `PageRequest`/`PageResponse` 分页换算 |
+| `pagination` | `PageRequest`/`PageResponse` 分页换算 + **服务级口径** `Policy`（v0.25.2 起）：默认页长/上限/超限语义由服务自己声明，零值口径等同包级默认；超限的两种语义都能表达——`OverMaxClamp`（钳到上限）与 `OverMaxFallback`（回退默认页长，响应条数不同，属可观测差异），`MaxPageSize < 0` 表示不限上限 |
 | `ptrx` | 指针 To/From 与安全解引用 |
 | `timex`（+`cron`） | 时间格式化/解析/时间戳 + cron 表达式 |
 | `cache` | 缓存接口 `CacheAside` + `BatchGetter` 批量能力（MGet）+ `LocalCache`/`SingleFlightCache` + 刷新检查器 `Checker`（TTL 后台刷新、失败按 failTTL 降级、并发请求合并为一次刷新）；`LocalCache` 内置 null marker 防穿透、stale-if-error、单飞、批量 MGet、时钟注入（`LocalConfig.Now`）；v0.16.0 起**可选形状**：`NoBackgroundSweep` 关闭后台清扫 goroutine（嵌入式/短命进程场景，公开 `Sweep` 手动清扫口）、`CloneOnRead` 读命中返回副本（调用方可改写返回值不污染缓存）、`EvictPolicy` 可选 LRU（默认 FIFO 写序淘汰不变）、`GetEx` 区分「未命中」与「命中但值为 nil」（既有 `Get` 签名不变，新增能力以可选接口 `Sweeper`/`HitGetter` 外置，不破坏其它后端实现）；v0.23.0 起补 `Peek` 非删除式读（可选接口 `PeekGetter` 外置——读到过期条目只算不命中、**不删除**它，stale-if-error 兜底需要那份过期真值留在表内；`SingleFlightCache` 包装 `LocalCache` 时曾因前置检查走 `Get` 惰性删除而静默废掉 `StaleIfError`，#72）；v0.24.0 起补**观测计数面** `Stats`（可选接口 `StatsProvider` 外置——命中/未命中/容量淘汰/TTL 过期回收计数，要暴露缓存指标的仓不必自写一份带计数的 TTL 缓存，#76）+ **按调用注入回源**（可选接口 `SourceInjector` 外置——`GetOrLoadWithSource`/`GetOrLoadWithSourceTTL`，回源依赖 key/调用上下文的 token·凭据类缓存不必在缓存外再包一层 key→source 注册表，单飞语义不变，#77）；v0.25.0 起修正 `SingleFlightCache` 包装 `LocalCache` 时的**观测计数口径**——一次未命中曾被前置检查（`Peek`）与回源加载路径各计一次（命中率指标失真：真实 90% 被报成 81.8%），修正后一次读恰好计入命中或未命中之一，与内层直连口径一致（#90） |
