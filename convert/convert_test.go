@@ -108,11 +108,31 @@ func TestGetClientIP_XForwardedFor(t *testing.T) {
 	}
 }
 
+// TestGetClientIP_XRealIP 钉住默认形态**不采信 X-Real-IP**（pkg#106）。
+//
+// X-Real-IP 是单跳头，HTTP 头本身无法区分「代理写的」与「客户端自带的」——
+// 大量网关（Envoy / Higress / Traefik）默认不写该头但会原样透传客户端自带的，
+// 于是默认采信它等于把客户端 IP 的决定权交给客户端：限流/锁定计数桶可被绕过、
+// 审计与访问日志的来源 IP 可被改写。XFF 那条路径有右向左可信链保护，XRI 没有，
+// 两条路径信任强度不对等。
+//
+// 原用例编码的是「默认采信 XRI」的旧语义（v0.25.2 及之前），随语义变更改写。
 func TestGetClientIP_XRealIP(t *testing.T) {
 	r := httptest.NewRequestWithContext(context.Background(), "GET", "/", nil)
 	r.RemoteAddr = "10.0.0.1:1234" // 可信代理
 	r.Header.Set("X-Real-IP", "9.8.7.6")
 	ip := GetClientIP(r)
+	if ip != "10.0.0.1" {
+		t.Errorf("expected 10.0.0.1 (X-Real-IP must not be trusted by default), got %s", ip)
+	}
+}
+
+// TestGetClientIPWithXRI 钉住显式开启后的形态：此时才采信 X-Real-IP。
+func TestGetClientIPWithXRI(t *testing.T) {
+	r := httptest.NewRequestWithContext(context.Background(), "GET", "/", nil)
+	r.RemoteAddr = "10.0.0.1:1234" // 可信代理
+	r.Header.Set("X-Real-IP", "9.8.7.6")
+	ip := GetClientIPWithXRI(r)
 	if ip != "9.8.7.6" {
 		t.Errorf("expected 9.8.7.6, got %s", ip)
 	}

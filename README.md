@@ -35,8 +35,8 @@ CLI 子命令分发、迁移包容器等日常高频需求。标识与校验（u
 | `slicex` | `Partition` 二分组（保序）、GroupBy 等切片操作 |
 | `container` | 泛型容器（v0.9.0 起，收编原 `collectionx`）：`Set`（集合代数并/交/差）、`Ring` 定长环形缓冲、`Queue` 阻塞队列、`SafeMap`（RWMutex）、`Map`（sync.Map 背书，读多写少）、`Slice` 并发安全切片——参考 go-kratos/kit container 设计 |
 | `enumx` | 枚举：确定性顺序的 All/Values/解析（map 遍历乱序问题的解法） |
-| `convert` | 字符串/数字/布尔/切片的宽容转换（脏输入友好）+ **可信代理客户端 IP 解析**（v0.25.2 起）：`ResolveClientIP(remote, xff, xri, trustedProxies)` 是**框架无关的纯函数**——XFF 从右向左跳过可信代理，伪造值不采信，直连不可信时忽略一切代理头；`GetClientIP`/`GetClientIPWithProxies` 是它的 net/http 适配层（签名与行为不变），Hertz 等非 net/http 框架复用同一份口径，不再各写一遍 |
-| `encoding` | JSON 序列化助手（`UnmarshalUseNumber` 系列保留 json.Number，防 >2^53 float 精度丢失）+ FNV-1a/SHA-256 摘要与 Base64 |
+| `convert` | 字符串/数字/布尔/切片的宽容转换（脏输入友好）+ **可信代理客户端 IP 解析**（v0.25.2 起，v0.26.0 收紧）：`ResolveClientIP(remote, xff, trustedProxies)` 是**框架无关的纯函数**——XFF 从右向左跳过可信代理，伪造值不采信，直连不可信时忽略一切代理头；v0.26.0 起**默认不采信 X-Real-IP**（单跳头无法区分「代理写的」与「客户端自带的」，网关默认不写该头但透传客户端自带的 ⇒ 客户端可任意改写自己的客户端 IP，pkg#106），确需采信改用 `ResolveClientIPWithXRI`；代理头候选值做**合法性校验与端口归一**（非法段不进返回值——任意字符串进限流/锁定键等于绕过计数桶且可污染日志，pkg#104）；裸 IP 形态的可信代理条目现在生效（此前被静默忽略：配置不生效且无告警）；`NewTrustedProxySet` 构造期解析清单、请求期零 CIDR 解析（热路径，pkg#107）；`GetClientIP`/`GetClientIPWithProxies` 是它的 net/http 适配层，Hertz 等非 net/http 框架复用同一份口径，不再各写一遍 |
+| `encoding` | JSON 序列化助手（`UnmarshalUseNumber` 系列保留 json.Number，防 >2^53 float 精度丢失）+ FNV-1a/SHA-256 摘要与 Base64（**带填充 / 无填充（Raw）× 标准 / URL 安全**四种字母表变体齐备，JWT / OIDC / PKCE 协议段用无填充 base64url；RawURL 一族另有字节入口 `Base64RawURLEncodeBytes`/`Base64RawURLDecodeBytes`，pkg#105） |
 | `jsonrepair` | LLM 输出等脏 JSON 的宽容修复链（围栏/尾逗号/单引号/括号闭合），修复永不失败——异常时回退原文；`UnmarshalLenient` 宽松模式尽力闭合截断的数组/对象（半截字符串/键位补 null/悬空逗号）并回报 partial |
 | `httpjson` | 带 JSON 解析的 HTTP 调用助手 |
 | `mathx` | 安全随机、平均值等统计助手 + `Unstable` 抖动值（`Around` 对称打散缓存 TTL 防雪崩 / `Upward` 单边向上，重试退避「不得早于基准」） |

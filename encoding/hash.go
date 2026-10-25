@@ -136,3 +136,23 @@ func Base64RawURLDecode(s string) (string, error) {
 	rs, err := base64.RawURLEncoding.DecodeString(s)
 	return string(rs), err
 }
+
+// Base64RawURLEncodeBytes 返回字节切片的 Base64 URL 安全编码（**无填充**变体，
+// base64.RawURLEncoding；字节→字节方向的免拷贝入口）。
+//
+// 与 Base64RawURLEncode 的差别只有一处：入参是字节切片，不经一次
+// string↔[]byte 拷贝。JWT / OIDC / PKCE 协议段的原文常以 []byte 形态在手
+// （签名校验、密钥材料），走字节入口省掉一次拷贝（pkg#105）。
+func Base64RawURLEncodeBytes(b []byte) string {
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// Base64RawURLDecodeBytes 解码 Base64 URL 安全编码为原始字节（**无填充**变体，
+// base64.RawURLEncoding）。
+//
+// 与 Base64RawURLDecode 的差别只有一处：出参是字节切片——结果按字节使用的场景
+// （凭据还原 / PEM DER / 签名原文比对）不必再转一次 string，也不必担心把二进制
+// 塞进 string 时的不可见字符问题（pkg#105）。
+func Base64RawURLDecodeBytes(s string) ([]byte, error) {
+	return base64.RawURLEncoding.DecodeString(s)
+}
