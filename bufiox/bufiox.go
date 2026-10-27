@@ -7,6 +7,8 @@ var (
 	ErrNegativeCount = errors.New("bufiox: 负数长度")
 	// ErrNoRemainingData Next/Peek/Skip 请求的数据量超过剩余可用数据。
 	ErrNoRemainingData = errors.New("bufiox: 剩余数据不足")
+	// ErrTooLarge 请求的长度超出单个缓冲的容量上限。
+	ErrTooLarge = errors.New("bufiox: 请求长度超出缓冲上限")
 )
 
 // Reader 是缓冲读接口：用户态零拷贝读，降低内存分配与拷贝开销。
