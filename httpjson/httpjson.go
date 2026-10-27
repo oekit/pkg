@@ -77,6 +77,49 @@ func DoJSON(ctx context.Context, client *http.Client, req Request, out any) erro
 	return nil
 }
 
+// DoRaw 执行请求并返回**原始**状态码与响应体：不判 2xx、不截断报文、不解 JSON。
+//
+// 适用面（DoJSON 不适用的那些）：
+//   - 调用方要**按状态码映射自己的语义**（如 404/409 → 各自的哨兵错误）；
+//   - 调用方要把**原文**报文带进错误文案（DoJSON 的错误体是 rune 安全截断到
+//     200 字符的**摘要**，不是原文）。
+//
+// limit 是读体上限（字节）：<=0 时用包级 maxBody。调用方应按自己的报文体量
+// 给一个够用又防内存放大的值（如 8KB）。
+//
+// 传输层错误（连不上/超时）返回 err，status/body 无意义；HTTP 层错误（任何状态码）
+// 一律返回 nil err，由调用方按状态码自行判定。
+func DoRaw(ctx context.Context, client *http.Client, req Request, limit int64) (int, []byte, error) {
+	if limit <= 0 {
+		limit = maxBody
+	}
+	method := req.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+	var body io.Reader
+	if req.Body != nil {
+		body = bytes.NewReader(req.Body)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, body)
+	if err != nil {
+		return 0, nil, fmt.Errorf("构造请求失败: %w", err)
+	}
+	if req.Header != nil {
+		req.Header(httpReq.Header)
+	}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return 0, nil, fmt.Errorf("请求失败: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if err != nil {
+		return resp.StatusCode, nil, fmt.Errorf("读取响应失败: %w", err)
+	}
+	return resp.StatusCode, raw, nil
+}
+
 // StatusError 非 2xx 响应错误：供重试判定等按状态码分类（errors.As 提取）。
 type StatusError struct {
 	Code int
