@@ -135,9 +135,14 @@ func TestPluralize_SuffixES(t *testing.T) {
 }
 
 // TestPluralize_EmptyWord covers the empty-word edge case.
+//
+// 空词时计数不得丢失：此前返回字面量 "0"，Pluralize(5, "") 返回的也是 "0"。
 func TestPluralize_EmptyWord(t *testing.T) {
-	if got := Pluralize(0, ""); got != "0" {
-		t.Errorf("expected '0' for empty word, got %q", got)
+	if got := Pluralize(0, ""); got != "0 " {
+		t.Errorf("expected '0 ' for empty word, got %q", got)
+	}
+	if got := Pluralize(5, ""); got != "5 " {
+		t.Errorf("expected '5 ' for empty word, got %q", got)
 	}
 }
 
