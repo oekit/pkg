@@ -56,13 +56,28 @@ func (sm *SafeMap[K, V]) Len() int {
 	return len(sm.m)
 }
 
-// Range 遍历快照；fn 返回 false 提前终止。遍历期间其他 goroutine 的
-// 写入不阻塞，但可见性不保证（标准 map range 语义）。
+// Range 遍历快照；fn 返回 false 提前终止。
+//
+// **先在读锁内取快照，再在锁外遍历**（同 Slice.Range 的做法）：
+//   - 此前遍历期间**一直持着读锁** ⇒ 文档声称的「遍历期间其他 goroutine 的
+//     写入不阻塞」并不成立（Set 要写锁，会被读锁挡住直到遍历结束）；
+//   - 更糟的是回调里写同一个 map 会**死锁**：RWMutex 不可重入，回调的
+//     Set 要写锁、写锁要等读锁释放、读锁要等回调返回——互等。
+//     （实测：回调里 sm.Set 同��个 map ⇒ 永久挂起。）
+//
+// 快照语义：遍历期间的并发写入不影响本次遍历（同 Slice.Range）。
 func (sm *SafeMap[K, V]) Range(fn func(k K, v V) bool) {
 	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	keys := make([]K, 0, len(sm.m))
+	vals := make([]V, 0, len(sm.m))
 	for k, v := range sm.m {
-		if !fn(k, v) {
+		keys = append(keys, k)
+		vals = append(vals, v)
+	}
+	sm.mu.RUnlock()
+
+	for i := range keys {
+		if !fn(keys[i], vals[i]) {
 			return
 		}
 	}
