@@ -31,6 +31,17 @@ var (
 // maxManifestSize 限制清单大小，避免畸形包把内存吃满。
 const maxManifestSize = 8 << 20
 
+// maxEntrySize 限制单个数据条目**解压后**的字节数（防 zip bomb）。
+//
+// 清单有 maxManifestSize 保护，但**数据条目没有**——Inspect 要把每个声明的
+// 条目完整解压一遍来算摘要与行数 ⇒ 一个「几 KB 的 zip、条目声明 1TB」的包
+// 能让体检无限期地烧 CPU（ReadJSONL 里还会把整行读进内存）。
+//
+// 1GiB 对迁移包是宽裕的上限（正常数据包远小于此），同时把经典 zip bomb 挡在
+// 门外。声明的 UncompressedSize64 可以撒谎，所以除预检外还必须在实际解压时
+// 用计数器硬卡。
+const maxEntrySize = 1 << 30
+
 // Inspect 对迁移包做体检。
 //
 // 一次说清所有问题而不是遇到第一个错误就停：problems 里会同时列出缺失文件、摘要不符、
@@ -85,7 +96,7 @@ func newPackError(kind error, msg string, cause error) error {
 
 // readManifest 读取并解析包内清单，同时校验格式版本。
 func readManifest(zr *zip.Reader, expected int) (*Manifest, error) {
-	entries, _ := indexEntries(zr)
+	entries, _, _ := indexEntries(zr)
 	f, ok := entries[manifestName]
 	if !ok {
 		return nil, newPackError(ErrCorrupt, "pack: 迁移包损坏：缺少 "+manifestName, nil)
@@ -116,7 +127,7 @@ func readManifest(zr *zip.Reader, expected int) (*Manifest, error) {
 // 体检报「通过」。
 func verifyEntries(zr *zip.Reader, m *Manifest) []string {
 	var problems []string
-	entries, names := indexEntries(zr)
+	entries, names, dupes := indexEntries(zr)
 
 	// matched 记录已被某个数据文件认领的 counts 键（用于收尾报「键未匹配」）。
 	matched := make(map[string]bool, len(m.Counts))
@@ -172,6 +183,12 @@ func verifyEntries(zr *zip.Reader, m *Manifest) []string {
 		}
 	}
 
+	// 重名条目：清单只校验了其中一份，其余份不被任何检查覆盖。
+	for _, name := range dupes {
+		problems = append(problems,
+			fmt.Sprintf("重名条目：%s（zip 内同名条目并存，清单只校验了其中一份）", name))
+	}
+
 	// 非法文件名（zip slip）
 	for _, name := range names {
 		if name == manifestName {
@@ -203,21 +220,33 @@ func matchCountsKey(counts map[string]int, name string) (string, int, bool) {
 	return "", 0, false
 }
 
-// indexEntries 建立条目名索引（同名条目取第一个）并返回全部条目名。
-func indexEntries(zr *zip.Reader) (map[string]*zip.File, []string) {
+// indexEntries 建立条目名索引（同名条目取第一个）并返回全部条目名与**重名条目名**。
+//
+// 重名条目必须报出来：zip 允许同名条目并存，而索引只保留第一个 ⇒ 清单里
+// 声明的文件只被校验了**第一份**，第二份（内容可任意、摘要可对不上）不被任何
+// 检查覆盖——按 zip 条目遍历（而不是按清单）的消费方会读到**未校验**的那份。
+func indexEntries(zr *zip.Reader) (map[string]*zip.File, []string, []string) {
 	entries := make(map[string]*zip.File, len(zr.File))
 	names := make([]string, 0, len(zr.File))
+	var dupes []string
 	for _, f := range zr.File {
 		names = append(names, f.Name)
 		if _, ok := entries[f.Name]; !ok {
 			entries[f.Name] = f
+		} else {
+			dupes = append(dupes, f.Name)
 		}
 	}
-	return entries, names
+	return entries, names, dupes
 }
 
 // digestAndCount 流式计算条目的 SHA-256 摘要与行数（不把整个文件读进内存）。
 func digestAndCount(f *zip.File) (string, int, error) {
+	// 预检：条目**声明**的解压大小超限 ⇒ 直接拒绝，省掉实际解压。
+	if f.UncompressedSize64 > maxEntrySize {
+		return "", 0, fmt.Errorf("条目声明解压后 %d 字节，超过 %d 字节上限",
+			f.UncompressedSize64, maxEntrySize)
+	}
 	rc, err := f.Open()
 	if err != nil {
 		return "", 0, err
@@ -229,9 +258,15 @@ func digestAndCount(f *zip.File) (string, int, error) {
 	lines := 0
 	nonEmpty := false
 	last := byte('\n')
+	total := int64(0)
 	for {
 		n, err := rc.Read(buf)
 		if n > 0 {
+			// 硬上限：声明大小可以撒谎，实际解压量用计数器卡住。
+			total += int64(n)
+			if total > maxEntrySize {
+				return "", 0, fmt.Errorf("条目解压后超过 %d 字节上限", maxEntrySize)
+			}
 			h.Write(buf[:n])
 			nonEmpty = true
 			last = buf[n-1]
