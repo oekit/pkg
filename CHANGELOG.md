@@ -1,3 +1,11 @@
+## [v0.29.1] — 2026-10-28
+
+- fix(container): `Slice.Delete`/`Clear` 缩容时把底层数组内容清零——此前只改 len，被删元素仍留在底层数组 ⇒ GC 收不走（大对象滞留）
+- fix(cli): `NewFlagSet(name, nil)` 的输出改写 `io.Discard`——此前不调 `SetOutput` 时标准库默认写 `os.Stderr` ⇒ 错误信息与用法逃出调用方给的输出流
+- fix(contextx): `ValueOnlyFrom(nil)` 立即 panic（与标准库 `context.WithValue` 的 nil parent 口径一致）——此前 nil 延后到某次 `Value` 调用才炸，堆栈离「传错了」很远
+- fix(enumx): `NewRegistry` 遇重复 `Value()` 立即 panic——此前后者静默覆盖前者（连 labels 一起覆盖）⇒ 取到哪个枚举、看到哪个标签全看传入顺序
+- fix(pack): 摘要清单的「条数」改为非空行数，与写入侧（每条一行）和读取侧（ReadJSONL 跳过空行）同一口径——此前数物理行数，含空行的包被误报「条数不符」，而读出来的条数恰好等于清单里的数
+
 ## [v0.29.0] — 2026-10-28
 
 - fix(urlguard): IPv6 zone 后缀击穿全部 IP 字面量判定（SSRF 绕过）——`http://[::1%25lo]/`、`[fe80::1%25eth0]/`、`[fc00::1%25eth0]/`、`[::ffff:127.0.0.1%25eth0]/` 此前**全部放行**（无 zone 的 `[::1]` 正确阻断）：`net.ParseIP` 不认 zone，而 `url.Parse` 后的 `u.Hostname()` 保留它 ⇒ IP 字面量判定整段跳过。zone 只决定走哪块网卡、不改变连的是哪个地址 ⇒ 判定按地址部分做；顺带覆盖 UDP/IP 连接的端点复核（此前只认 `*net.TCPAddr`）与两个漏掉的 IPv6 保留段（`::/96`、`fec0::/10`）
