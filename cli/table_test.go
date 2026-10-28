@@ -109,3 +109,22 @@ func TestDisplayWidth(t *testing.T) {
 		})
 	}
 }
+
+// TestTable_NoHeader 断言无表头时形状由第一行决定。
+//
+// 有些输出（工具目录）本来就没有列名，硬塞一个表头反而改变了它的形状。
+func TestTable_NoHeader(t *testing.T) {
+	var buf bytes.Buffer
+	tbl := NewTable()
+	tbl.Append("jms_a", "read", "set confirm=true")
+	tbl.Append("jms_b", "write", "")
+	tbl.Render(&buf)
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("渲染了 %d 行，期望 2 行，实际 =\n%s", len(lines), buf.String())
+	}
+	if !strings.Contains(lines[0], "jms_a") || !strings.Contains(lines[1], "jms_b") {
+		t.Errorf("数据行丢失，实际 =\n%s", buf.String())
+	}
+}

@@ -32,13 +32,22 @@ func NewTable(headers ...string) *Table {
 
 // Append 追加一行。
 //
-// 单元格少于表头列数时补空串，多于表头列数时多出来的部分被丢弃——表格的
-// 形状由表头决定，不能被一行数据撑歪。
+// 单元格少于列数时补空串，多于列数时多出来的部分被丢弃——表格的形状由
+// 表头决定，不能被一行数据撑歪。没有表头时，形状由第一行决定。
 func (t *Table) Append(cells ...string) {
 	if t == nil {
 		return
 	}
-	row := make([]string, len(t.headers))
+	cols := len(t.headers)
+	if cols == 0 {
+		// 无表头：第一行定形状，之后的行按它截断。
+		if len(t.rows) == 0 {
+			cols = len(cells)
+		} else {
+			cols = len(t.rows[0])
+		}
+	}
+	row := make([]string, cols)
 	for i := range row {
 		if i < len(cells) {
 			row[i] = cells[i]
@@ -51,11 +60,17 @@ func (t *Table) Append(cells ...string) {
 //
 // 表头与数据行之间不加分隔线：CLI 表格通常很短，一条横线会让人误以为
 // 下面那段是另一个区段。
+//
+// 没有表头时，形状由第一行决定——有些输出（如工具目录）本来就没有列名，
+// 硬塞一个表头反而改变了它的形状。
 func (t *Table) Render(w io.Writer) {
 	if t == nil || w == nil {
 		return
 	}
 	cols := len(t.headers)
+	if cols == 0 && len(t.rows) > 0 {
+		cols = len(t.rows[0])
+	}
 	if cols == 0 {
 		return
 	}
