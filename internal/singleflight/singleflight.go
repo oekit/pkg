@@ -73,11 +73,11 @@ func (f *Flight[T]) Do(ctx context.Context, key string, fn func(ctx context.Cont
 				perr = fmt.Errorf("singleflight: fn panic: %v", r)
 			}
 			c.err = perr
-			f.calls.Delete(key)
+			f.calls.CompareAndDelete(key, c)
 			close(c.ready)
 			panic(r)
 		}
-		f.calls.Delete(key)
+		f.calls.CompareAndDelete(key, c)
 		close(c.ready)
 	}()
 

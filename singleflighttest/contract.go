@@ -28,15 +28,97 @@ type Flight[T any] interface {
 //   - fn error 原样透传给全部调用方
 //   - **一次飞行结束后，新调用必须重新执行 fn**（key 已释放，不得复用上次的
 //     结果）
+//   - **Forget 之后，旧 flight 的收尾不得删掉同 key 的新 call**（否则
+//     「同 key 只执行一次 fn」的承诺被打破，且两次 fn 并发跑）
 func Run[T any](t *testing.T, factory func() Flight[T]) {
 	t.Helper()
 	t.Run("DedupSameKey", func(t *testing.T) { runDedup(t, factory()) })
 	t.Run("WaiterCtxCancelIndependent", func(t *testing.T) { runWaiterCtxCancel(t, factory()) })
 	t.Run("PanicPropagatesAndCleansKey", func(t *testing.T) { runPanic(t, factory()) })
 	t.Run("ForgetAllowsRerun", func(t *testing.T) { runForget(t, factory()) })
+	t.Run("ForgetDoesNotDeleteNewerCall", func(t *testing.T) { runForgetDoesNotDeleteNewerCall(t, factory()) })
 	t.Run("DifferentKeysParallel", func(t *testing.T) { runDifferentKeys(t, factory()) })
 	t.Run("ErrorPropagates", func(t *testing.T) { runError(t, factory()) })
 	t.Run("AfterFlightNewCallRerunsFn", func(t *testing.T) { runAfterFlightReruns(t, factory()) })
+}
+
+// runForgetDoesNotDeleteNewerCall 契约：**Forget 之后，旧 flight 收尾时不得把
+// 同 key 的新 call 一起删掉**。
+//
+// 缺陷成因（无条件 Delete）：序列
+//
+//	G1 注册 c1（慢 fn）→ Forget("k") 删掉 c1 → G2 注册 c2 → G1 结束 →
+//
+// Delete("k") 把 c2 一起删掉 → G3 于是又起了第三次 fn ⇒「同 key 只执行
+// 一次 fn」的承诺被打破，且两次 fn 并发跑。
+//
+// 为什么这条要进**共享**契约套件：矩阵里两套同源实现
+// （pkg/internal/singleflight 与 concurrency/singleflight）此前都栽在这里，
+// 而旧的 runForget 只覆盖「Forget → 单次新 Do」⇒ 这个时序在套件里
+// **不可观测** ⇒ 两套实现都能通过，缺陷却各自留存。
+func runForgetDoesNotDeleteNewerCall[T any](t *testing.T, f Flight[T]) {
+	t.Helper()
+	var calls atomic.Int32
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+	releaseSecond := make(chan struct{})
+
+	// G1：慢 fn，注册 c1。
+	go func() {
+		_, _ = f.Do(context.Background(), "k", func(ctx context.Context) (T, error) {
+			calls.Add(1)
+			close(firstStarted)
+			<-releaseFirst
+			var zero T
+			return zero, nil
+		})
+	}()
+	<-firstStarted
+
+	// Forget：c1 从表里摘掉。
+	f.Forget("k")
+
+	// G2：注册 c2（同 key，**仍在飞行中**的慢 fn）。
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		_, _ = f.Do(context.Background(), "k", func(ctx context.Context) (T, error) {
+			calls.Add(1)
+			close(secondStarted)
+			<-releaseSecond
+			var zero T
+			return zero, nil
+		})
+	}()
+	<-secondStarted
+
+	// G1 结束：它的收尾**不得**删掉还在飞行中的 c2。
+	close(releaseFirst)
+	time.Sleep(50 * time.Millisecond)
+
+	// G3 到达：c2 仍在飞行中 ⇒ 应**加入**它，而不是另起一次 fn。
+	thirdDone := make(chan struct{})
+	go func() {
+		defer close(thirdDone)
+		_, _ = f.Do(context.Background(), "k", func(ctx context.Context) (T, error) {
+			calls.Add(1)
+			var zero T
+			return zero, nil
+		})
+	}()
+	select {
+	case <-thirdDone:
+		t.Fatal("G3 立即返回了：它没有加入仍在飞行中的 c2（旧 flight 的收尾误删了新 call）")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("fn 执行次数 = %d，期望 2（旧 flight 的收尾误删了仍在飞行中的新 call ⇒ G3 又起了一次）", got)
+	}
+	close(releaseSecond)
+	<-secondDone
+	<-thirdDone
 }
 
 func runDedup[T any](t *testing.T, f Flight[T]) {
