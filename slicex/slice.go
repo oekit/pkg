@@ -100,6 +100,10 @@ func Chunk[T any](slice []T, size int) [][]T {
 	if size <= 0 {
 		return nil
 	}
+	// ⚠️ **分片与入参共享底层数组**：返回的每个分片都是 slice 的一段视图，
+	// 改写分片元素会改写原切片（与 stdlib slices.Chunk 同语义）。同包的
+	// Reverse 明确「返回新切片，不修改原始切片」——本函数的口径与之不同，
+	// 调用方需要可改写的结果时自行拷贝。
 	var result [][]T
 	for i := 0; i < len(slice); i += size {
 		end := i + size
