@@ -124,9 +124,19 @@ func closePartial(s string) (string, bool) {
 		switch c {
 		case '"':
 			inStr = true
-			// 引号开口位置决定 EOF 闭合语义：开在 '{'/',' 后是键位
+			// 引号开口位置决定 EOF 闭合语义：开在 '{' 后是键位
 			// （闭引号后还缺冒号），开在 ':'/'[' 后是值位。
-			keyPos = lastStruct == '{' || lastStruct == ','
+			//
+			// 开在 ',' 后**要分上下文**：逗号既可能是对象的键值分隔符，
+			// 也可能是数组元素的分隔符。只看 lastStruct 会把数组里的元素串
+			// 误判成键位 ⇒ 闭合时补 ":null" ⇒ 产出 ["a","b":null] 这种非法
+			// JSON ⇒ 宽松解析整体失败（实测：["a","b 与 {"a":["x","y 都
+			// 解析不出来）。
+			//
+			// 判据是**开口时所处的括号上下文**：栈顶是 '{' 才是对象内
+			// （键位），栈顶是 '[' 是数组内（值位）。
+			keyPos = lastStruct == '{' ||
+				(lastStruct == ',' && len(stack) > 0 && stack[len(stack)-1] == '{')
 		case '{', '[':
 			stack = append(stack, c)
 		case '}', ']':
