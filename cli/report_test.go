@@ -10,7 +10,7 @@ import (
 func TestReport_RendersChecksAndResult(t *testing.T) {
 	var buf bytes.Buffer
 	r := NewReport("mytool doctor")
-	r.SetHeader("base_url: https://example.invalid")
+	r.Header("base_url: https://example.invalid")
 	r.Add(StatusOK, "api", "the bastion answered")
 	r.AddFix(StatusFail, "key_type", "the key is ed25519", "generate an RSA key")
 	r.Render(&buf)

@@ -52,15 +52,15 @@ func NewReport(title string) *Report {
 	return &Report{title: title}
 }
 
-// SetHeader 设置头部信息行（键值对已由调用方格式化好）。
+// Header 追加头部信息行（键值对已由调用方格式化好）。
 //
 // 头部与检查项之间空一行——它们是两类东西：上面是「这是什么环境」，下面
 // 是「查出来什么」。
-func (r *Report) SetHeader(lines ...string) *Report {
+func (r *Report) Header(lines ...string) *Report {
 	if r == nil {
-		return r
+		return nil
 	}
-	r.header = append(r.header[:0], lines...)
+	r.header = append(r.header, lines...)
 	return r
 }
 
@@ -75,7 +75,7 @@ func (r *Report) Add(status, name, detail string) *Report {
 // 项下面才读得懂。
 func (r *Report) AddFix(status, name, detail, fix string) *Report {
 	if r == nil {
-		return r
+		return nil
 	}
 	r.items = append(r.items, ReportItem{Status: status, Name: name, Detail: detail, Fix: fix})
 	return r
@@ -86,7 +86,7 @@ func (r *Report) AddFix(status, name, detail, fix string) *Report {
 // 它承载的是「检查项合起来说明什么」——判定、建议、范围一类的文字。
 func (r *Report) AddConclusion(line string) *Report {
 	if r == nil {
-		return r
+		return nil
 	}
 	r.conclusions = append(r.conclusions, line)
 	return r
