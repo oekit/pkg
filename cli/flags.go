@@ -26,9 +26,13 @@ import (
 // 注意：FlagSet 不支持并发 Parse；每个子命令自建一个即可。
 func NewFlagSet(name string, stderr io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	if stderr != nil {
-		fs.SetOutput(stderr)
+	if stderr == nil {
+		// nil = 丢弃（与本包 orDiscard 的口径一致）。**不调 SetOutput** 时
+		// 标准库默认写 os.Stderr ⇒ 错误信息与用法会逃到进程的真实 stderr，
+		// 破坏本包「输出流全由调用方给」的契约（测试里尤其难抓）。
+		stderr = io.Discard
 	}
+	fs.SetOutput(stderr)
 	return fs
 }
 
