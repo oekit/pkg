@@ -1,3 +1,10 @@
+## [v0.30.0] — 2026-10-28
+
+- fix(cache): `HashKey` 的参数边界歧义 ⇒ 不同参数组算出同一个缓存 key ⇒ 串数据——此前每个参数用 `%v:` 直接拼进 SHA-256 的摘要输入，参数值里的 `:` 与「参数边界」不可区分：`HashKey("p","a","b") == HashKey("p","a:b")`、`HashKey("p","a:b","c") == HashKey("p","a","b:c")`、`HashKey("p",1) == HashKey("p","1")` 三组全部同键（第三条是 int 与 string 互撞）。故障形态最坏：静默（没有报错、没有 panic，只是命中率异常地高）、越权面（租户名/用户 ID/关键词/路径进参数时就是跨租户串数据）、难复现（只有参数含 `:` 才触发，而测试数据通常不带）。改为**长度前缀的无歧义编码**（类型名长度:类型名 + 值长度:值）⇒ 参数边界与值内容不再混淆，类型不同的参数组（1 与 "1"）也不同键。key 为进程/缓存生命周期内临时值、无持久化契约 ⇒ 换编码不构成破坏性变更；但**存量 key 的取值会变**（升级后旧缓存条目不再命中，属预期内的失效）（#146）
+- fix(singleflight): `pkg/internal/singleflight` 的清理改用 `CompareAndDelete`——此前是无条件 `Delete`，`Forget` 之后注册的同 key **新** call 会被一并删掉 ⇒ 第三个调用方另起一次 fn，「同 key 只执行一次 fn」的承诺被打破；`concurrency/singleflight` 早已修同一处缺陷，两套语义不同的实现却在跑**同一套契约套件** ⇒ 给出「都通过了」的假保证。保留 pkg 侧原有的「先摘键、后唤醒」顺序（x/sync/singleflight 同款；反过来会留一个「陈旧结果被当成新鲜结果返回」的窗口）（#147）
+- feat(singleflighttest): 契约套件补「Forget-竞态」用例（`Forget` → 新 call 仍在飞行 → 旧 call 收尾 → 第三个调用方）——旧套件只断言「Forget 后单次新 Do 会重跑 fn」，**不构造**旧 call 与新 call 交叠的时序 ⇒ 该缺陷在套件里不可观测 ⇒ 两个语义已漂移的实现都能通过；补上后 `pkg/internal` 与 `concurrency/singleflight` 两侧同时被钉住（#147）
+- feat(convert): 补 nil 安全的可选转换入口——`AnyToStr(nil)` 返回字符串 `"<nil>"`，它不是空串、不是零值、不是 error，而是一个**长得像值**的哨兵：过得了任何 schema 校验（就是个 string）、被当成「这个字段有内容」送到模型面前 ⇒ 模型拿到一个**不存在的名字**当作真实值；「没有这个字段」与「这个字段的值是 `<nil>` 字符串」在下游必须分得开，但用 `AnyToStr` 之后分不开。新增（与既有 `Any*` 并列，**不改既有语义**）：`AnyToStrOr(v, def)`（nil ⇒ def，默认 `""` ⇒ nil 读成空串而不是 `"<nil>"`）、`OptStr`/`OptBool`/`OptInt32`/`OptInt64`（**没有就是没有**：缺失或无法表示为目标类型时返回 nil 指针；不返回 `&false`/`&0` 那种「长得像值」的伪装）、`AnyToInt32`（补上 int32 这一档：JSON 解码出的数字一律是 float64，进 int32 契约前必须转；装不下按「无法转换」返回 0，**不发生回绕**）（#143）
+
 ## [v0.29.1] — 2026-10-28
 
 - fix(container): `Slice.Delete`/`Clear` 缩容时把底层数组内容清零——此前只改 len，被删元素仍留在底层数组 ⇒ GC 收不走（大对象滞留）
