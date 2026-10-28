@@ -10,9 +10,18 @@ import (
 	"time"
 )
 
-// cacheLog 惰性 slog logger：pkg 保持零 oekit 内部依赖，不用 logx 门面
-// （消费方服务可通过 slog.SetDefault 汇流）。
-var cacheLog = slog.Default().With("component", "cache")
+// cacheLogger 取当前默认 slog logger（带 component 标签）。
+//
+// **必须在调用时取**，不能是包级 var：包级 var 在 init 阶段求值，早于任何
+// main() 里的 slog.SetDefault ⇒ 消费方设的默认 logger 永远汇不到缓存的
+// 日志里（注释原先声称「消费方服务可通过 slog.SetDefault 汇流」，实测
+// 不成立——缓存日志始终走进程启动时的默认 handler）。
+//
+// pkg 保持零 oekit 内部依赖，不用 logx 门面；消费方服务仍可通过
+// slog.SetDefault 汇流。
+func cacheLogger() *slog.Logger {
+	return slog.Default().With("component", "cache")
+}
 
 // goSafe pkg 内联的安全 goroutine：panic 被 recover 记日志，不带上抛。
 // pkg 是最底层模块（零内部依赖），不能引 concurrency/async，故自带最小实现。
@@ -20,7 +29,7 @@ func goSafe(fn func()) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				cacheLog.Error("panic recovered", "panic", r, "stack", string(debug.Stack()))
+				cacheLogger().Error("panic recovered", "panic", r, "stack", string(debug.Stack()))
 			}
 		}()
 		fn()
@@ -87,8 +96,12 @@ type LocalConfig[T any] struct {
 
 	// StaleIfError 回源失败时回退已过期的历史真值（fail-open，pkg#11——防上游
 	// 抖动放大为拒绝服务）。只认「TTL 过期的真值」：null marker 不参与 stale，
-	// TTL=0 永不过期条目无 stale 语义（不会过期）。过期条目在本路径下保留于表内
-	// （回收交给后台清扫），可反复兜底直至上游恢复。
+	// TTL=0 永不过期条目无 stale 语义（不会过期）。**过期真值条目在本路径下
+	// 保留于表内**——既不被后台清扫回收，也不被读路径的惰性删除回收，
+	// 可反复兜底直至上游恢复（上游恢复后同 key 被新值覆盖，不额外占空间）。
+	//
+	// 代价：开启后过期真值会留在表内直到被覆盖或被 Del/Clear 清掉
+	// （与「缓存条目无上界」的既有口径一致；要上界用 MaxSize）。
 	StaleIfError bool
 
 	// OnStale stale 命中回调（观测：打点/告警；nil = no-op）。
@@ -161,7 +174,12 @@ func NewLocalCache[T any](cfg LocalConfig[T]) *LocalCache[T] {
 
 	// 启动过期清理（NoBackgroundSweep 时不起后台件——pkg#25：
 	// 短命 CLI/宿主内嵌场景不该为缓存常驻清扫协程）
-	if cfg.TTL > 0 && !cfg.NoBackgroundSweep {
+	//
+	// 条件是「**存在会过期的条目来源**」而不是「TTL > 0」：null marker 按
+	// NullTTL 过期（缺省 1 分钟），TTL=0（真值永不过期）时 null marker 照样
+	// 会过期。此前只看 TTL>0 ⇒ 这类配置下过期 null marker 永远没人回收
+	// （惰性删除只覆盖 Get/GetEx/Exists，回源路径是非删除式的）⇒ 无界增长。
+	if c.sweepNeeded() && !cfg.NoBackgroundSweep {
 		goSafe(func() { c.cleanup() })
 	}
 
@@ -302,6 +320,9 @@ func (c *LocalCache[T]) promoteOne(key string, entry *localEntry[T]) {
 
 // getEntry 内部方法：返回有效 entry 及其是否存在（含 null marker）。
 // 过期条目会被顺带删除（双检模式，避免误删并发 Set 的新值）。
+//
+// StaleIfError 开启时，过期真值条目**不删**——留给 stale 兜底用（见
+// retainForStale）。
 func (c *LocalCache[T]) getEntry(key string) (*localEntry[T], bool) {
 	c.mu.RLock()
 	entry, ok := c.data[key]
@@ -312,15 +333,17 @@ func (c *LocalCache[T]) getEntry(key string) (*localEntry[T], bool) {
 	}
 
 	if entry.isExpired(c.now()) {
-		c.mu.Lock()
-		// 二次检查：在 RUnlock 和 Lock 之间可能有别的 goroutine Set 了新值，
-		// 只删除仍然是同一个过期 entry 的情况，避免误删新值。
-		if cur, exists := c.data[key]; exists && cur == entry {
-			delete(c.data, key)
-			c.removeFromOrder(key)
-			c.expirations.Add(1)
+		if !c.retainForStale(entry) {
+			c.mu.Lock()
+			// 二次检查：在 RUnlock 和 Lock 之间可能有别的 goroutine Set 了新值，
+			// 只删除仍然是同一个过期 entry 的情况，避免误删新值。
+			if cur, exists := c.data[key]; exists && cur == entry {
+				delete(c.data, key)
+				c.removeFromOrder(key)
+				c.expirations.Add(1)
+			}
+			c.mu.Unlock()
 		}
-		c.mu.Unlock()
 		return nil, false
 	}
 
@@ -403,8 +426,9 @@ func (c *LocalCache[T]) getOrLoad(ctx context.Context, key string, spec loadSpec
 // 报成 81.8%）。本方法让「前置探测计一次、加载路径不再计」成立，一次读
 // 恰好计入命中或未命中之一。
 //
-// **命中计数不受影响**：stale 兜底等读命中仍照常计入（与内层直连口径一致——
-// 内层直连的 stale 兜底路径同样是「一次未命中 + 一次读命中」）。
+// **命中计数不受影响**：stale 兜底等读命中仍照常计入——但 stale 兜底**本身**
+// 不计读命中（它拿到的是已过期的真值，Stats 口径里属于「已过期」⇒ 未命中），
+// 一次 stale 读取恰好计入一次未命中。
 //
 // 只供包内装饰器使用（能力随实现走，不进公共 API）：内层实现方不认这个
 // 能力时，装饰器退回内层原有口径（能力缺失是内层的事实）。
@@ -469,9 +493,13 @@ func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], 
 			if c.cfg.OnStale != nil {
 				c.cfg.OnStale(ctx, key, entry.value)
 			}
-			// stale 兜底同样是读命中：提升顺序 + 按 CloneOnRead 决定返回值
+			// stale 兜底**不计读命中**：Stats 的口径是「读到**未过期的**真值
+			// 条目」才算命中，过期真值是「已过期」⇒ 计入未命中。
+			// 此前这条路径既计未命中又计命中 ⇒ 一次读被计成两次（命中+未命中）
+			// ⇒ 命中率虚高（与 interface.go「一次读恰好计入命中或未命中之一」
+			// 的承诺矛盾）。
+			// 顺序提升仍要做（stale 也是一次使用）。
 			c.promoteOne(key, entry)
-			c.hits.Add(1)
 			return c.cloneOnRead(entry.value), nil
 		}
 		return nil, err
@@ -493,8 +521,23 @@ func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], 
 	if spec.ttl > 0 {
 		ttl = spec.ttl
 	}
-	if e := c.SetWithTTL(ctx, key, val, ttl); e != nil {
-		cacheLog.Warn("local cache backfill failed", "key", key, "err", e)
+	// 回填：**存一份副本**，把调用方自己的值还给调用方。
+	//
+	// 此前直接把 val 存进缓存再把同一个指针返回给调用方——回填之后这个
+	// 指针已经是缓存的条目了，调用方一改写就污染缓存（CloneOnRead 开启也
+	// 挡不住：下次读命中克隆的是**已被改写**的那份）。LocalConfig.CloneOnRead
+	// 的注释说「回源路径不克隆——那是调用方自己的值」，在回填前成立，
+	// 回填后不成立。
+	//
+	// 未配置 CloneOnRead 时保持零拷贝（既有口径：调用方此后不得改写）。
+	stored := val
+	if c.cfg.CloneOnRead != nil {
+		if cloned := c.cfg.CloneOnRead(val); cloned != nil {
+			stored = cloned
+		}
+	}
+	if e := c.SetWithTTL(ctx, key, stored, ttl); e != nil {
+		cacheLogger().Warn("local cache backfill failed", "key", key, "err", e)
 	}
 
 	return val, nil
@@ -507,6 +550,47 @@ func (c *LocalCache[T]) effectiveNullTTL() time.Duration {
 		return defaultNullTTL
 	}
 	return c.cfg.NullTTL
+}
+
+// retainForStale 报告该条目是否要保留给 stale-if-error 兜底（不参与回收）。
+//
+// 只认「TTL 过期的**真值**条目」：null marker 表示数据不存在，没有可兜底的
+// 历史真值；TTL=0 的条目永不过期，没有 stale 语义。
+//
+// StaleIfError 开启时，过期真值条目**不被回收**——LocalConfig.StaleIfError
+// 的承诺是「过期条目在本路径下保留于表内……可反复兜底直至上游恢复」。此前
+// 后台清扫（缺省开启、TTL/2 一跳）会把过期真值一并删掉，惰性删除
+// （Get/GetEx/Exists）也是⇒ 兜底只在「[过期, 下次清扫)」这个窗口里有效，
+// 文档承诺落空（实测：TTL=100ms 时，清扫在 50ms 后就把兜底值删了）。
+func (c *LocalCache[T]) retainForStale(entry *localEntry[T]) bool {
+	if !c.cfg.StaleIfError || entry == nil {
+		return false
+	}
+	return !entry.isNull && !entry.expiresAt.IsZero()
+}
+
+// sweepNeeded 报告是否存在会过期的条目来源：真值 TTL 或 null marker TTL。
+//
+// 判据是「有没有会过期的条目」，不是「TTL 是否为正」——null marker 按
+// NullTTL 过期（缺省 1 分钟），TTL=0（真值永不过期）时 null marker 照样会
+// 过期。此前后台清扫只看 TTL>0 ⇒ 这类配置下过期 null marker 永远没人回收
+// （惰性删除只覆盖 Get/GetEx/Exists，回源路径是非删除式的）⇒ 无界增长。
+func (c *LocalCache[T]) sweepNeeded() bool {
+	return c.cfg.TTL > 0 || c.effectiveNullTTL() > 0
+}
+
+// sweepInterval 是后台清扫的节奏：最短过期窗口的一半（TTL 与 NullTTL 取小），
+// 下限 1s（time.NewTicker(0) 会 panic；TTL=1ns 之类整除为 0 的同型问题）。
+func (c *LocalCache[T]) sweepInterval() time.Duration {
+	horizon := c.cfg.TTL
+	if nullTTL := c.effectiveNullTTL(); nullTTL > 0 && (horizon <= 0 || nullTTL < horizon) {
+		horizon = nullTTL
+	}
+	interval := horizon / 2
+	if interval <= 0 {
+		interval = time.Second
+	}
+	return interval
 }
 
 // setNullMarker 写入 null marker 条目（与 Set 相同的锁纪律与淘汰逻辑）。
@@ -639,14 +723,16 @@ func (c *LocalCache[T]) Exists(ctx context.Context, key string) (bool, error) {
 	}
 
 	if entry.isExpired(c.now()) {
-		c.mu.Lock()
-		// 二次检查：同 Get，避免误删并发 Set 的新值。
-		if cur, exists := c.data[key]; exists && cur == entry {
-			delete(c.data, key)
-			c.removeFromOrder(key)
-			c.expirations.Add(1)
+		if !c.retainForStale(entry) {
+			c.mu.Lock()
+			// 二次检查：同 Get，避免误删并发 Set 的新值。
+			if cur, exists := c.data[key]; exists && cur == entry {
+				delete(c.data, key)
+				c.removeFromOrder(key)
+				c.expirations.Add(1)
+			}
+			c.mu.Unlock()
 		}
-		c.mu.Unlock()
 		return false, nil
 	}
 
@@ -656,7 +742,7 @@ func (c *LocalCache[T]) Exists(ctx context.Context, key string) (bool, error) {
 // Refresh 刷新缓存（删除后重新从 Source 加载）。
 func (c *LocalCache[T]) Refresh(ctx context.Context, key string) (*T, error) {
 	if e := c.Del(ctx, key); e != nil {
-		cacheLog.Warn("local cache refresh del failed", "key", key, "err", e)
+		cacheLogger().Warn("local cache refresh del failed", "key", key, "err", e)
 	}
 	return c.GetOrLoad(ctx, key)
 }
@@ -717,12 +803,10 @@ func (c *LocalCache[T]) Sweep(ctx context.Context) int {
 // ticker 只定节奏，过期判定一律走注入时钟——假时钟下真实 ticker 的时间戳
 // 不可比（直接比较会把全部条目误判为过期而清空）。
 func (c *LocalCache[T]) cleanup() {
-	// TTL/2 可能整除为 0（如 TTL=1ns），time.NewTicker(0) 会 panic
-	// （同型问题 KeyedLimiter 已修，此处补齐）；下限 1s 保底。
-	interval := c.cfg.TTL / 2
-	if interval <= 0 {
-		interval = time.Second
-	}
+	// 节奏取最短过期窗口的一半（TTL 与 NullTTL）——只按 TTL 算会漏掉
+	// 「TTL=0、靠 NullTTL 过期」这一类条目的及时回收；除以 2 可能整除为 0
+	// （如 TTL=1ns），time.NewTicker(0) 会 panic，下限 1s 保底。
+	interval := c.sweepInterval()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -738,11 +822,17 @@ func (c *LocalCache[T]) cleanup() {
 
 // sweepExpired 清扫过期条目，返回实际清除的条目数。
 // 分两阶段：读锁收集过期 key，写锁批量删除，减少写锁持有时间。
+//
+// StaleIfError 开启时，过期**真值**条目被跳过（保留给 stale 兜底）——
+// 见 retainForStale。
 func (c *LocalCache[T]) sweepExpired(now time.Time) int {
 	c.mu.RLock()
 	expired := make([]string, 0, 8)
 	for key, entry := range c.data {
 		if !entry.expiresAt.IsZero() && now.After(entry.expiresAt) {
+			if c.retainForStale(entry) {
+				continue // 保留给 stale-if-error 兜底
+			}
 			expired = append(expired, key)
 		}
 	}
@@ -757,6 +847,9 @@ func (c *LocalCache[T]) sweepExpired(now time.Time) int {
 	for _, key := range expired {
 		// 二次检查：可能已被其他 goroutine 更新
 		if entry, ok := c.data[key]; ok && entry.isExpired(now) {
+			if c.retainForStale(entry) {
+				continue
+			}
 			delete(c.data, key)
 			c.removeFromOrder(key)
 			removed++

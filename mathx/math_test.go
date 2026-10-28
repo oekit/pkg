@@ -77,9 +77,19 @@ func TestRangeRandFloat64(t *testing.T) {
 
 func TestProbabilityElems(t *testing.T) {
 	elems := []float64{0.1, 0.3, 0.6}
-	band := ProbabilityElems(elems, 0.1)
+	// precise 是精度基数，须 >= 1（precise<1 时 band 会退化为全 0 ⇒
+	// Probability 恒选 index 0）。此前本用例传 0.1，只断言 len(band)==3，
+	// 退化状态照样通过——该用例钉不住任何东西。
+	band := ProbabilityElems(elems, 1)
 	if len(band) != 3 {
 		t.Errorf("ProbabilityElems() length = %v, want 3", len(band))
+	}
+	// band 必须按**调用方给定的顺序**建立（与 elems 同序）。
+	want := []int{1, 4, 10}
+	for i := range want {
+		if band[i] != want[i] {
+			t.Fatalf("ProbabilityElems() band = %v, want %v", band, want)
+		}
 	}
 }
 
