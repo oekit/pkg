@@ -136,6 +136,23 @@ func TestReport_NameColumnAligned(t *testing.T) {
 	}
 }
 
+// TestReport_ResultOverrides 断言调用方可以给自己的结果行。
+//
+// 两个程序对「什么算坏了」的口径本就可能不同（有的把警告也算成「需要
+// 处理」，有的只算失败），措辞跟着口径走 ⇒ 结果行要能被覆盖。
+func TestReport_ResultOverrides(t *testing.T) {
+	r := NewReport("t")
+	r.Add(StatusFail, "f", "broken")
+	r.Result("result: 2 problem(s) need fixing (see FAIL above)")
+	out := r.String()
+	if !strings.Contains(out, "result: 2 problem(s) need fixing (see FAIL above)") {
+		t.Errorf("报告缺少调用方给的结果行，实际 =\n%s", out)
+	}
+	if strings.Contains(out, "result: failed") {
+		t.Errorf("自动生成的结果行应当被覆盖，实际 =\n%s", out)
+	}
+}
+
 // TestReport_EmptyReport 断言空报告不炸，且结论仍是 healthy。
 func TestReport_EmptyReport(t *testing.T) {
 	r := NewReport("t")

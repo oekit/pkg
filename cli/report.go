@@ -45,6 +45,7 @@ type Report struct {
 	header      []string
 	items       []ReportItem
 	conclusions []string
+	result      string
 }
 
 // NewReport 建一份报告。title 是第一行（通常是「<程序名> doctor」）。
@@ -89,6 +90,20 @@ func (r *Report) AddConclusion(line string) *Report {
 		return nil
 	}
 	r.conclusions = append(r.conclusions, line)
+	return r
+}
+
+// Result 设置最后一行结果，替换掉自动生成的那一行。
+//
+// 不调用它时，结果行按 Status() 自动生成（healthy / needs attention /
+// failed）。调用方要自己的措辞时用它覆盖——两个程序对「什么算坏了」的
+// 口径本就可能不同（有的把警告也算成「需要处理」，有的只算失败），措辞
+// 跟着口径走。
+func (r *Report) Result(text string) *Report {
+	if r == nil {
+		return nil
+	}
+	r.result = text
 	return r
 }
 
@@ -202,7 +217,11 @@ func (r *Report) String() string {
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
-	b.WriteString(r.resultLine())
+	if r.result != "" {
+		b.WriteString(r.result)
+	} else {
+		b.WriteString(r.resultLine())
+	}
 	b.WriteString("\n")
 	return b.String()
 }
