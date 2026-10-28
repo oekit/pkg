@@ -17,7 +17,10 @@ import (
 //     fmt.Errorf 在此产出 "%!w(<nil>)" 噪声，且整条包装链被丢弃——这正是
 //     Wrap 当初要解决的坑（见 Wrap 的注释），新原语不重蹈。
 //   - %w 的实参不是 error 时同样按 %v 渲染、不进链（fmt.Errorf 产出 "%!w(...)"）。
-//   - 格式化结果为空串时返回 nil（与 Wrap(nil, ...) → nil 同一取向）。
+//   - 格式化结果为空串**且没有 %w 被包装**时返回 nil（与 Wrap(nil, ...) → nil
+//     同一取向）。**有 %w 时不返回 nil**——被包装错误的报文为空（如
+//     errors.New("")）会让整条消息渲染成空串，此时返回 nil 等于把「失败」
+//     静默吞成「成功」：调用方的 `if err != nil` 分支整个跳过。
 //   - 多个 %w 时包装链是 Unwrap() []error（Go 1.20+ 多错误形态），
 //     errors.Is / errors.As 对链上每个错误都生效。
 //
@@ -46,7 +49,11 @@ func Errorf(format string, args ...any) error {
 	}
 
 	msg := fmt.Sprintf(rewritten, args...)
-	if msg == "" {
+	if msg == "" && len(wrapped) == 0 {
+		// 无被包装错误且消息为空 ⇒ 按「空即无」取向返回 nil。
+		// 有被包装错误时**不能**走这条捷径：被包装错误的报文为空
+		// （errors.New("")）会让整条消息渲染成空串，返回 nil 等于把失败
+		// 静默吞成成功——调用方的 `if err != nil` 分支整个跳过。
 		return nil
 	}
 	switch len(wrapped) {
