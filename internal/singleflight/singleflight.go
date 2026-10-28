@@ -57,15 +57,28 @@ func (f *Flight[T]) Do(ctx context.Context, key string, fn func(ctx context.Cont
 	// caller（首个执行 fn 的 goroutine）
 	// defer 保证：无论 fn 正常返回还是 panic，都关闭 ready 唤醒所有 waiter 并清理 map。
 	// fn panic 时先把 panic 转成 error 存给 waiter，再 re-panic 传播给首个 caller。
+	//
+	// 顺序：**先摘键、后唤醒**。反过来（先 close 后 Delete）会留一个窗口：
+	// 此刻新到的调用 LoadOrStore 命中的是**已结束**的那次 flight ⇒ 直接拿到
+	// 上一次的结果、根本不执行 fn ⇒ 陈旧结果被当成新鲜结果返回。
+	// golang.org/x/sync/singleflight 也是先摘键再唤醒。
 	defer func() {
 		if r := recover(); r != nil {
-			c.err = fmt.Errorf("singleflight: fn panic: %v", r)
-			close(c.ready)
+			// r 是 error 时用 %w 保留身份——waiter 才能 errors.Is/As 到原始错误；
+			// %v 只留文本，身份丢了。
+			var perr error
+			if e, ok := r.(error); ok {
+				perr = fmt.Errorf("singleflight: fn panic: %w", e)
+			} else {
+				perr = fmt.Errorf("singleflight: fn panic: %v", r)
+			}
+			c.err = perr
 			f.calls.Delete(key)
+			close(c.ready)
 			panic(r)
 		}
-		close(c.ready)
 		f.calls.Delete(key)
+		close(c.ready)
 	}()
 
 	c.val, c.err = fn(ctx)
