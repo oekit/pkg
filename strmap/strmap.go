@@ -93,11 +93,18 @@ func (m *StrMap[V]) LoadFromSlice(kk []string, vv []V) error {
 		sz += len(k)
 	}
 
-	m.data = m.data[:0]
+	// data 每次重载都**重新分配**，不复用旧缓冲。
+	//
+	// 此前是 `m.data = m.data[:0]` 后就地重写：key() 返回的是 data 上的
+	// unsafe.String 零拷贝视图，重载把旧缓冲的字节**就地改写** ⇒ 之前返回的
+	// 键字符串内容随之改变（破坏 Go 字符串不可变保证）。
+	// 实测：Get("k") 拿到 "v1" 后 LoadFromSlice 重写同一位置，旧字符串变成
+	// "w2"——调用方以为拿到的是快照，实际是个活引用。
+	//
+	// 重新分配后，旧视图仍指向旧缓冲（旧缓冲由视图保活）⇒ 视图在整个 StrMap
+	// 存活期间保持有效（doc.go 的承诺）。
+	m.data = make([]byte, 0, sz)
 	m.items = m.items[:0]
-	if cap(m.data) < sz {
-		m.data = make([]byte, 0, sz)
-	}
 	if cap(m.items) < len(vv) {
 		m.items = make([]mapItem[V], 0, len(vv))
 	}
@@ -262,11 +269,10 @@ func (s *strStore) Load(ss []string) ([]int, error) {
 		total += len(str)
 	}
 	idxes := make([]int, len(ss))
-	if cap(s.buf) < total {
-		s.buf = make([]byte, total)
-	} else {
-		s.buf = s.buf[:total]
-	}
+	// buf 每次重载都**重新分配**，不复用旧缓冲——否则重载会把旧缓冲的字节
+	// 就地改写，Get 之前返回的字符串视图内容随之改变（破坏 Go 字符串不可变
+	// 保证）。重新分配后旧视图仍指向旧缓冲（旧缓冲由视图保活）。
+	s.buf = make([]byte, total)
 	off := 0
 	for i, str := range ss {
 		idxes[i] = off
