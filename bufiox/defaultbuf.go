@@ -11,7 +11,17 @@ const (
 	directlyReadThreshold    = 4 * 1024
 	skipBufSize              = 64 * 1024
 	maxConsecutiveEmptyReads = 100
+	// maxBufferSize 是单个缓冲的容量上限（字节）。
+	//
+	// 缓冲容量按倍增找（size *= 2 直到 ≥ 请求量），而 size 是 int：请求量
+	// 超过 2^62 时倍增会溢出成负数，循环条件 `size < n` 永远成立 ⇒
+	// **无限循环**（实测 Next(1<<62+1) 永久挂起，goroutine 死等）。
+	// 超过上限直接报错，不进倍增循环。
+	maxBufferSize = 1 << 30 // 1GiB
 )
+
+// ErrTooLarge 的判定辅助：请求长度是否超出单个缓冲的容量上限。
+func exceedsMaxBuffer(n int) bool { return n > maxBufferSize }
 
 // DefaultReader 基于任意 io.Reader 的缓冲 Reader。
 // Next/Peek 返回内部缓冲的零拷贝视图；视图在 Release 之前始终有效
@@ -27,7 +37,17 @@ type DefaultReader struct {
 	rn      int // 自上次 Release 起累计消费字节数
 	bufSize int // 最小缓冲尺寸
 
-	rdErr error // 终态错误（读错误/io.EOF），粘滞到下次 Release
+	// rdErr 是终态错误（读错误/io.EOF）。
+	//
+	// **粘滞**：一旦发生，后续读操作直接返回它、不再碰底层 reader（与
+	// bufio.Reader 一致：终态后不再返回任何数据）。此前它只写不读，这层语义
+	// 形同虚设——每次操作都重新读底层（对端已断开时白白多一次 syscall），
+	// Release 文档承诺的「终态读错误…下一次操作仍返回」也没兑现。
+	//
+	// 缓冲里已有的数据仍照常交付：粘滞只挡「还要更多数据」的那一步，不挡
+	// 「把已读到的数据交出去」。Release 会清掉它（下个读取周期重新感知底层
+	// 状态，与 bufio 的 Reset 同口径）。
+	rdErr error
 }
 
 // NewDefaultReader 返回从 rd 读取的 DefaultReader（默认 8KiB 起步缓冲）。
@@ -49,9 +69,17 @@ func (r *DefaultReader) Buffered() int { return len(r.buf) - r.ri }
 // acquire 保证缓冲内未消费数据不少于 n 字节；空间不足时换新缓冲
 // （剩余数据搬移，旧缓冲若仍被视图引用则保活到 Release）。
 func (r *DefaultReader) acquire(n int) error {
+	if exceedsMaxBuffer(n) {
+		// 早于倍增循环返回：倍增到该量级会溢出成负数 ⇒ 无限循环。
+		return ErrTooLarge
+	}
 	if n > cap(r.buf)-r.ri {
 		size := r.bufSize
 		for ; size < n; size *= 2 {
+			if size > maxBufferSize/2 {
+				size = maxBufferSize
+				break
+			}
 		}
 		buf := make([]byte, 0, size)
 		if remaining := r.Buffered(); remaining > 0 {
@@ -72,6 +100,10 @@ func (r *DefaultReader) acquire(n int) error {
 	need := n - r.Buffered()
 	if need <= 0 {
 		return nil
+	}
+	// 终态错误已发生：不再碰底层（粘滞语义，见 stickyErr）。
+	if r.rdErr != nil {
+		return r.rdErr
 	}
 	nl, err := readAtLeast(r.rd, r.buf[len(r.buf):cap(r.buf)], need)
 	r.buf = r.buf[:len(r.buf)+nl]
@@ -174,6 +206,10 @@ func (r *DefaultReader) Skip(n int) error {
 			r.buf = nil
 			r.ri = 0
 		}
+		// 要碰底层 ⇒ 终态错误直接返回，不再读（粘滞语义）。
+		if r.rdErr != nil {
+			return wrapInsufficient(r.rdErr)
+		}
 		nn, err := skipReader(r.rd, n)
 		r.rn += nn
 		r.rdErr = err
@@ -230,9 +266,18 @@ func (r *DefaultReader) ReadBinary(bs []byte) (int, error) {
 	r.ri += n
 	if need := len(bs) - n; need > 0 {
 		if need >= directlyReadThreshold {
+			// 直读路径要碰底层 ⇒ 终态错误直接返回，不再读（粘滞语义）。
+			// 返回原始终态错误（io.EOF），与 acquire 路径及接口约定一致。
+			if r.rdErr != nil {
+				r.rn += n
+				return n, r.rdErr
+			}
 			nn, err := readAtLeast(r.rd, bs[n:], need)
 			r.rdErr = err
 			n += nn
+			// 此前这条路径**漏记 rn** ⇒ ReadLen 少算本次读到的全部字节
+			// （接口约定：ReadLen 由 Next/ReadBinary/Skip 累加）。
+			r.rn += n
 			return n, err
 		}
 		if err := r.acquire(need); err != nil {
@@ -262,7 +307,12 @@ func (r *DefaultReader) Read(bs []byte) (n int, err error) {
 		return n, nil
 	}
 	if len(bs) >= directlyReadThreshold {
+		// 直读路径要碰底层 ⇒ 终态错误直接返回，不再读（粘滞语义）。
+		if r.rdErr != nil {
+			return 0, r.rdErr
+		}
 		n, r.rdErr = r.rd.Read(bs)
+		r.rn += n
 		return n, r.rdErr
 	}
 	if err := r.acquire(1); err != nil {
@@ -274,8 +324,9 @@ func (r *DefaultReader) Read(bs []byte) (n int, err error) {
 	return n, nil
 }
 
-// Release 实现 Reader：丢掉保活引用与缓冲，重置读计数与 ref；
-// 终态读错误不重置（下一次操作仍返回，粘滞语义与上游一致）。
+// Release 实现 Reader：丢掉保活引用与缓冲，重置读计数、ref 与终态错误；
+// 终态错误在 Release 时清掉——下一个读取周期重新感知底层状态（与 bufio 的
+// Reset 同口径）。
 func (r *DefaultReader) Release(error) error {
 	for i := range r.toFree {
 		r.toFree[i] = nil
@@ -287,6 +338,7 @@ func (r *DefaultReader) Release(error) error {
 	}
 	r.ref = false
 	r.rn = 0
+	r.rdErr = nil
 	return nil
 }
 
@@ -308,18 +360,31 @@ func NewDefaultWriter(wd io.Writer) *DefaultWriter {
 	return &DefaultWriter{wd: wd}
 }
 
-func (w *DefaultWriter) acquire(n int) {
+// acquire 为 n 字节准备写缓冲；n 超出单缓冲上限时返回 ErrTooLarge。
+//
+// 容量按倍增找（ncap *= 2），而 ncap 是 int：n 超过 2^62 时倍增溢出成负数，
+// 循环条件 `ncap < n` 永远成立 ⇒ **无限循环**（同 Reader 侧的 acquire）。
+func (w *DefaultWriter) acquire(n int) error {
+	if exceedsMaxBuffer(n) {
+		return ErrTooLarge
+	}
 	if len(w.chunk)+n <= cap(w.chunk) {
-		return
+		return nil
 	}
 	if len(w.chunk) > 0 {
 		w.chunks = append(w.chunks, w.chunk)
 		w.chunk = nil
 	}
 	ncap := defaultBufSize
-	for ; ncap < n; ncap *= 2 {
+	for ncap < n {
+		if ncap > maxBufferSize/2 {
+			ncap = maxBufferSize
+			break
+		}
+		ncap *= 2
 	}
 	w.chunk = make([]byte, 0, ncap)
+	return nil
 }
 
 // writeDirect 把大块 bs 作为零拷贝段直接入队。
@@ -339,7 +404,9 @@ func (w *DefaultWriter) Malloc(n int) ([]byte, error) {
 	if n < 0 {
 		return nil, ErrNegativeCount
 	}
-	w.acquire(n)
+	if err := w.acquire(n); err != nil {
+		return nil, err
+	}
 	off := len(w.chunk)
 	w.chunk = w.chunk[:off+n]
 	w.wl += n
@@ -356,7 +423,9 @@ func (w *DefaultWriter) WriteBinary(bs []byte) (int, error) {
 		w.wl += len(bs)
 		return len(bs), nil
 	}
-	w.acquire(len(bs))
+	if err := w.acquire(len(bs)); err != nil {
+		return 0, err
+	}
 	n := copy(w.chunk[len(w.chunk):cap(w.chunk)], bs)
 	w.chunk = w.chunk[:len(w.chunk)+n]
 	w.wl += len(bs)
