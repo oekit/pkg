@@ -27,7 +27,15 @@ type BizError struct {
 
 // Error 实现 error 接口。
 // 包含 BizCode 以确保日志中不丢失业务码上下文。
+//
+// nil 接收者不 panic：typed-nil（`var e *BizError; var err error = e`）是
+// Go 里极常见的形态——函数返回 *BizError 而调用方把它赋给 error 接口时，
+// 接口本身非 nil。此时任何日志/格式化路径调用 Error() 都会空指针崩溃，
+// 把「错误处理出错了」变成「进程崩了」。
 func (e *BizError) Error() string {
+	if e == nil {
+		return "<nil *BizError>"
+	}
 	if e.Cause != nil {
 		return fmt.Sprintf("biz_code:%d %s: %s", e.BizCode, e.Message, e.Cause.Error())
 	}
@@ -36,11 +44,17 @@ func (e *BizError) Error() string {
 
 // Unwrap 实现 errors.Unwrap 接口，支持 errors.Is / errors.As 链式匹配。
 func (e *BizError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
 	return e.Cause
 }
 
 // String 实现 fmt.Stringer 接口。
 func (e *BizError) String() string {
+	if e == nil {
+		return "<nil *BizError>"
+	}
 	return fmt.Sprintf("biz_code:%d http_code:%d msg:%s", e.BizCode, e.HTTPCode, e.Message)
 }
 
@@ -97,15 +111,21 @@ func WrapBizErrorWithStatus(bizCode, httpCode int, msg string, cause error) *Biz
 }
 
 // IsBizError 检查错误是否为 BizError 类型。
+//
+// typed-nil（`var e *BizError; var err error = e`）不算命中：接口非 nil 但
+// 指向 nil 指针，此时按文档取 b.BizCode 就是空指针解引用。
 func IsBizError(err error) bool {
-	var bizErr *BizError
-	return stderrors.As(err, &bizErr)
+	bizErr, ok := AsBizError(err)
+	return ok && bizErr != nil
 }
 
 // AsBizError 从错误链中提取 BizError。
+//
+// 第二个返回值在「链上是 typed-nil *BizError」时为 false——此时 bizErr 为
+// nil 指针，按文档用法 `if ok { use b.BizCode }` 直接用就会崩。
 func AsBizError(err error) (*BizError, bool) {
 	var bizErr *BizError
-	if stderrors.As(err, &bizErr) {
+	if stderrors.As(err, &bizErr) && bizErr != nil {
 		return bizErr, true
 	}
 	return nil, false
