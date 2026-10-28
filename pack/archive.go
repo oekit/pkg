@@ -40,7 +40,7 @@ func OpenVersion(r io.ReaderAt, size int64, expected int) (*Archive, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries, names := indexEntries(zr)
+	entries, names, _ := indexEntries(zr)
 	sort.Strings(names)
 	return &Archive{zr: zr, manifest: m, entries: entries, names: names}, nil
 }
@@ -85,7 +85,7 @@ func (a *Archive) ReadJSONL(name string, fn func(json.RawMessage) error) error {
 	br := bufio.NewReader(rc)
 	lineNo := 0
 	for {
-		line, err := br.ReadBytes('\n')
+		line, err := readLine(br, maxLineSize)
 		if len(line) > 0 {
 			trimmed := bytes.TrimSpace(line)
 			if len(trimmed) > 0 {
@@ -129,4 +129,32 @@ func (a *Archive) ReadJSONLInto(name string, dst any) error {
 		elem.Set(reflect.Append(elem, item.Elem()))
 		return nil
 	})
+}
+
+// maxLineSize 限制 JSONL 的单行长度（8MB）。
+//
+// bufio.Reader.ReadBytes 会为超长行**无限增长**（bufio 的 4KB 缓冲不是上限）⇒
+// 一个「一行几百 MB」的条目就能把内存吃满。
+const maxLineSize = 8 << 20
+
+// readLine 读一行（含换行符），超过 limit 字节即报错。
+//
+// bufio.Reader.ReadBytes 会为超长行无限增长 ⇒ 改用 ReadSlice + 手动拼接，
+// 并在超限时立刻停手。
+func readLine(br *bufio.Reader, limit int) ([]byte, error) {
+	var buf []byte
+	for {
+		chunk, err := br.ReadSlice('\n')
+		buf = append(buf, chunk...)
+		if len(buf) > limit {
+			return nil, fmt.Errorf("单行超过 %d 字节上限", limit)
+		}
+		if err == nil {
+			return buf, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return buf, err
+	}
 }
