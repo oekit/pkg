@@ -38,7 +38,11 @@ func (merr *MultiError) Errors() []error {
 
 // Is 实现 errors.Is 接口，遍历所有子错误进行匹配。
 func (merr *MultiError) Is(target error) bool {
-	for _, err := range merr.Errors() {
+	if merr == nil {
+		return false
+	}
+	// 直接遍历内部切片（只读），不必走 Errors() 的防御性拷贝。
+	for _, err := range merr.errors {
 		if errors.Is(err, target) {
 			return true
 		}
@@ -49,11 +53,14 @@ func (merr *MultiError) Is(target error) bool {
 // Unwrap 支持 errors.As / errors.Is 遍历子错误（Go 1.20 多错误解包）。
 // 没有它，聚合进 MultiError 的 BizError 无法被 errors.As 识别，
 // mw.Fail 会把本应 404 的错误降级为 500。
+//
+// 返回**防御性拷贝**（同 Errors()）：直接返回内部切片会把 Append 的
+// copy-on-write 前提捅穿——调用方拿到切片后改写元素，内部状态随之被改。
 func (merr *MultiError) Unwrap() []error {
 	if merr == nil {
 		return nil
 	}
-	return merr.errors
+	return slices.Clone(merr.errors)
 }
 
 // Error 返回所有错误用 "; " 连接的字符串。

@@ -1,6 +1,7 @@
 package mathx
 
 import (
+	"math"
 	"math/rand"
 	"time"
 )
@@ -21,9 +22,14 @@ type Unstable struct {
 // NewUnstable 创建抖动器。deviation 夹到 [0,1]：负值取 0，大于 1 取 1
 // （deviation>1 会让结果越过 0 甚至变号，对 TTL/数量类语义无意义）。
 func NewUnstable(deviation float64) Unstable {
-	if deviation < 0 {
+	switch {
+	case math.IsNaN(deviation):
+		// NaN 与任何值比较都是 false ⇒ 不夹的话 NaN 会一路传下去，
+		// int(NaN) 得到实现相关的垃圾整数（TTL 抖动场景下就是垃圾 TTL）。
 		deviation = 0
-	} else if deviation > 1 {
+	case deviation < 0:
+		deviation = 0
+	case deviation > 1:
 		deviation = 1
 	}
 	return Unstable{deviation: deviation}

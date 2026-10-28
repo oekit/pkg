@@ -131,8 +131,13 @@ WRAP:
 
 	// 检查月份
 	for 1<<uint(t.Month())&s.Month == 0 {
-		t = t.AddDate(0, 1, 0)
+		// 先归一到**当月 1 号**再加一个月——顺序反了会整个跳过目标月：
+		// AddDate(0,1,0) 在「当前日 > 目标月天数」时会溢出到再下个月
+		// （1/31 + 1 月 → 3/3），随后的「复位到 1 号」就锁死在**溢出后**的
+		// 月份 ⇒ 目标月被跳过（实测："0 0 0 1 2 *" 从 1/31 求值，下次触发
+		// 晚一年：2025-01-31 → 2026-02-01；月底重启的月度/年度任务最常见）。
 		t = time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, s.Location)
+		t = t.AddDate(0, 1, 0)
 		if t.Month() == time.January {
 			goto WRAP
 		}
@@ -225,14 +230,29 @@ func parseRange(s string, min, max uint64, bits *uint64) error {
 		return nil
 	}
 
-	// 处理范围 a-b
+	// 处理范围 a-b（可带步长 a-b/n）
 	parts := strings.SplitN(s, "-", 2)
 	if len(parts) == 2 {
 		start, err := parseUint(parts[0])
 		if err != nil {
 			return err
 		}
-		end, err := parseUint(parts[1])
+		// 上界可能带步长（"a-b/n"）——**先按 "/" 切分再分别解析**：
+		// 直接 parseUint(parts[1]) 会拿 "5/2" 去解析而报错（ParseUint 全串
+		// 严格校验），"a-b/n" 永远走不到下面的步长分支（该分支此前是死代码）。
+		endPart := parts[1]
+		step := uint64(1)
+		if stepParts := strings.SplitN(parts[1], "/", 2); len(stepParts) == 2 {
+			endPart = stepParts[0]
+			step, err = parseUint(stepParts[1])
+			if err != nil {
+				return err
+			}
+			if step == 0 {
+				return fmt.Errorf("step cannot be zero")
+			}
+		}
+		end, err := parseUint(endPart)
 		if err != nil {
 			return err
 		}
@@ -242,28 +262,8 @@ func parseRange(s string, min, max uint64, bits *uint64) error {
 		if start < min || end > max {
 			return fmt.Errorf("out of range [%d, %d]: %s", min, max, s)
 		}
-
-		// 检查是否有步长
-		stepParts := strings.SplitN(parts[1], "/", 2)
-		if len(stepParts) == 2 {
-			step, err := parseUint(stepParts[1])
-			if err != nil {
-				return err
-			}
-			if step == 0 {
-				return fmt.Errorf("step cannot be zero")
-			}
-			end, err = parseUint(stepParts[0])
-			if err != nil {
-				return err
-			}
-			for i := start; i <= end; i += step {
-				*bits |= 1 << i
-			}
-		} else {
-			for i := start; i <= end; i++ {
-				*bits |= 1 << i
-			}
+		for i := start; i <= end; i += step {
+			*bits |= 1 << i
 		}
 		return nil
 	}
@@ -383,7 +383,13 @@ func SortEntries(entries []Entry) {
 }
 
 // NextSchedule 返回最近的 N 个调度时间。
+//
+// n <= 0 返回空切片（不做任何调度计算）——负数此前会传给 make([]time.Time, 0, n)
+// 直接 panic（makeslice: cap out of range）。
 func NextSchedule(s Schedule, from time.Time, n int) []time.Time {
+	if n <= 0 {
+		return []time.Time{}
+	}
 	times := make([]time.Time, 0, n)
 	t := from
 	for i := 0; i < n; i++ {

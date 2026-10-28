@@ -94,7 +94,8 @@ func TestLocalCache_Stats_ReadCounting(t *testing.T) {
 
 // TestLocalCache_Stats_GetOrLoadCounting 钉住 GetOrLoad 的计数口径：
 // 未命中回源记 1 次未命中、命中记 1 次命中；stale 兜底（回源失败回退过期
-// 真值）算命中。
+// 真值）算**未命中**（拿到的是已过期的条目，按 Stats 的 Hits 口径
+// 「读到未过期的真值条目」不属于命中）——一次读恰好计入命中或未命中之一。
 func TestLocalCache_Stats_GetOrLoadCounting(t *testing.T) {
 	c := NewLocalCache(LocalConfig[string]{
 		TTL:          time.Minute,

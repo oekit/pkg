@@ -6,6 +6,7 @@ package cache
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -81,6 +82,30 @@ func (c *Checker) Check(ctx context.Context) error {
 	call := &refreshCall{done: make(chan struct{})}
 	c.inflight = call
 	c.mu.Unlock()
+
+	// 清理必须在 defer 里，且必须覆盖 panic 路径。
+	//
+	// 此前清理写在 refresh 之后：refresh 一旦 panic，`c.inflight = nil` 与
+	// `close(call.done)` 都不会执行 ⇒ inflight 永远挂着、done 永远不关 ⇒
+	// 后续每一次 Check 都卡在 `<-call.done` 上（context.Background() 下是
+	// **永久挂起**，不是报错）——一次 refresh 的 panic 把 Checker 彻底废掉。
+	//
+	// panic 处理与 internal/singleflight 同型：先把 panic 转成 error 交给
+	// 等待者（他们不该跟着崩，但需要知道「这次刷新失败了」），再把 panic
+	// 原样抛给首个调用方（保留原始调用栈）。
+	defer func() {
+		if r := recover(); r != nil {
+			perr := fmt.Errorf("cache: refresh panic: %v", r)
+			c.mu.Lock()
+			c.cachedErr = perr
+			c.validUntil = c.now().Add(c.failTTL)
+			c.inflight = nil
+			c.mu.Unlock()
+			call.err = perr
+			close(call.done)
+			panic(r)
+		}
+	}()
 
 	err := c.refresh(ctx)
 
