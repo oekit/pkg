@@ -62,6 +62,13 @@ func (f *Flight[T]) Do(ctx context.Context, key string, fn func(ctx context.Cont
 	// 此刻新到的调用 LoadOrStore 命中的是**已结束**的那次 flight ⇒ 直接拿到
 	// 上一次的结果、根本不执行 fn ⇒ 陈旧结果被当成新鲜结果返回。
 	// golang.org/x/sync/singleflight 也是先摘键再唤醒。
+	//
+	// 摘键用 CompareAndDelete 而非 Delete：Delete 是**无条件**删除 key，
+	// 而 Forget(key) 之后可能已经注册了同 key 的**新** call ⇒ 本次清理会把
+	// 那条新记录一起删掉 ⇒ 第三个调用方会另起一次 fn ⇒「同 key 只执行一次
+	// fn」的承诺被打破（x/sync/singleflight 用 `if g.m[key] == c` 判同一）。
+	// concurrency/singleflight 已修同一处缺陷；两侧语义必须一致，否则跑在
+	// 同一套契约套件上的两个实现会给出「都通过了」的假保证（#147）。
 	defer func() {
 		if r := recover(); r != nil {
 			// r 是 error 时用 %w 保留身份——waiter 才能 errors.Is/As 到原始错误；
@@ -73,11 +80,11 @@ func (f *Flight[T]) Do(ctx context.Context, key string, fn func(ctx context.Cont
 				perr = fmt.Errorf("singleflight: fn panic: %v", r)
 			}
 			c.err = perr
-			f.calls.Delete(key)
+			f.calls.CompareAndDelete(key, c)
 			close(c.ready)
 			panic(r)
 		}
-		f.calls.Delete(key)
+		f.calls.CompareAndDelete(key, c)
 		close(c.ready)
 	}()
 

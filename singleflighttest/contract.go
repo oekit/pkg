@@ -24,6 +24,7 @@ type Flight[T any] interface {
 //   - waiter 独立 ctx 取消不连坐（不拖垮 caller/其他 waiter）
 //   - lead panic：waiter 得 error（非伪成功零值），caller 收到 panic，key 清理
 //   - Forget 后可重入新 fn
+//   - **Forget 竞态**：旧 call 的收尾不得删掉新注册的 call（#147）
 //   - 不同 key 互不阻塞
 //   - fn error 原样透传给全部调用方
 //   - **一次飞行结束后，新调用必须重新执行 fn**（key 已释放，不得复用上次的
@@ -34,6 +35,7 @@ func Run[T any](t *testing.T, factory func() Flight[T]) {
 	t.Run("WaiterCtxCancelIndependent", func(t *testing.T) { runWaiterCtxCancel(t, factory()) })
 	t.Run("PanicPropagatesAndCleansKey", func(t *testing.T) { runPanic(t, factory()) })
 	t.Run("ForgetAllowsRerun", func(t *testing.T) { runForget(t, factory()) })
+	t.Run("ForgetRaceKeepsNewerCall", func(t *testing.T) { runForgetRace(t, factory()) })
 	t.Run("DifferentKeysParallel", func(t *testing.T) { runDifferentKeys(t, factory()) })
 	t.Run("ErrorPropagates", func(t *testing.T) { runError(t, factory()) })
 	t.Run("AfterFlightNewCallRerunsFn", func(t *testing.T) { runAfterFlightReruns(t, factory()) })
@@ -250,6 +252,90 @@ func runForget[T any](t *testing.T, f Flight[T]) {
 		t.Fatalf("Forget 后未重入新 fn, calls=%d", calls.Load())
 	}
 	close(gate)
+}
+
+// runForgetRace 钉住「Forget 之后，旧 call 的收尾不得删掉新注册的 call」。
+//
+// 时序：
+//
+//	G1 注册 c1（慢 fn）→ Forget("k") → G2 注册 c2（仍在飞行）→ G1 结束 →
+//
+//	旧 call 的收尾若无条件删 key ⇒ 把 c2 一起删掉 → G3 到达时另起一次 fn
+//
+// ⇒「同 key 只执行一次 fn」的承诺被打破，且两次 fn **并发**跑。
+//
+// 为什么单列一条（旧 runForget 覆盖不到）：旧 runForget 只断言「Forget 后
+// 单次新 Do 会重跑 fn」，**不构造**「旧 call 与新 call 交叠」的时序 ⇒
+// 这条缺陷在契约套件里**不可观测** ⇒ 两个语义已经漂移的实现都能通过套件，
+// 于是「同一套契约 ⇒ 两侧语义一致」这个前提失效且无人察觉（#147）。
+func runForgetRace[T any](t *testing.T, f Flight[T]) {
+	t.Helper()
+	var calls atomic.Int32
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+	releaseSecond := make(chan struct{})
+
+	// G1：注册 c1（慢 fn）。
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		_, _ = f.Do(context.Background(), "k", func(ctx context.Context) (T, error) {
+			calls.Add(1)
+			close(firstStarted)
+			<-releaseFirst
+			var zero T
+			return zero, nil
+		})
+	}()
+	<-firstStarted
+
+	// Forget：c1 从实现里摘掉。
+	f.Forget("k")
+
+	// G2：注册 c2（同 key，**仍在飞行中**的慢 fn）。
+	go func() {
+		_, _ = f.Do(context.Background(), "k", func(ctx context.Context) (T, error) {
+			calls.Add(1)
+			close(secondStarted)
+			<-releaseSecond
+			var zero T
+			return zero, nil
+		})
+	}()
+	<-secondStarted
+
+	// G1 结束：它的收尾**不得**删掉还在飞行中的 c2。
+	// 等 firstDone ⇒ G1 的 Do 已返回 ⇒ 其收尾（清理）必然已完成（**有界**，
+	// 不靠 sleep 赌时序）。
+	close(releaseFirst)
+	select {
+	case <-firstDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("旧 call 未结束：实现卡住了")
+	}
+
+	// G3 到达：c2 仍在飞行中 ⇒ 应**加入**它，而不是另起一次 fn。
+	thirdDone := make(chan struct{})
+	go func() {
+		defer close(thirdDone)
+		_, _ = f.Do(context.Background(), "k", func(ctx context.Context) (T, error) {
+			calls.Add(1)
+			var zero T
+			return zero, nil
+		})
+	}()
+	select {
+	case <-thirdDone:
+		t.Fatal("G3 立即返回了：它没有加入仍在飞行中的 c2（旧 call 的收尾误删了 c2）")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("fn 执行次数 = %d，期望 2（旧 call 的收尾误删了仍在飞行中的 c2 ⇒ G3 又起了一次）", got)
+	}
+	close(releaseSecond)
+	<-thirdDone
 }
 
 func runDifferentKeys[T any](t *testing.T, f Flight[T]) {
