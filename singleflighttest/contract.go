@@ -26,6 +26,8 @@ type Flight[T any] interface {
 //   - Forget 后可重入新 fn
 //   - 不同 key 互不阻塞
 //   - fn error 原样透传给全部调用方
+//   - **一次飞行结束后，新调用必须重新执行 fn**（key 已释放，不得复用上次的
+//     结果）
 func Run[T any](t *testing.T, factory func() Flight[T]) {
 	t.Helper()
 	t.Run("DedupSameKey", func(t *testing.T) { runDedup(t, factory()) })
@@ -34,6 +36,7 @@ func Run[T any](t *testing.T, factory func() Flight[T]) {
 	t.Run("ForgetAllowsRerun", func(t *testing.T) { runForget(t, factory()) })
 	t.Run("DifferentKeysParallel", func(t *testing.T) { runDifferentKeys(t, factory()) })
 	t.Run("ErrorPropagates", func(t *testing.T) { runError(t, factory()) })
+	t.Run("AfterFlightNewCallRerunsFn", func(t *testing.T) { runAfterFlightReruns(t, factory()) })
 }
 
 func runDedup[T any](t *testing.T, f Flight[T]) {
@@ -93,11 +96,25 @@ func runWaiterCtxCancel[T any](t *testing.T, f Flight[T]) {
 	wctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, err := f.Do(wctx, "k", func(ctx context.Context) (T, error) {
-		t.Error("waiter 不应执行 fn")
-		var zero T
-		return zero, nil
-	})
+	// Do 放在 goroutine 里 + **有界等待**：实现若完全忽略 ctx，Do 会一直阻塞，
+	// 而 block 只在 Do 返回后才关 ⇒ 死锁（测试挂到 go test 的 10 分钟超时，
+	// 而不是干脆地失败）。
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := f.Do(wctx, "k", func(ctx context.Context) (T, error) {
+			t.Error("waiter 不应执行 fn")
+			var zero T
+			return zero, nil
+		})
+		errCh <- err
+	}()
+	var err error
+	select {
+	case err = <-errCh:
+	case <-time.After(2 * time.Second):
+		close(block)
+		t.Fatal("waiter 未响应 ctx 取消：实现忽略了调用方的 ctx（不应挂死）")
+	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		close(block)
 		t.Fatalf("waiter err = %v, want DeadlineExceeded", err)
@@ -209,10 +226,9 @@ func runForget[T any](t *testing.T, f Flight[T]) {
 			return zero, nil
 		})
 	}()
-	// 等 caller 进入
-	for calls.Load() == 0 {
-		time.Sleep(5 * time.Millisecond)
-	}
+	// 等 caller 进入（**有界**：实现若永远不调 fn，这里必须干脆地失败而不是
+	// 无限轮询挂到 go test 的 10 分钟超时）。
+	waitFor(t, "caller 未进入 fn", func() bool { return calls.Load() > 0 })
 	f.Forget("k")
 
 	// Forget 后新调用应能触发新 fn（不与旧 call 共享）
@@ -263,10 +279,9 @@ func runDifferentKeys[T any](t *testing.T, f Flight[T]) {
 			})
 		}(i)
 	}
-	// 等两个 fn 都进入
-	for running.Load() < 2 {
-		time.Sleep(5 * time.Millisecond)
-	}
+	// 等两个 fn 都进入（**有界**：实现若把不同 key 串行化了，这里必须干脆地
+	// 失败而不是无限轮询挂死）。
+	waitFor(t, "不同 key 未并行执行：第二个 fn 未进入", func() bool { return running.Load() >= 2 })
 	close(release)
 	wg.Wait()
 	if max.Load() != 2 {
@@ -299,5 +314,47 @@ func runError[T any](t *testing.T, f Flight[T]) {
 		if !errors.Is(errs[i], want) {
 			t.Fatalf("caller %d err = %v, want %v", i, errs[i], want)
 		}
+	}
+}
+
+// runAfterFlightReruns 钉住「一次飞行结束后，新调用必须重新执行 fn」。
+//
+// 这是 key 释放语义的**可观测**部分：飞行结束后 key 必须已从实现里摘掉，
+// 否则后续调用会复用上一次的 call、拿到**陈旧结果**而不执行 fn。
+//
+// 注：实现内部「先摘键后唤醒」与「先唤醒后摘键」的差别落在飞行完成与唤醒之间
+// 的一个极窄窗口里，**通过公开 API 无法确定观测**（并发到达的调用方拿到上一次
+// 结果是**合法的去重**，与陈旧结果不可区分）⇒ 本用例只钉住可观测的性质；
+// 窄窗口由实现仓自己的用例守住。
+func runAfterFlightReruns[T any](t *testing.T, f Flight[T]) {
+	t.Helper()
+	var calls atomic.Int32
+	fn := func(_ context.Context) (T, error) {
+		calls.Add(1)
+		var zero T
+		return zero, nil
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := f.Do(context.Background(), "k", fn); err != nil {
+			t.Fatalf("第 %d 次 Do = %v", i+1, err)
+		}
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("飞行结束后新调用未重新执行 fn (calls=%d，期望 3)——key 未释放", got)
+	}
+}
+
+// waitFor 有界等待 cond 成立；超时则 t.Fatal（并给出原因）。
+//
+// 契约套件里所有「等实现进入某个状态」的等待都必须有界：实现有缺陷时，
+// 正确表现是**干脆地失败**，而不是把 CI 挂到 go test 的 10 分钟超时。
+func waitFor(t *testing.T, msg string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal(msg)
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }

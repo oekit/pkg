@@ -8,6 +8,7 @@ import "strconv"
 //   - 以 "y" 结尾且前一个字符为辅音 → 去 "y" 加 "ies" (story → stories)
 //   - 以 "s", "sh", "ch", "x", "z" 结尾 → 加 "es" (box → boxes)
 //   - 其他 → 加 "s" (file → files)
+//   - word 为空 → "<count> "（计数仍然保留）
 //
 // 用法:
 //
@@ -21,7 +22,10 @@ func Pluralize(count int, word string) string {
 
 	n := len(word)
 	if n == 0 {
-		return "0"
+		// 空词：仍然要带上计数。此前返回字面量 "0"——**丢掉了 count**
+		// （Pluralize(5, "") 返回的也是 "0"）。形态与其他分支一致：
+		// "<count> <word>"。
+		return itoa(count) + " " + word
 	}
 
 	last := word[n-1]
@@ -45,7 +49,7 @@ func Pluralize(count int, word string) string {
 	return itoa(count) + " " + word + "s"
 }
 
-// itoa 简单整数转字符串，避免引入 strconv。
+// itoa 简单整数转字符串。
 func itoa(n int) string {
 	// strconv 标准实现：原手写版 for n>0 循环对负数返回空串
 	return strconv.Itoa(n)

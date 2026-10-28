@@ -162,11 +162,16 @@ func TakeWithPriority(fns ...func() string) string {
 }
 
 // ToCamelCase 将字符串首字母转为小写。
+//
+// 按 rune 处理（多字节首字符不被截断）。非法 UTF-8 字节不 panic：range 会把
+// 非法字节解成 U+FFFD，其**实际**宽度是 1 字节，而 utf8.RuneLen(U+FFFD) 是 3
+// ⇒ 此前用 RuneLen 切片会越界（slice bounds out of range [3:1]）。
 func ToCamelCase(s string) string {
 	for i, v := range s {
-		// i 是首 rune 的字节偏移，须按其 UTF-8 宽度切片，
-		// 否则多字节首字符会截掉后续字节、产生损坏的 UTF-8
-		return string(unicode.ToLower(v)) + s[i+utf8.RuneLen(v):]
+		// 用实际解码宽度切片：合法 UTF-8 时与 utf8.RuneLen(v) 相同，
+		// 非法字节时是 1（range 消费掉的字节数）。
+		_, size := utf8.DecodeRuneInString(s[i:])
+		return string(unicode.ToLower(v)) + s[i+size:]
 	}
 	return ""
 }

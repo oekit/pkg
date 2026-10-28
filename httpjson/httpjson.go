@@ -65,6 +65,8 @@ func DoJSON(ctx context.Context, client *http.Client, req Request, out any) erro
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	// 排空剩余响应体，连接才能被复用（见 drainBody）。
+	drainBody(resp.Body)
 	if err != nil {
 		return fmt.Errorf("读取响应失败: %w", err)
 	}
@@ -77,7 +79,7 @@ func DoJSON(ctx context.Context, client *http.Client, req Request, out any) erro
 	return nil
 }
 
-// DoRaw 执行请求并返回**原始**状态码与响应体：不判 2xx、不截断报文、不解 JSON。
+// DoRaw 执行请求并返回**原始**状态码与响应体：不判 2xx、不解 JSON。
 //
 // 适用面（DoJSON 不适用的那些）：
 //   - 调用方要**按状态码映射自己的语义**（如 404/409 → 各自的哨兵错误）；
@@ -85,11 +87,14 @@ func DoJSON(ctx context.Context, client *http.Client, req Request, out any) erro
 //     200 字符的**摘要**，不是原文）。
 //
 // limit 是读体上限（字节）：<=0 时用包级 maxBody。调用方应按自己的报文体量
-// 给一个够用又防内存放大的值（如 8KB）。
+// 给一个够用又防内存放大的值（如 8KB）。**超过 limit 的部分会被截断**，
+// 且截断**在 RawResponse.Truncated 里如实标记**——调用方据此判断拿到的是
+// 完整报文还是半截（截断对调用方不可见是最容易埋雷的形态：拿半截 JSON 去
+// 解析会得到难以定位的解析错误，拿半截报文进错误文案会丢服务端说明）。
 //
 // 传输层错误（连不上/超时）返回 err，status/body 无意义；HTTP 层错误（任何状态码）
 // 一律返回 nil err，由调用方按状态码自行判定。
-func DoRaw(ctx context.Context, client *http.Client, req Request, limit int64) (int, []byte, error) {
+func DoRaw(ctx context.Context, client *http.Client, req Request, limit int64) (RawResponse, error) {
 	if limit <= 0 {
 		limit = maxBody
 	}
@@ -103,21 +108,60 @@ func DoRaw(ctx context.Context, client *http.Client, req Request, limit int64) (
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, body)
 	if err != nil {
-		return 0, nil, fmt.Errorf("构造请求失败: %w", err)
+		return RawResponse{}, fmt.Errorf("构造请求失败: %w", err)
 	}
 	if req.Header != nil {
 		req.Header(httpReq.Header)
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return 0, nil, fmt.Errorf("请求失败: %w", err)
+		return RawResponse{}, fmt.Errorf("请求失败: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit))
-	if err != nil {
-		return resp.StatusCode, nil, fmt.Errorf("读取响应失败: %w", err)
+
+	// 读 limit+1 字节：多读的那一个字节用来判断报文是否被截断。
+	readLimit := limit
+	if limit < math.MaxInt64 {
+		readLimit = limit + 1
 	}
-	return resp.StatusCode, raw, nil
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, readLimit))
+	if err != nil {
+		drainBody(resp.Body)
+		return RawResponse{StatusCode: resp.StatusCode}, fmt.Errorf("读取响应失败: %w", err)
+	}
+	truncated := int64(len(raw)) > limit
+	if truncated {
+		raw = raw[:int(limit)] // len(raw) > limit ⇒ limit 必然落在 int 范围内
+	}
+	// 排空剩余响应体，连接才能被复用（见 drainBody）。
+	drainBody(resp.Body)
+	return RawResponse{StatusCode: resp.StatusCode, Body: raw, Truncated: truncated}, nil
+}
+
+// RawResponse 是 DoRaw 的原始响应结果。
+type RawResponse struct {
+	// StatusCode 是 HTTP 状态码（不判 2xx，由调用方按自己的语义映射）。
+	StatusCode int
+	// Body 是响应体原始字节（最多 limit 字节）。
+	Body []byte
+	// Truncated 报告 Body 是否因超过 limit 而被截断。
+	//
+	// 截断本身是刻意的（limit 防内存放大），但**必须可观测**——否则调用方
+	// 会把「半截报文」当成完整报文用。
+	Truncated bool
+}
+
+// drainLimit 是「读完后额外排空」的字节上限。
+//
+// Go 的 transport 只有在响应体被读完时才把连接放回空闲池；只读到 limit 就
+// Close ⇒ 连接被丢弃 ⇒ 下次调用要重建 TCP（+ TLS 握手）。排空量有上限是
+// 为了防「对端用超大响应体拖住本次调用」：排不干净就放弃复用、让连接被
+// 关闭即可——不为了复用把时间与内存赌上去。
+const drainLimit = 64 << 10
+
+// drainBody 排空响应体剩余部分，让连接能被 transport 复用。
+func drainBody(r io.Reader) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(r, drainLimit))
 }
 
 // StatusError 非 2xx 响应错误：供重试判定等按状态码分类（errors.As 提取）。

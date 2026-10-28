@@ -198,12 +198,14 @@ func limitFileNameLength(s string, maxBytes int) string {
 		// 扩展名自己就超限：保不住就丢掉，整体按主名截断。
 		return truncateFileNameBytes(stem, maxBytes)
 	}
-	stem = truncateFileNameBytes(stem, budget)
-	if stem == "" {
-		// 预算连一个完整 rune 都放不下：整体截断（否则只剩一个裸扩展名）。
-		return truncateFileNameBytes(s, maxBytes)
+	if cut := truncateFileNameBytes(stem, budget); cut != "" {
+		return cut + ext
 	}
-	return stem + ext
+	// 预算连一个完整 rune 都放不下 ⇒ **丢弃扩展名**、只留按总预算截断的主名。
+	// 此前是「整体截断 s」——那会砍进扩展名（"中.txt" + 上限 5 字节 → "中.t"），
+	// 而半个扩展名比没有扩展名更糟：扩展名是骗人的，下游按它判类型会判错
+	// （本函数自己的文档就写着这条）。
+	return truncateFileNameBytes(stem, maxBytes)
 }
 
 // fileNameExt 取扩展名（含点号），无扩展名返回空串。
