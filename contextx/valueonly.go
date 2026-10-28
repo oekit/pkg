@@ -32,5 +32,11 @@ func (v valueOnly) Value(key any) any {
 // 适合把请求 ctx 携带的值交给后台任务（配合 async.GoSafe 等），
 // 同时切断内部取消的传播。parent 须非 nil（与标准库行为一致）。
 func ValueOnlyFrom(parent context.Context) context.Context {
+	if parent == nil {
+		// 立即 panic（与标准库 context.WithValue 的 nil parent 口径一致）：
+		// 不校验的话，nil 会在**后面**某次 Value 调用里炸（nil 接口解引用），
+		// 堆栈离「传错了」的原因很远。
+		panic("contextx: ValueOnlyFrom(parent) 的 parent 不能为 nil")
+	}
 	return valueOnly{ctx: parent}
 }

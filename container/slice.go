@@ -61,7 +61,13 @@ func (s *Slice[T]) Delete(i int) bool {
 	if i < 0 || i >= len(s.s) {
 		return false
 	}
-	s.s = append(s.s[:i], s.s[i+1:]...)
+	// 把被删元素从底层数组里清掉：只缩 len 不清内容 ⇒ 底层数组仍持有被删
+	// 元素 ⇒ GC 收不走（大对象滞留）。同包 Queue 的 Close 已是这个做法。
+	old := s.s
+	copy(old[i:], old[i+1:])
+	var zero T
+	old[len(old)-1] = zero
+	s.s = old[:len(old)-1]
 	return true
 }
 
@@ -88,5 +94,10 @@ func (s *Slice[T]) Range(fn func(i int, v T) bool) {
 func (s *Slice[T]) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// 逐个清零：只缩 len 不清内容 ⇒ 底层数组仍持有全部元素（大对象滞留）。
+	for i := range s.s {
+		var zero T
+		s.s[i] = zero
+	}
 	s.s = s.s[:0]
 }

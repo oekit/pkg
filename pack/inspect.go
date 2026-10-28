@@ -2,6 +2,7 @@ package pack
 
 import (
 	"archive/zip"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -240,7 +241,12 @@ func indexEntries(zr *zip.Reader) (map[string]*zip.File, []string, []string) {
 	return entries, names, dupes
 }
 
-// digestAndCount 流式计算条目的 SHA-256 摘要与行数（不把整个文件读进内存）。
+// digestAndCount 流式计算条目的 SHA-256 摘要与**记录数**（不把整个文件读进内存）。
+//
+// 「记录数」= 非空行数，与写入侧（Writer 每条记录写一行 + 换行，不写空行）与
+// 读取侧（ReadJSONL 跳过空行）**同一口径**。此前这里数的是**物理行数**
+// （每个 '\n' 记一次，空行也算）⇒ 含空行的包会被报「条数不符」，而
+// ReadJSONL 读出来的条数恰好等于清单里的数 ⇒ 体检与读取自相矛盾。
 func digestAndCount(f *zip.File) (string, int, error) {
 	// 预检：条目**声明**的解压大小超限 ⇒ 直接拒绝，省掉实际解压。
 	if f.UncompressedSize64 > maxEntrySize {
@@ -255,10 +261,18 @@ func digestAndCount(f *zip.File) (string, int, error) {
 
 	h := sha256.New()
 	buf := make([]byte, 32*1024)
-	lines := 0
+	records := 0
 	nonEmpty := false
 	last := byte('\n')
 	total := int64(0)
+	// 行缓冲：用于判「空行」（只含空白字符）——物理行数与记录数的差别就在这。
+	var line []byte
+	flushLine := func() {
+		if len(bytes.TrimSpace(line)) > 0 {
+			records++
+		}
+		line = line[:0]
+	}
 	for {
 		n, err := rc.Read(buf)
 		if n > 0 {
@@ -272,8 +286,10 @@ func digestAndCount(f *zip.File) (string, int, error) {
 			last = buf[n-1]
 			for _, b := range buf[:n] {
 				if b == '\n' {
-					lines++
+					flushLine()
+					continue
 				}
+				line = append(line, b)
 			}
 		}
 		if err != nil {
@@ -284,9 +300,9 @@ func digestAndCount(f *zip.File) (string, int, error) {
 		}
 	}
 	if nonEmpty && last != '\n' {
-		lines++ // 末行没有换行符
+		flushLine() // 末行没有换行符
 	}
-	return hex.EncodeToString(h.Sum(nil)), lines, nil
+	return hex.EncodeToString(h.Sum(nil)), records, nil
 }
 
 // readLimited 读取条目内容，超过 limit 字节即报错。

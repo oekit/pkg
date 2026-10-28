@@ -24,12 +24,20 @@ type Registry[T Enum] struct {
 }
 
 // NewRegistry 创建枚举注册表。
+//
+// **重复的 Value() 会 panic**：注册表是「value → 枚举」的映射，两个枚举同值时
+// 「取到哪一个」取决于传入顺序——此前是**后者静默覆盖**（连 labels 一起覆盖）
+// ⇒ 调用方拿到哪个枚举、看到哪个标签全看运气。枚举定义写错是编程错误，
+// 构造期直接报出来。
 func NewRegistry[T Enum](enums ...T) *Registry[T] {
 	r := &Registry[T]{
 		enums:  make(map[int]T, len(enums)),
 		labels: make(map[int]string, len(enums)),
 	}
 	for _, e := range enums {
+		if _, dup := r.enums[e.Value()]; dup {
+			panic(fmt.Sprintf("enumx: 重复的枚举值 %d（%s）", e.Value(), e.Label()))
+		}
 		r.enums[e.Value()] = e
 		r.labels[e.Value()] = e.Label()
 	}
@@ -51,7 +59,7 @@ func (r *Registry[T]) MustGet(value int) T {
 	return e
 }
 
-// Label 获取枚举的显示名称。
+// Label 获取枚举的显示名称；未登记的值返回 "unknown(<value>)"。
 func (r *Registry[T]) Label(value int) string {
 	if label, ok := r.labels[value]; ok {
 		return label
