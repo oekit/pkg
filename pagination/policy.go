@@ -1,5 +1,7 @@
 package pagination
 
+import "math"
+
 // OverMaxPolicy 描述「请求页长超过上限」时的处理语义。
 //
 // 两种语义都真实存在于消费方，且**响应条数不同**（可观测差异，不能顺手统一）：
@@ -111,6 +113,12 @@ func (p Policy) Normalize(page, pageSize int) (int, int) {
 // 归一化结果溢出（int 溢出成负数）时返回 0（回退到第一页）。
 func (p Policy) Offset(page, pageSize int) int {
 	page, pageSize = p.Normalize(page, pageSize)
+	// 溢出保护：**乘法前**判，而不是乘法后看结果是否为负——int 溢出回绕后的
+	// 结果有一半是正数（实测 page=1<<62+2、pageSize=500 ⇒ 真值 2.3e18 超出
+	// int64 ⇒ 回绕成 +500，被原判据放过去 ⇒ 偏移量完全错误）。
+	if page > 1 && pageSize > 0 && page-1 > math.MaxInt/pageSize {
+		return 0
+	}
 	offset := (page - 1) * pageSize
 	if offset < 0 {
 		return 0

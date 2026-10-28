@@ -178,7 +178,10 @@ type PeekGetter[T any] interface {
 //     Get / GetEx / Peek / MGet（逐键）/ GetOrLoad（含按调用注入回源的变体）。
 //   - Misses：读未命中次数——key 不存在、已过期，或命中 null marker。
 //     null marker 表示「数据不存在」、无值可返 ⇒ 计入未命中（与 GetEx/Peek
-//     的 hit=false 口径一致）。
+//     的 hit=false 口径一致）。**stale-if-error 兜底（回源失败回退已过期
+//     真值）计入未命中、不计入命中**——它拿到的是已过期的条目，按上面的
+//     Hits 口径（「未过期的真值条目」）不属于命中；一次 stale 读取恰好
+//     计入一次未命中，不会同时计入命中。
 //   - Evictions：容量淘汰次数——MaxSize 触发的 FIFO/LRU 淘汰。
 //   - Expirations：TTL 过期回收次数——过期条目被移除（惰性删除或清扫）。
 //   - Size：快照时刻的条目数。
