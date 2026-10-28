@@ -1,3 +1,24 @@
+## [v0.29.0] — 2026-10-28
+
+- fix(urlguard): IPv6 zone 后缀击穿全部 IP 字面量判定（SSRF 绕过）——`http://[::1%25lo]/`、`[fe80::1%25eth0]/`、`[fc00::1%25eth0]/`、`[::ffff:127.0.0.1%25eth0]/` 此前**全部放行**（无 zone 的 `[::1]` 正确阻断）：`net.ParseIP` 不认 zone，而 `url.Parse` 后的 `u.Hostname()` 保留它 ⇒ IP 字面量判定整段跳过。zone 只决定走哪块网卡、不改变连的是哪个地址 ⇒ 判定按地址部分做；顺带覆盖 UDP/IP 连接的端点复核（此前只认 `*net.TCPAddr`）与两个漏掉的 IPv6 保留段（`::/96`、`fec0::/10`）
+- fix(errors): `Errorf("%w", 空报文错误)` 返回 **nil** —— 被包装错误连同整条链一起消失，调用方的 `if err != nil` 分支整个跳过，**失败被静默吞成成功**；同时修 typed-nil `*BizError`（`Error()` 空指针崩溃、`AsBizError` 报 `(nil, true)`）与 `MultiError.Unwrap()` 泄漏内部切片（绕过 Append 的 copy-on-write 保护）
+- fix(cache): 6 处——① `StaleIfError` 被缺省后台清扫打断（过期真值一并被删，兜底只在「[过期, 下次清扫)」窗口内有效，与文档承诺相反）；② `Checker` 一次 refresh panic 即**永久卡死**（inflight 未清理 + done 未 close，后续 Check 全挂在 `<-call.done`）；③ 回填路径把缓存条目指针直接交给调用方，绕过 `CloneOnRead`；④ 一次 stale 读取同时计命中与未命中，命中率虚高；⑤ `cacheLog` 在包初始化时求值 ⇒ `slog.SetDefault` 汇流不到缓存日志；⑥ `TTL=0` 且 `NullTTL>0` 时过期的 null marker **永不回收**（无界增长）
+- fix(timex): 夏令时窗口内的边界不变量不成立——回拨日 `EndOfHour` 落在输入**之前**（区间连 t 都不含）、午夜不存在的时区（America/Santiago）`BeginningOfDay` 落到**前一天**；另修 cron 月份扫描跳过目标月（`0 0 0 1 2 *` 从 1/31 求值下次触发晚一年）、`a-b/n` 区间带步长被拒、`NextSchedule(n<=0)` panic
+- fix(mathx): 概率路由选错元素——`ProbabilityElems` 内部排序后丢弃了置换关系，返回的 band 对应排序后顺序而调用方拿它索引自己的 `elems`（权重被静默置换）；`Probability` 的 `r <= v` 差一让**最后一个桶永远选不到**（等权时分布 2/3、1/3、0）；`McNemarExact` 大 n 返回 **NaN**（组合数溢出）、`WilsonCI` 越界计数返回 `(NaN,NaN)`、`DivisionN` 经 int64 中转**回绕**、`toFixed` 吞掉 ParseFloat 错误返回 0、`NewUnstable(NaN)` 产生垃圾抖动值
+- fix(strmap): 重载**就地改写**底层缓冲 ⇒ 之前返回的键/值字符串内容被改写（破坏 Go 字符串不可变保证）；改为每次重载重新分配缓冲，旧视图继续指向旧缓冲
+- fix(stringx): `ToCamelCase` 遇非法 UTF-8 **panic**（`utf8.RuneLen(U+FFFD)`=3 而非法字节实际只占 1 字节 ⇒ 切片越界）；`Pluralize(count, "")` 丢掉计数返回字面量 "0"
+- **BREAKING**: fix(httpjson): `DoRaw` 签名变更 `(int, []byte, error)` → `(RawResponse, error)`——新增 `RawResponse.Truncated`，此前报文被静默截断（文档既写「不截断报文」又在下一段写了 limit，自相矛盾）且调用方**无法区分**半截报文与完整报文；`RawResponse` 同时承载 StatusCode/Body。org 内零消费方（v0.28.1 才发布）
+- fix(httpjson): 响应体未排空 ⇒ 连接无法被 transport 复用（报文超 limit 时每次调用都要重建 TCP + TLS 握手）
+- fix(jsonrepair): 截断数组的元素串被误判成键位 ⇒ 闭合出 `["a","b":null]` 这种非法 JSON ⇒ 宽松解析整体失败；判据从「引号前那个字节」改成「开口时所处的括号上下文」
+- fix(bufiox): `ReadBinary` 直读路径（缺口 ≥4KiB）**漏记 ReadLen**；`rdErr` 只写不读 ⇒ 文档承诺的「粘滞终态错误」根本没实现（缺陷实现每次操作都重读底层）；`acquire` 倍增溢出成负数 ⇒ 极大长度请求**无限挂起**
+- fix(container): `SafeMap.Range` 遍历期间一直持着读锁 ⇒ 回调里写同一个 map **死锁**（RWMutex 不可重入），且文档承诺的「遍历期间其他 goroutine 的写入不阻塞」并不成立；改为先取快照再锁外遍历（与 `Slice.Range` 同构）
+- fix(pagination): 偏移量溢出保护只兜住一半情形——`int` 溢出回绕后的结果有一半是**正数**（`page=1<<62+2` 返回垃圾偏移量 500），而 `page` 来自 query/form 参数（外部可控）⇒ 改为**乘法前**判（`PageRequest` 与 `Policy` 两处同修）
+- fix(pathx): 截断时留下**半个扩展名**（`"中.txt"` + 上限 5 字节 → `"中.t"`）——正是本函数文档明令禁止的形态（扩展名骗人，下游按它判类型会判错）；改为丢弃扩展名、只留截断后的主名
+- fix(pack): 迁移包体检三处缺口——① zip 内**同名条目并存**不被报出 ⇒ 清单只校验了第一份、第二份不被任何检查覆盖（按 zip 条目遍历的消费方读到的是未校验的那份）；② 数据条目**没有解压上限**（zip bomb：几 KB 的包能让体检无限期烧 CPU）；③ `ReadJSONL` 单行无上限（`bufio.ReadBytes` 为超长行无限增长）
+- fix(singleflighttest): 契约套件的等待**无界**（缺陷实现把 CI 挂到 go test 的 10 分钟超时，而不是几秒内干脆失败）；补上「飞行结束后新调用必须重新执行 fn」这条可观测不变量
+- fix(container): `Set` 的零值口径与同包其它容器不一致——`Set` 本身是 map 类型、零值即 nil map，`Add` 直接 panic，而同包的 Map / SafeMap / Slice 都写明「零值不可直接使用」⇒ 使用者按同包口径推断「零值可用」就踩坑；补文档并加用例钉住
+- fix(slicex): `Chunk` 的分片与入参**共享底层数组**（与 stdlib `slices.Chunk` 同语义），此前文档没说清；同包的 `Reverse` 明确「返回新切片，不修改原始切片」⇒ 两个 API 口径不一致。补文档并加用例钉住两种语义
+
 ## [v0.28.1] — 2026-10-28
 
 - feat(httpjson): 加 DoRaw——返回原始状态码与原文报文（不判 2xx、不截断），供要按状态码映射自己语义、并把原文报文带进错误文案的调用方
