@@ -30,6 +30,11 @@
 // 标准库 net.ParseIP 不认它们，但宽松解析器（cgo resolver 的 inet_aton 语义、
 // 浏览器 URL 解析器）会当地址——写面放行等于把判定推给拨号层，构成回环绕过路径。
 //
+// IPv6 zone 后缀（http://[::1%25lo]/、http://[fe80::1%25eth0]/）同样按地址部分
+// 判定：net.ParseIP 不认 zone，不剥掉就等于整段跳过 IP 字面量判定——loopback、
+// 链路本地、ULA、IPv4-mapped 全能以 zone 形态绕过。zone 只决定走哪块网卡，
+// 不改变连的是哪个地址。
+//
 // 构造态豁免：WithAllowPrivate / WithAllowCIDRs / WithAllowDomains。
 // **精确 host 白名单**：WithExactHosts —— "host 必须完全等于管理员配的那个 host"
 // 这类判据在放行型模型下没有对应表达（后缀豁免只能放宽域及其全部子域，无法钉死
@@ -43,6 +48,15 @@
 // 自定义在后；构造态豁免只豁免内置判定，不再跳过自定义判定。
 //
 // Guard 在 New 之后只读，可并发共享。仅依赖标准库（pkg 零第三方依赖红线）。
+//
+// # 已知边界
+//
+//   - 代理：DialFunc 的签名拿不到「目标 host」（http.Transport.Proxy 生效时
+//     DialContext 收到的是**代理**地址），因此拨号层校验的是代理的 IP、真实目标的
+//     DNS 从头到尾没被 IP 级校验过。走代理时必须先过 CheckURL（层 1），
+//     且代理自身不在阻断网段内。
+//   - 自定义传输：端点复核只认 TCP / UDP / IP 三种 net.Addr；其他实现
+//     （自定义 conn）取不到 IP ⇒ 该次端点复核跳过。
 //
 // 用法（webhook 出口一行接入，[httpx](https://github.com/oekit/httpx) 的
 // WithDialFunc 直接组合）：
@@ -86,8 +100,10 @@ var blockedCIDRs = mustParseCIDRs(
 	"240.0.0.0/4",     // IPv4 保留/广播
 	"::1/128",         // IPv6 loopback
 	"::/128",          // IPv6 未指定
+	"::/96",           // IPv4-compatible（::127.0.0.1 即 127.0.0.1 的 IPv6 写法；RFC 4291 已废弃）
 	"fe80::/10",       // IPv6 链路本地
 	"fc00::/7",        // IPv6 ULA
+	"fec0::/10",       // IPv6 site-local（RFC 3879 已废弃，企业网历史在用）
 	"ff00::/8",        // IPv6 组播
 	"64:ff9b::/96",    // NAT64 well-known prefix（64:ff9b::7f00:1 即 127.0.0.1 的 IPv6 写法）
 	"64:ff9b:1::/48",  // NAT64 local-use prefix（RFC 8215，本机翻译前缀）
@@ -407,7 +423,7 @@ func (g *Guard) checkHostLiteral(host string) error {
 	if host == "" {
 		return fmt.Errorf("urlguard: empty host")
 	}
-	if ip := net.ParseIP(host); ip != nil {
+	if ip := net.ParseIP(stripIPv6Zone(host)); ip != nil {
 		return g.CheckIP(ip)
 	}
 	if g.allowPrivate {
@@ -578,11 +594,13 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 		}
 		// 端点核对（authoritative）：预检解析与拨号器实际解析之间可能被重解析，
 		// 以真实 RemoteAddr 为准；不合规立即关闭连接。
+		// TCP / UDP / IP 三种连接都要复核——此前只认 *net.TCPAddr，UDP 连接
+		// 的端点复核被整段跳过（TOCTOU 窗口对 UDP 完全敞开）。
 		if ra := conn.RemoteAddr(); ra != nil {
-			if tcp, ok := ra.(*net.TCPAddr); ok {
-				if err := g.CheckIP(tcp.IP); err != nil {
+			if ip := addrIP(ra); ip != nil {
+				if err := g.CheckIP(ip); err != nil {
 					_ = conn.Close()
-					return nil, fmt.Errorf("urlguard: dial %q blocked: connected endpoint %s violates guard: %v", addr, tcp.IP, err)
+					return nil, fmt.Errorf("urlguard: dial %q blocked: connected endpoint %s violates guard: %v", addr, ip, err)
 				}
 			}
 		}
@@ -593,7 +611,7 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 // resolve 解析 host 为全部 IP：IP 字面量直接返回（不做 DNS）；域名走 lookup
 // （缺省 net.DefaultResolver）。解析失败原样返回错误。
 func (g *Guard) resolve(ctx context.Context, host string) ([]net.IP, error) {
-	if ip := net.ParseIP(host); ip != nil {
+	if ip := net.ParseIP(stripIPv6Zone(host)); ip != nil {
 		return []net.IP{ip}, nil
 	}
 	// exotic IPv4 字面量：标准库解析器不认 → 本会走 DNS 解析，但宽松解析器
@@ -621,13 +639,53 @@ func defaultLookup(ctx context.Context, host string) ([]net.IP, error) {
 	return ips, nil
 }
 
-// canonicalHost 归一化 host：小写、去尾点、去 IPv6 方括号。
+// canonicalHost 把 host 归一为判定口径：小写、去空白、去尾点、去 IPv6 方括号。
 func canonicalHost(host string) string {
 	host = strings.ToLower(strings.TrimSpace(host))
 	host = strings.TrimSuffix(host, ".")
 	host = strings.TrimPrefix(host, "[")
 	host = strings.TrimSuffix(host, "]")
 	return host
+}
+
+// stripIPv6Zone 剥掉 IPv6 字面量的 zone（"%eth0" / "%lo"）。
+//
+// net.ParseIP 明确不认 zone（Go 文档："does not accept zones"），而 url.Parse
+// 后的 u.Hostname() 会保留它——`http://[::1%25lo]/` 的 hostname 是 `::1%lo`
+// （Go 把 %25 还原成 %）。不剥掉就直接 ParseIP 会得到 nil ⇒ IP 字面量判定
+// 整段跳过 ⇒ loopback / 链路本地 / ULA / IPv4-mapped 全部能以 zone 形态绕过
+// （实测：[::1%lo]、[fe80::1%eth0]、[fc00::1%eth0]、[::ffff:127.0.0.1%eth0]
+// 全部放行，而无 zone 的 [::1] 被正确阻断）。
+//
+// zone 只决定「走哪块网卡」，不改变「连的是哪个地址」——判定按地址部分做，
+// zone 本身不参与阻断结论。剥掉后仍不是合法 IP 的（如普通域名）原样返回。
+func stripIPv6Zone(host string) string {
+	if i := strings.IndexByte(host, '%'); i >= 0 {
+		return host[:i]
+	}
+	return host
+}
+
+// addrIP 从 net.Addr 取 IP：覆盖 TCPAddr / UDPAddr / IPAddr。
+//
+// 端点复核此前只认 *net.TCPAddr ⇒ UDP 连接（*net.UDPAddr）与 IP 连接
+// （*net.IPAddr）的端点复核被整段跳过（实测：端点为 127.0.0.1 的 UDP 连接
+// 照样放行）——TOCTOU 窗口对 UDP 完全敞开。
+//
+// 其他实现（自定义传输、代理连接）取不到 IP，返回 nil——调用方跳过端点复核。
+// 这里刻意**不**对未知类型 fail-closed：代理链路的 RemoteAddr 是代理地址
+// （本机代理常见 127.0.0.1），一拒就把所有代理用法打死。代理场景的目标
+// host 判定缺口见包文档「已知边界」。
+func addrIP(ra net.Addr) net.IP {
+	switch a := ra.(type) {
+	case *net.TCPAddr:
+		return a.IP
+	case *net.UDPAddr:
+		return a.IP
+	case *net.IPAddr:
+		return a.IP
+	}
+	return nil
 }
 
 // parseExactHost 解析精确白名单条目：host[:port]（IPv6 字面量用方括号形态
