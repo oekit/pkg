@@ -1,6 +1,10 @@
 package container
 
 // Set 泛型集合（非并发安全：单 goroutine 使用，或由调用方加锁保护）。
+//
+// **零值不可直接使用**（与同包其它容器口径一致）：Set 是 map 类型，零值是
+// nil map，`Add` 会 panic（"assignment to entry in nil map"）。须经
+// NewSet 创建。
 type Set[T comparable] map[T]struct{}
 
 // NewSet 以给定元素创建集合并去重。
