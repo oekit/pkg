@@ -1,3 +1,22 @@
+## [v0.31.1] — 2026-11-02
+
+- fix(httpjson): `DoJSON` 对 `out==nil` 跳过响应体解码——2xx 成功请求不再被误报失败
+
+此前 `DoJSON` 无条件 `json.Unmarshal(raw, out)`，out 为 nil 时恒定拿到
+`json: Unmarshal(nil)` 的 InvalidUnmarshalError ⇒ **服务端已返回 2xx 的成功请求
+被误报为失败**，真失败反而淹没在假失败里。下游实证：pigeonbox/core 的 webhook
+推送渠道自 2026-10 起一直以 out=nil 调用 ⇒ 每次成功送达都记一条
+"webhook push failed" 假失败日志。
+
+out 为 nil 是 fire-and-forget 调用方的语义：只关心请求送达与状态码，不关心
+响应体 ⇒ 2xx 即返回 nil。非 2xx 的判定与 out 无关：照样返回 StatusError（错误体
+摘要照旧带上）。`DoJSONWithRetry` 经 `DoJSON` 透传，同款语义。out 非 nil 时
+行为不变：解码失败仍返回「响应解析失败」错误。
+
+守卫位置刻意放在状态码检查**之后**——挪到之前会让非 2xx 连错误一起放过 ⇒ 真失败
+被静默。补 5 组用例钉住（含表驱动矩阵覆盖 out 两态），并做变异验证：删守卫 /
+守卫挪位 / 守卫条件取反，三种变异均被新断言抓住转红（#158）
+
 ## [v0.31.0] — 2026-10-29
 
 - feat(cli): 子命令别名 + 默认子命令 + 内建 help/version —— 三件不必每个消费方各写一遍的事。此前每个用本包的程序都要自己写一段 workaround 才能支持 `--help`（因为本包没有内建帮助，未知子命令被报成用法错误，于是每个消费方都得在分发前先拦一次 `--help` 自己转交），而那段 workaround 在每个消费方里长得都不一样：**问帮助返回的退出码各不一致**（有的返回 2「用法错误」——问帮助不是错误）、帮助输出走 stdout 还是 stderr 各不一致、别名（同一个动作的旧叫法，如 `--doctor`）只能靠消费方手写 if 拦、无参启动的程序（以 stdio 提供服务、没人给它传子命令名的那种）只能自己写 `if len(args)==0 { os.Exit(serve()) }`。现在：`Command.Aliases` 认别名（**名字优先于别名**，所以宿主自己声明了名为 `help` 的子命令时它照常工作）、`App.Default` 让无参等于执行默认子命令、`App.Version` 非空时提供 `--version`/`version`、内建 `--help`/`-h`/`help`（**打印用法到 stdout、退出码 0**）。默认行为不变：`Default` 为空则无参仍是用法错误，`Version` 为空则 `version` 仍是未知子命令 ⇒ 既有消费方不受影响
