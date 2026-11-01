@@ -207,6 +207,158 @@ func TestDoJSONDecodeAndTransportErrors(t *testing.T) {
 	}
 }
 
+// ---- #158：out==nil 恒报 Unmarshal(nil)，2xx 成功请求被误报失败 ----
+
+// TestDoJSONNilOutSkipsDecode 钉住 #158：out 为 nil 是 fire-and-forget 语义
+// ——只关心请求送达与状态码，不关心响应体。此前无条件 json.Unmarshal(raw, nil)
+// 恒定拿到 `json: Unmarshal(nil)` 的 InvalidUnmarshalError ⇒ 服务端已返回 2xx
+// 的成功请求被误报为失败。
+//
+// 判据（每条都必须在「去掉 out==nil 守卫」时转红）：
+//   - 2xx + out==nil ⇒ err 为 nil（去掉守卫 ⇒ Unmarshal(nil) 错误）；
+//   - 2xx + out==nil + **响应体根本不是 JSON** ⇒ 仍为 nil（证明是「跳过解码」
+//     而不是「对坏 JSON 宽容」）；
+//   - 请求确实送达了服务端（fire-and-forget 的前半截语义没被牺牲）。
+func TestDoJSONNilOutSkipsDecode(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		// 故意回非 JSON：out==nil 时不该有任何解码动作。
+		_, _ = w.Write([]byte(`not json at all`))
+	}))
+	defer srv.Close()
+
+	err := DoJSON(context.Background(), srv.Client(), Request{URL: srv.URL}, nil)
+	if err != nil {
+		t.Fatalf("out==nil 时 2xx 应返回 nil，实际报错: %v", err)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("请求应送达服务端一次，got %d", hits.Load())
+	}
+}
+
+// TestDoJSONNilOutKeepsStatusError 钉住「跳过解码」不得吞掉非 2xx：
+// 守卫若被挪到状态码检查之前，2xx 判定就会连错误一起放过 ⇒ 真失败被静默。
+func TestDoJSONNilOutKeepsStatusError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("参数不完整"))
+	}))
+	defer srv.Close()
+
+	err := DoJSON(context.Background(), srv.Client(), Request{URL: srv.URL}, nil)
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != http.StatusBadGateway {
+		t.Fatalf("out==nil 也不得放过非 2xx: %v", err)
+	}
+	if got := se.Error(); got != "HTTP 502: 参数不完整" {
+		t.Fatalf("Error() = %q", got)
+	}
+}
+
+// TestDoJSONWithRetryNilOutSkipsDecode 钉住 DoJSONWithRetry 的同款语义：
+// out==nil 时 2xx 即成功（不重试、不报错）。
+func TestDoJSONWithRetryNilOutSkipsDecode(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte(`not json at all`))
+	}))
+	defer srv.Close()
+
+	cfg := RetryConfig{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond}
+	err := DoJSONWithRetry(context.Background(), srv.Client(),
+		func() (Request, error) { return Request{URL: srv.URL}, nil }, cfg, nil)
+	if err != nil {
+		t.Fatalf("out==nil 时 2xx 应返回 nil，实际报错: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("成功不应重试，got %d 次", calls.Load())
+	}
+}
+
+// TestDoJSONWithRetryNilOutStillRetries 钉住「跳过解码」不得影响重试语义：
+// 5xx 仍要退避重试，out==nil 只是不解析响应体。
+func TestDoJSONWithRetryNilOutStillRetries(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) <= 2 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`not json at all`))
+	}))
+	defer srv.Close()
+
+	cfg := RetryConfig{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond}
+	err := DoJSONWithRetry(context.Background(), srv.Client(),
+		func() (Request, error) { return Request{URL: srv.URL}, nil }, cfg, nil)
+	if err != nil {
+		t.Fatalf("重试后应成功: %v", err)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("应尝试 3 次, got %d", calls.Load())
+	}
+}
+
+// TestDoJSONNilOutMatrix 表驱动钉住 out==nil 的完整口径：2xx 成功、非 2xx 报错，
+// 且 out 非 nil 时解码行为**不变**（防止把守卫写成「out 存在就不解码」）。
+func TestDoJSONNilOutMatrix(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     int
+		body       string
+		outNil     bool
+		wantErr    bool
+		wantStatus int
+	}{
+		{name: "2xx 且 out==nil ⇒ 成功", status: http.StatusOK, body: `{"ok":true}`, outNil: true},
+		{name: "2xx 且 out==nil 且响应体非 JSON ⇒ 成功", status: http.StatusOK, body: `plain text`, outNil: true},
+		{name: "204 且 out==nil ⇒ 成功", status: http.StatusNoContent, body: ``, outNil: true},
+		{name: "5xx 且 out==nil ⇒ 报错", status: http.StatusInternalServerError, body: `boom`, outNil: true, wantErr: true, wantStatus: http.StatusInternalServerError},
+		{name: "2xx 且 out 非 nil ⇒ 照常解码", status: http.StatusOK, body: `{"ok":true}`},
+		{name: "2xx 且 out 非 nil 且响应体非 JSON ⇒ 照常报解析错", status: http.StatusOK, body: `plain text`, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			var out map[string]any
+			var target any = &out
+			if tc.outNil {
+				target = nil
+			}
+			err := DoJSON(context.Background(), srv.Client(), Request{URL: srv.URL}, target)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("应报错")
+				}
+				if tc.wantStatus != 0 {
+					var se *StatusError
+					if !errors.As(err, &se) || se.Code != tc.wantStatus {
+						t.Fatalf("应返回 StatusError(%d): %v", tc.wantStatus, err)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("不应报错: %v", err)
+			}
+			if !tc.outNil {
+				ok, _ := out["ok"].(bool)
+				if !ok {
+					t.Fatalf("out 未被解码: %v", out)
+				}
+			}
+		})
+	}
+}
+
 // ---- #45：指数退避移位溢出产出负延迟 ----
 
 // TestExponentialDelay_NeverNegativeAndAlwaysCapped 回归 #45：移位写法

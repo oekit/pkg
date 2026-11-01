@@ -1,6 +1,7 @@
 // Package httpjson stdlib-only 的 HTTP+JSON 调用纪律单源：ctx 感知构造请求 →
 // 执行 → 限容读体（读错误不吞）→ 状态码检查（错误体 rune 安全截断，不腰斩
-// UTF-8）→ JSON 解码，外加可选的指数退避重试与服务端 Retry-After 建议捕获。
+// UTF-8）→ JSON 解码（out 非 nil 时；out==nil 跳过解码，只判状态码），外加
+// 可选的指数退避重试与服务端 Retry-After 建议捕获。
 //
 // 与 network/httpx 的分工（同名不同物）：那侧是 Hertz 底座的服务间调用基础
 // 设施（服务发现/熔断/指标/追踪，编译期即拉 hertz+prometheus+gobreaker+otel
@@ -43,6 +44,14 @@ type Request struct {
 // DoJSON 执行请求并把 2xx 响应体解码进 out。非 2xx 返回带状态码与响应体摘要
 // （rune 安全截断到 200 字符）的错误；解码失败返回包装后的解析错误。
 // 错误不带包前缀返回，调用方以自己的包前缀包装一次。
+//
+// out 为 nil 时**跳过响应体解码**：2xx 即返回 nil。这是 fire-and-forget 调用方
+// 的语义——只关心请求送达与状态码，不关心响应体。此前无条件 json.Unmarshal(raw,
+// nil) 恒定拿到 `json: Unmarshal(nil)` 的 InvalidUnmarshalError ⇒ **服务端已
+// 返回 2xx 的成功请求被误报为失败**，真失败反而淹没在假失败里（#158）。
+// 非 2xx 的判定与 out 无关：照样返回 StatusError（错误体摘要照旧带上）。
+//
+// out 非 nil 时行为不变：解码失败仍返回「响应解析失败」错误。
 func DoJSON(ctx context.Context, client *http.Client, req Request, out any) error {
 	method := req.Method
 	if method == "" {
@@ -72,6 +81,11 @@ func DoJSON(ctx context.Context, client *http.Client, req Request, out any) erro
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return &StatusError{Code: resp.StatusCode, Body: string(raw)}
+	}
+	// out 为 nil = 调用方不要响应体（fire-and-forget）⇒ 跳过解码，
+	// 否则 json.Unmarshal(raw, nil) 恒报 Unmarshal(nil)，把 2xx 误报成失败（#158）。
+	if out == nil {
+		return nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
 		return fmt.Errorf("响应解析失败: %w", err)
@@ -196,6 +210,9 @@ type RetryConfig struct {
 // 重试间指数退避 + Jitter 抖动；ctx 取消/超时立即返回 ctx.Err()。
 // 配合 WithRetryAfterSink + RetryAfterTransport 可让 429 的服务端建议
 // 参与退避取舍（调用方在 wait 前经 SelectRetryDelay(RetryAfterFrom(ctx)) 采信）。
+//
+// out 的语义与 DoJSON 完全一致：out==nil 时跳过响应体解码，2xx 即成功返回
+// （fire-and-forget）；非 2xx 仍按可重试判定退避并最终返回 StatusError（#158）。
 func DoJSONWithRetry(ctx context.Context, client *http.Client, reqFn func() (Request, error), cfg RetryConfig, out any) error {
 	attempts := cfg.MaxAttempts
 	if attempts < 1 {
