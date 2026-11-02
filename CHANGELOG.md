@@ -4,7 +4,7 @@
 
 ## [v0.31.1] — 2026-11-02
 
-- fix(httpjson): `DoJSON` 对 `out==nil` 跳过响应体解码——2xx 成功请求不再被误报失败
+- fix(httpjson): `DoJSON` 对 `out==nil` 跳过响应体解码（#158）——2xx 成功请求不再被误报失败
 
 此前 `DoJSON` 无条件 `json.Unmarshal(raw, out)`，out 为 nil 时恒定拿到
 `json: Unmarshal(nil)` 的 InvalidUnmarshalError ⇒ **服务端已返回 2xx 的成功请求
@@ -105,7 +105,7 @@ out 为 nil 是 fire-and-forget 调用方的语义：只关心请求送达与状
 
 ## [v0.23.0] — 2026-10-24
 
-- fix(cache): SingleFlightCache 包装 LocalCache 时静默废掉 StaleIfError——前置检查走 Get（LocalCache 的惰性删除路径）把 stale 兜底需要的过期真值提前删掉；新增 LocalCache.Peek 非删除式读（可选接口 PeekGetter 外置，不破坏其它后端实现）+ SingleFlightCache 前置检查改走 Peek；cachetest 补 RunStaleIfErrorWithClock / RunStaleIfErrorRepeatedWithClock 两条契约（钉住「装饰器不得改变内层语义」）
+- fix(cache): SingleFlightCache 包装 LocalCache 时静默废掉 StaleIfError（#72）——前置检查走 Get（LocalCache 的惰性删除路径）把 stale 兜底需要的过期真值提前删掉；新增 LocalCache.Peek 非删除式读（可选接口 PeekGetter 外置，不破坏其它后端实现）+ SingleFlightCache 前置检查改走 Peek；cachetest 补 RunStaleIfErrorWithClock / RunStaleIfErrorRepeatedWithClock 两条契约（钉住「装饰器不得改变内层语义」）
 
 ## [v0.22.1] — 2026-10-24
 
@@ -153,7 +153,7 @@ out 为 nil 是 fire-and-forget 调用方的语义：只关心请求送达与状
 
 ### BREAKING: stringx.Masker 的短值改整段全量打码（#31）
 
-- 原实现 `keep = min(Keep, n/2)` 的收缩逻辑，在 `n ≤ 2*Keep` 时让**头尾两段保留位
+- 原实现 `keep = min(Keep, n/2)` 的收缩逻辑（#31），在 `n ≤ 2*Keep` 时让**头尾两段保留位
   首尾相接覆盖整段原文**——掩码主体 `****` 只是插在中间的装饰，原值被完整留在输出里
 - 实测（Keep=4）：`Mask("01234567")` → `0123«probe:****»4567`（8 个字符原文全部可见）；
   `Mask("0123")` → `01«probe:****»23`（4 个字符原文全部可见）——**脱敏原语等于没生效**
@@ -164,7 +164,7 @@ out 为 nil 是 fire-and-forget 调用方的语义：只关心请求送达与状
 
 ### fix(pack): Inspect 的「条数不符」核对不再被静默跳过（#32）
 
-- `counts` 的键口径此前未被强制；键与文件名对不上时整条检查被跳过且**无任何提示**，
+- `counts` 的键口径此前未被强制（#32）；键与文件名对不上时整条检查被跳过且**无任何提示**，
   体检报「通过」但那条检查根本没跑
 - 修法：先按文件名精确匹配 → 再按「去扩展名」基名宽松匹配 → 仍匹配不上则**显式报出**
   「条数未核对」与「清单 counts 的键 X 未匹配任何数据文件（该键的条数未核对）」
@@ -172,7 +172,7 @@ out 为 nil 是 fire-and-forget 调用方的语义：只关心请求送达与状
 
 ### feat(pack): NewWriter 支持时钟注入（#33）
 
-- `NewWriter(w io.Writer, formatVersion int, opts ...Option)` +
+- `NewWriter(w io.Writer, formatVersion int, opts ...Option)`（#33）+
   `WithClock(now func() time.Time) Option`（对齐 `pkg/cache` 的 `WithClock` 口径）
 - 清单的 `created_at` 时刻来源可注入 → 导出逻辑可做**确定性单测**；
   同一份数据用同一固定时钟导出两次，清单**逐字节相等**
@@ -181,7 +181,7 @@ out 为 nil 是 fire-and-forget 调用方的语义：只关心请求送达与状
 ## [v0.16.0] — 2026-10-19
 
 ### feat(cli)：可单测的子命令分发原语（[#27](https://github.com/oekit/pkg/issues/27)）
-- `App`/`Command` 骨架：退出码约定写死在包里（`ExitOK`=0 / `ExitError`=1 / `ExitUsage`=2），
+- `App`/`Command` 骨架（#27）：退出码约定写死在包里（`ExitOK`=0 / `ExitError`=1 / `ExitUsage`=2），
   未知子命令与参数不合法均归 2；usage 由 `Command.Summary` 自动生成，不要求调用方手写
 - `Run` 不读 `os.Args`、不调 `os.Exit`：参数与 stdout/stderr 全部由调用方给——命令逻辑因此
   可被单元测试直接调用（不必起子进程、不必解析 os.Args、不必捕获 stdout）
@@ -191,7 +191,7 @@ out 为 nil 是 fire-and-forget 调用方的语义：只关心请求送达与状
   AST 源码断言（代码真调用 os.Exit·os.Args 才报，文档注释里的字样不误伤）
 
 ### feat(stringx)：正则脱敏 Masker——形态标签 + 保定位线索 + 不可复原（[#26](https://github.com/oekit/pkg/issues/26)）
-- `NewMasker(rules []Rule) (*Masker, error)` + `Mask(text string) string`；
+- `NewMasker(rules []Rule) (*Masker, error)` + `Mask(text string) string`（#26）；
   `Rule{Name 形态标签, Re *regexp.Regexp, Keep 保留位数}`
 - 掩码形如 `«name:****»` / `head«name:****»tail`：形态标签进掩码供审计读「打的是哪一类」
 - 不可复原：保留位数封顶、不随原值长度变化（实际保留位 = min(Keep, n/2)），掩码主体恒为
@@ -202,7 +202,7 @@ out 为 nil 是 fire-and-forget 调用方的语义：只关心请求送达与状
   （形态标签重复会让审计结果有歧义）
 
 ### feat(cache)：LocalCache 可选形状——无后台 goroutine / 读命中返回副本 / LRU（[#25](https://github.com/oekit/pkg/issues/25)）
-- `NoBackgroundSweep`：不起后台清扫 goroutine（嵌入式/短命命令行场景不该为缓存起常驻件），
+- `NoBackgroundSweep`（#25）：不起后台清扫 goroutine（嵌入式/短命命令行场景不该为缓存起常驻件），
   公开 `Sweep(ctx)` 手动清扫口；关闭后 `NewLocalCache` 之后进程内不新增 goroutine
 - `CloneOnRead func(*T) *T`：读命中返回副本，调用方可随意改写返回值而不污染缓存条目
   （覆盖 Get / GetOrLoad 命中与 stale 兜底 / MGet；克隆在锁外执行）
@@ -214,7 +214,7 @@ out 为 nil 是 fire-and-forget 调用方的语义：只关心请求送达与状
 - cachetest 契约套件新增 5 个条目（Sweep / 命中标志 / 读隔离 / 读提升 / 无后台 goroutine）
 
 ### feat(pack)：迁移包容器原语（[#24](https://github.com/oekit/pkg/issues/24)）
-- zip 容器 + manifest 清单（格式版本 / 创建时间 / 各类条数 / 每文件 SHA-256）
+- zip 容器 + manifest 清单（格式版本 / 创建时间 / 各类条数 / 每文件 SHA-256）（#24）
 - `AddJSONL(name, rows)` 逐行编码流式写出（不整包进内存）；`Close()` 写回 manifest 自身
 - `Inspect` 体检**一次列全**问题（缺文件 / 摘要不符 / 条数不符 / 多余文件 / 非法文件名），
   而不是遇到第一个错误就停；哨兵错误 `ErrCorrupt` / `ErrUnsupportedVersion` 区分
