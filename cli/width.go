@@ -47,7 +47,7 @@ const (
 )
 
 // zwjText 是 ZWJ 的 UTF-8 形式，用来判前缀。
-const zwjText = "‍"
+const zwjText = "\u200d"
 
 // displayWidth 估算一段文本在终端里占几列。
 //

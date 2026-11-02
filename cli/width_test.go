@@ -82,7 +82,7 @@ func TestDisplayWidth_EmojiCluster(t *testing.T) {
 		{"键帽", "1️⃣", 2},
 		{"❤️ 文本基 + VS16", "❤️", 2},
 		{"❤ 文本基单写", "❤", 1},
-		{"ZWJ 落在非 emoji 之间", "a‍b", 2},
+		{"ZWJ 落在非 emoji 之间", "a\u200db", 2},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -103,7 +103,7 @@ func TestDisplayWidth_ZeroWidth(t *testing.T) {
 		{"组合记号", "e\u0301", 1},
 		{"控制符", "\t", 0},
 		{"行分隔符", " ", 0},
-		{"零宽连接符落单", "‍", 0},
+		{"零宽连接符落单", "\u200d", 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
