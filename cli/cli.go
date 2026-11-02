@@ -212,9 +212,12 @@ func (a *App) Usage(w io.Writer) {
 					summary += " （别名：" + strings.Join(c.Aliases, "、") + "）"
 				}
 				if summary != "" {
-					summary = "  " + summary
+					fmt.Fprintf(w, "  %-*s  %s\n", width, c.Name, summary)
+					continue
 				}
-				fmt.Fprintf(w, "  %-*s%s\n", width, c.Name, summary)
+				// 没有摘要就不补空格——补出来的尾随空格会在终端里留痕，
+				// 复制命令时还容易被带进 shell。
+				fmt.Fprintf(w, "  %s\n", c.Name)
 			}
 		}
 	}
