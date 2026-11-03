@@ -31,15 +31,55 @@ func Contains(list []string, str string) bool {
 	return false
 }
 
-// Filter 从 s 中过滤掉满足 filter 条件的字符。
+// Filter 返回 s 中满足 filter 条件的字符（保留命中）。
+//
+// ⚠️ 语义变更（#173，破坏性）：v0.32 及以前本函数是「剔除命中」（命中即删），
+// 与同库 slicex.Filter（保留命中）同名反方向——谓词写反零报错，只是结果里
+// 多/少了字符（实测事故：净化函数按「保留命中」的肌肉记忆写谓词，控制字符
+// 被留在回显里）。v0.33.0 起与 slicex.Filter / 主流 filter 语义对齐（JS
+// Array.filter、Java Stream.filter、Rust Iterator::filter 皆保留命中）。
+//
+// 迁移（按意图二选一）：
+//   - 原「剔除命中」（filter(x)=true 的字符被删）：改用 DeleteFunc；
+//   - 原谓词写的是「保留条件」却以为在删：改用 Filter/KeepFunc（结果反转）。
+//
+// 方向要在调用点自解释时用 KeepFunc（保留命中）/ DeleteFunc（剔除命中）对偶入口。
 func Filter(s string, filter func(r rune) bool) string {
+	return KeepFunc(s, filter)
+}
+
+// KeepFunc 返回 s 中满足 keep 条件的字符（保留命中；方向自解释，命名对齐
+// slices.KeepFunc 的口径）。与 Filter 同语义——Filter 与 slicex.Filter
+// 对齐后即「保留命中」（#173）。
+func KeepFunc(s string, keep func(r rune) bool) string {
+	var n int
+	chars := []rune(s)
+	for i, x := range chars {
+		if keep(x) {
+			if n < i {
+				chars[n] = x
+			}
+			n++
+		}
+	}
+	return string(chars[:n])
+}
+
+// DeleteFunc 从 s 中删除满足 del 条件的字符（剔除命中；方向自解释，命名对齐
+// slices.DeleteFunc 的口径）。
+//
+// 这是 Filter 在 v0.32 及以前的行为（#173 语义对齐后迁移至此）：
+//
+//	// 剔除控制字符（净化回显）
+//	clean := stringx.DeleteFunc(s, unicode.IsControl)
+func DeleteFunc(s string, del func(r rune) bool) string {
 	var n int
 	chars := []rune(s)
 	for i, x := range chars {
 		if n < i {
 			chars[n] = x
 		}
-		if !filter(x) {
+		if !del(x) {
 			n++
 		}
 	}

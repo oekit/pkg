@@ -2,6 +2,9 @@ package stringx
 
 import (
 	"testing"
+	"unicode"
+
+	"github.com/oekit/pkg/slicex"
 )
 
 func TestContains(t *testing.T) {
@@ -24,13 +27,67 @@ func TestContains(t *testing.T) {
 	}
 }
 
+// TestFilter 钉住 #173 语义对齐：Filter=保留命中（与 slicex.Filter 同向）。
+// 历史行为（剔除命中）迁移至 DeleteFunc。
 func TestFilter(t *testing.T) {
-	// Filter 过滤掉满足条件的字符
+	// Filter 保留满足条件的字符（与 slicex.Filter / 主流 filter 语义一致）
 	result := Filter("abc123def456", func(r rune) bool {
 		return r >= '0' && r <= '9'
 	})
+	if result != "123456" {
+		t.Errorf("Filter() = %v, want %v", result, "123456")
+	}
+}
+
+// TestKeepFunc 对偶入口：KeepFunc=保留命中，与 Filter 同语义（方向在调用点自解释）。
+func TestKeepFunc(t *testing.T) {
+	pred := func(r rune) bool { return r >= '0' && r <= '9' }
+	result := KeepFunc("abc123def456", pred)
+	if result != "123456" {
+		t.Errorf("KeepFunc() = %v, want %v", result, "123456")
+	}
+	if result != Filter("abc123def456", pred) {
+		t.Errorf("KeepFunc 应与 Filter 同语义，got %v", result)
+	}
+}
+
+// TestDeleteFunc 对偶入口：DeleteFunc=剔除命中（Filter v0.32 及以前的行为，
+// #173 语义对齐后迁移至此）。
+func TestDeleteFunc(t *testing.T) {
+	result := DeleteFunc("abc123def456", func(r rune) bool {
+		return r >= '0' && r <= '9'
+	})
 	if result != "abcdef" {
-		t.Errorf("Filter() = %v, want %v", result, "abcdef")
+		t.Errorf("DeleteFunc() = %v, want %v", result, "abcdef")
+	}
+}
+
+// TestDeleteFunc_ControlChars 钉住 #173 实测事故场景（domain-manage echoSafe）：
+// 404 文案回显路径参数的净化——剔除控制字符（该回显面还接收 %00 类输入）。
+// 方向自解释后不再写反：DeleteFunc 剔除命中；Filter=保留命中，剔除须取反谓词。
+func TestDeleteFunc_ControlChars(t *testing.T) {
+	raw := "ok\x00\x07\r\n\u007f!" // 正常字符夹控制字符
+	want := "ok!"
+	if got := DeleteFunc(raw, unicode.IsControl); got != want {
+		t.Errorf("DeleteFunc(control) = %q, want %q", got, want)
+	}
+	if got := Filter(raw, func(r rune) bool { return !unicode.IsControl(r) }); got != want {
+		t.Errorf("Filter(!control) = %q, want %q", got, want)
+	}
+}
+
+// TestFilter_AlignsWithSlicex（#173）：同库 Filter 语义一致——stringx.Filter
+// 与 slicex.Filter 都是「保留命中」（修复前一个删一个留、同名反方向，写反零报错）。
+func TestFilter_AlignsWithSlicex(t *testing.T) {
+	pred := func(r rune) bool { return r >= '0' && r <= '9' }
+	s := "abc123def456"
+	want := "123456"
+
+	if got := Filter(s, pred); got != want {
+		t.Fatalf("stringx.Filter = %q, want %q", got, want)
+	}
+	if got := string(slicex.Filter([]rune(s), pred)); got != want {
+		t.Fatalf("slicex.Filter = %q, want %q（应与 stringx.Filter 同向）", got, want)
 	}
 }
 
