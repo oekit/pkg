@@ -12,7 +12,10 @@ package cache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -443,5 +446,39 @@ func TestLocalCache_Peek(t *testing.T) {
 	}
 	if got := c.Size(); got != sizeBefore-1 {
 		t.Fatalf("Get 读过期条目应惰性删除：Size %d → %d（want %d）", sizeBefore, got, sizeBefore-1)
+	}
+}
+
+// TestLocalCache_SetNX_Concurrent SetNX 的判定与写入必须原子：N 个并发
+// 同键 SetNX 恰好一个成功（Get+Set 两步的实现在 -race 下会双双判「不存在」，
+// 覆盖彼此——本用例即该缺陷的判据）。全程 -race 跑。
+func TestLocalCache_SetNX_Concurrent(t *testing.T) {
+	c := NewLocalCache(LocalConfig[string]{TTL: time.Minute, NoBackgroundSweep: true})
+	ctx := context.Background()
+	t.Cleanup(func() { _ = c.Close(ctx) })
+
+	const n = 64
+	var (
+		wg    sync.WaitGroup
+		wins  atomic.Int64
+		start = make(chan struct{})
+	)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			if ok, err := c.SetNX(ctx, "once", ptr(fmt.Sprintf("v%d", i)), 0); err != nil {
+				t.Errorf("SetNX: %v", err)
+			} else if ok {
+				wins.Add(1)
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	if got := wins.Load(); got != 1 {
+		t.Fatalf("并发同键 SetNX 应恰好一个成功，got %d", got)
 	}
 }

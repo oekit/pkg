@@ -649,6 +649,41 @@ func (c *LocalCache[T]) SetWithTTL(ctx context.Context, key string, value *T, tt
 	return nil
 }
 
+// SetNX 仅当 key 不存在时写入（NX 语义，判定与写入在同一次写锁区间内原子
+// 完成——同 Redis SET NX，契约全文见 NXSetter）。
+//
+// 存在性判定：未过期真值条目才算「已存在」（值为 nil 的真值条目同样占位）；
+// 过期条目（含 StaleIfError 保留的过期真值）与 null marker 一律按不存在
+// 处理并被本次写入覆盖。失败（false）是纯无操作：不覆盖值、不动 TTL、
+// 不刷新淘汰顺序。ttl 与 SetWithTTL 同口径（<=0 不过期）；写路径不计 Stats。
+func (c *LocalCache[T]) SetNX(ctx context.Context, key string, value *T, ttl time.Duration) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if e, ok := c.data[key]; ok && !e.isExpired(c.now()) && !e.isNull {
+		return false, nil
+	}
+
+	var expiresAt time.Time
+	if ttl > 0 {
+		expiresAt = c.now().Add(ttl)
+	}
+
+	// 检查是否需要淘汰（同 SetWithTTL）
+	if c.cfg.MaxSize > 0 && len(c.data) >= c.cfg.MaxSize {
+		if _, exists := c.data[key]; !exists {
+			c.evictOldest()
+		}
+	}
+
+	c.data[key] = &localEntry[T]{
+		value:     value,
+		expiresAt: expiresAt,
+	}
+	c.moveToBack(key)
+	return true, nil
+}
+
 // Del 删除缓存。
 func (c *LocalCache[T]) Del(ctx context.Context, key string) error {
 	c.mu.Lock()
