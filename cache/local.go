@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // cacheLogger 取当前默认 slog logger（带 component 标签）。
@@ -102,6 +104,11 @@ type LocalConfig[T any] struct {
 	//
 	// 代价：开启后过期真值会留在表内直到被覆盖或被 Del/Clear 清掉
 	// （与「缓存条目无上界」的既有口径一致；要上界用 MaxSize）。
+	//
+	// 选择性 stale（#172）：Source 在被调用期间可取消本次兜底——对本 key
+	// 调 Del（兜底资格在回源之后重新捕获，Del 即取消），或返回 unwrap 命中
+	// cache.ErrNoStale 的错误（原样回传）。此前 stale 标志先于 Source 捕获，
+	// Source 内 Del 也取消不了兜底，消费方只能写毒标记绕行。
 	StaleIfError bool
 
 	// OnStale stale 命中回调（观测：打点/告警；nil = no-op）。
@@ -447,7 +454,6 @@ func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], 
 	entry, exists := c.data[key]
 	c.mu.RUnlock()
 
-	stale := false
 	if exists {
 		if !entry.isExpired(now) {
 			if entry.isNull {
@@ -461,7 +467,6 @@ func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], 
 			c.hits.Add(1)
 			return c.cloneOnRead(entry.value), nil
 		}
-		stale = !entry.isNull && !entry.expiresAt.IsZero()
 	}
 	if countMiss {
 		c.misses.Add(1)
@@ -488,19 +493,30 @@ func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], 
 		return nil, nil
 	}
 	if err != nil {
-		// stale-if-error：回源失败时回退已过期真值（fail-open）
-		if c.cfg.StaleIfError && stale {
-			if c.cfg.OnStale != nil {
-				c.cfg.OnStale(ctx, key, entry.value)
+		// stale-if-error：回源失败时回退已过期真值（fail-open）。
+		//
+		// 选择性 stale（#172）：兜底资格在**回源之后**重新捕获（不再是调
+		// Source 前的快照），且错误 unwrap 命中 ErrNoStale 时原样回传——
+		//   - Source 在被调用期间对本 key 调 Del 即取消本次兜底（此前
+		//     stale 标志先于 Source 捕获，Source 内 Del 表达不了「此错误
+		//     不走 stale」，消费方只能写毒标记绕行）；
+		//   - 返回 cache.ErrNoStale 包装错误按错误类型取消（如上游明确
+		//     拒绝 401/403——不得借旧缓存旁路认证）。
+		if c.cfg.StaleIfError && !errors.Is(err, ErrNoStale) {
+			staleEnt, ok := c.staleEntryNow(key)
+			if ok {
+				if c.cfg.OnStale != nil {
+					c.cfg.OnStale(ctx, key, staleEnt.value)
+				}
+				// stale 兜底**不计读命中**：Stats 的口径是「读到**未过期的**真值
+				// 条目」才算命中，过期真值是「已过期」⇒ 计入未命中。
+				// 此前这条路径既计未命中又计命中 ⇒ 一次读被计成两次（命中+未命中）
+				// ⇒ 命中率虚高（与 interface.go「一次读恰好计入命中或未命中之一」
+				// 的承诺矛盾）。
+				// 顺序提升仍要做（stale 也是一次使用）。
+				c.promoteOne(key, staleEnt)
+				return c.cloneOnRead(staleEnt.value), nil
 			}
-			// stale 兜底**不计读命中**：Stats 的口径是「读到**未过期的**真值
-			// 条目」才算命中，过期真值是「已过期」⇒ 计入未命中。
-			// 此前这条路径既计未命中又计命中 ⇒ 一次读被计成两次（命中+未命中）
-			// ⇒ 命中率虚高（与 interface.go「一次读恰好计入命中或未命中之一」
-			// 的承诺矛盾）。
-			// 顺序提升仍要做（stale 也是一次使用）。
-			c.promoteOne(key, entry)
-			return c.cloneOnRead(entry.value), nil
 		}
 		return nil, err
 	}
@@ -550,6 +566,23 @@ func (c *LocalCache[T]) effectiveNullTTL() time.Duration {
 		return defaultNullTTL
 	}
 	return c.cfg.NullTTL
+}
+
+// staleEntryNow 回源之后重新捕获 stale 兜底资格（#172）：此刻表内仍存在
+// 「TTL 过期的真值条目」时返回它，否则报告无值可兜。
+//
+// 只看当下状态，正是「选择性 stale」的取消机制：Source 在被调用期间
+// Del（或覆盖写入）该 key，兜底资格即刻消失——修复前 stale 标志在调 Source
+// 之前捕获，Source 内 Del 也取消不了本次兜底。
+func (c *LocalCache[T]) staleEntryNow(key string) (*localEntry[T], bool) {
+	now := c.now()
+	c.mu.RLock()
+	entry, ok := c.data[key]
+	c.mu.RUnlock()
+	if !ok || !entry.isExpired(now) || !c.retainForStale(entry) {
+		return nil, false
+	}
+	return entry, true
 }
 
 // retainForStale 报告该条目是否要保留给 stale-if-error 兜底（不参与回收）。

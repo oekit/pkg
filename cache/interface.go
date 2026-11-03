@@ -3,6 +3,8 @@ package cache
 import (
 	"context"
 	"time"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // Cache 是泛型缓存接口，面向接口编程。
@@ -94,6 +96,31 @@ type SourceFuncWithTTL[T any] func(ctx context.Context, key string) (*T, time.Du
 // 开启）：回源失败且存在已过期的历史真值时返回陈旧值（fail-open——防上游
 // 抖动放大为拒绝服务）；null marker 不参与 stale，TTL=0 永不过期条目无
 // stale 语义（它们不会过期）。命中时实现的 OnStale 回调（若配置）可观测。
+//
+// 选择性 stale（#172）：SourceFunc/SourceFuncWithTTL 在**被调用期间**即可
+// 取消本次兜底，不必让消费方发明毒标记绕行——
+//
+//   - 返回 unwrap 命中 ErrNoStale 的错误（errors.Is(err, ErrNoStale)）：
+//     即使 StaleIfError 开启也原样回传，不吃 stale——「上游明确拒绝」类
+//     错误（401/403/业务拒绝）用它表达「此错误不配吃 stale」；
+//   - 对本 key 调 Del：兜底资格在回源**之后**重新捕获（不是调 Source 前的
+//     快照），Del 掉过期真值即取消兜底。
+//
+// 装饰器（SingleFlightCache）语义同步：singleflight 共享的是 leader 过滤后
+// 的结果，等待方拿到的与 leader 一致（取消即全员拿错误，兜底即全员拿陈旧值）。
+
+// ErrNoStale 是「取消 stale 兜底」的可识别哨兵错误（#172）。
+//
+// 回源错误 unwrap 命中本哨兵（errors.Is(err, ErrNoStale)）时，即使
+// StaleIfError 开启也**原样回传**、不吃 stale 兜底。用法：把哨兵包进错误
+// 链即可（errors.Wrap(cache.ErrNoStale, "upstream denied") 或
+// fmt.Errorf("...: %w", cache.ErrNoStale)），消费方对业务错误的 errors.Is
+// 判定不受影响。
+//
+// 典型场景：被撤销的权限、被踢的会话借旧缓存旁路认证——「上游明确拒绝」
+// 类错误必须原样传播，不能 fail-open 到过期真值。另一条取消路径是 Source
+// 内对本 key 调 Del（见 StaleIfError 语义的「选择性 stale」）。
+var ErrNoStale = errors.New("cache: stale-if-error fallback declined for this error")
 
 // CacheAside 是 Cache-Aside 模式扩展接口。
 // 在 Cache 基础上增加数据源回填、刷新等能力。
