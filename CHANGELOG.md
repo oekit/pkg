@@ -1,3 +1,7 @@
+## [v0.32.0] — 2026-11-03
+
+- stringx.LastN 保尾截断原语（#167，与 FirstN 镜像：保尾、省略号拼头，边界口径对齐 TruncRunes）；cache.NXSetter 可选能力接口 + LocalCache.SetNX 原子 NX 写入（#168，同 Redis SET NX：过期条目与 null marker 按不存在、失败零副作用不刷 TTL、ttl<=0 不过期、写路径不计 Stats）；SingleFlightCache.SetNX 透明转发（内层无能力 fail-loud：ErrNXUnsupported）；cachetest 补 RunSetNXWithClock 硬失败契约套件（六情形，直连与装饰两形态）
+
 ## [v0.31.2] — 2026-11-02
 
 - fix(cli): Table 按序列算宽度——emoji 状态符号不再错位（#162）
