@@ -55,6 +55,36 @@ func TestFirstN(t *testing.T) {
 	}
 }
 
+func TestLastN(t *testing.T) {
+	tests := []struct {
+		name     string
+		s        string
+		n        int
+		ellipsis []string
+		want     string
+	}{
+		{"short enough", "hello", 10, nil, "hello"},
+		{"exact", "hello", 5, nil, "hello"},
+		{"keep tail", "hello world", 5, nil, "world"},
+		{"with ellipsis", "hello world", 5, []string{"..."}, "...world"},
+		{"no ellipsis when untruncated", "hello", 5, []string{"..."}, "hello"},
+		{"multibyte keep tail", "世界你好", 2, nil, "你好"},
+		{"multibyte with ellipsis", "世界你好", 2, []string{"…"}, "…你好"},
+		{"multibyte boundary", "你好world", 5, nil, "world"},
+		{"empty", "", 3, nil, ""},
+		{"zero keeps nothing", "hello", 0, nil, ""},
+		{"zero with ellipsis", "hello", 0, []string{"..."}, "..."},
+		{"negative keeps nothing", "hello", -1, nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := LastN(tt.s, tt.n, tt.ellipsis...); got != tt.want {
+				t.Errorf("LastN() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHasEmpty(t *testing.T) {
 	if !HasEmpty("a", "", "c") {
 		t.Error("HasEmpty() should return true")

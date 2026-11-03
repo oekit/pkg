@@ -62,6 +62,39 @@ func FirstN(s string, n int, ellipsis ...string) string {
 	return s
 }
 
+// LastN 返回 s 的最后 n 个字符（保尾截断：丢前缀、留后缀——文件名限长保
+// 扩展名、路径限长保末段这类「尾部比头部更有信息量」的场景），可选在头部
+// 添加省略号。与 FirstN 互为镜像：FirstN 保头、省略号拼尾；LastN 保尾、
+// 省略号拼头。未发生截断时原样返回（不拼省略号）。
+//
+// 边界口径：n <= 0 一律按「保留 0 个」处理（返回空串+省略号）。与 FirstN
+// 的 n<0 现状（其循环永不命中截断点 ⇒ 原样返回整串）有意不同——那是实现
+// 怪癖不是语义，本函数按 TruncRunes 的「非法上限=全截断」口径走，不 panic。
+func LastN(s string, n int, ellipsis ...string) string {
+	if n <= 0 {
+		ret := ""
+		for _, each := range ellipsis {
+			ret += each
+		}
+		return ret
+	}
+	// 从尾部回退 n 个 rune 找保尾起点：无需 []rune 全量分配；
+	// 提前走完字符串（n >= rune 数）⇒ 无需截断。
+	i := len(s)
+	for k := 0; k < n && i > 0; k++ {
+		_, size := utf8.DecodeLastRuneInString(s[:i])
+		i -= size
+	}
+	if i == 0 {
+		return s
+	}
+	ret := ""
+	for _, each := range ellipsis {
+		ret += each
+	}
+	return ret + s[i:]
+}
+
 // HasEmpty 检查 args 中是否存在空字符串。
 func HasEmpty(args ...string) bool {
 	for _, arg := range args {
