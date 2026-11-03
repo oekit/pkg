@@ -1,3 +1,10 @@
+## [v0.33.0] — 2026-11-03
+
+- feat(cache): 选择性 stale——回源后重捕获兜底资格，Source 内 Del 即取消 + ErrNoStale 哨兵（#172）
+- ⚠️ breaking feat(stringx): Filter 语义对齐 slicex.Filter（保留命中），新增 KeepFunc/DeleteFunc 迁移位（#173）
+
+关联问题单：pkg#172、pkg#173。
+
 ## [v0.32.0] — 2026-11-03
 
 - stringx.LastN 保尾截断原语（#167，与 FirstN 镜像：保尾、省略号拼头，边界口径对齐 TruncRunes）；cache.NXSetter 可选能力接口 + LocalCache.SetNX 原子 NX 写入（#168，同 Redis SET NX：过期条目与 null marker 按不存在、失败零副作用不刷 TTL、ttl<=0 不过期、写路径不计 Stats）；SingleFlightCache.SetNX 透明转发（内层无能力 fail-loud：ErrNXUnsupported）；cachetest 补 RunSetNXWithClock 硬失败契约套件（六情形，直连与装饰两形态）
