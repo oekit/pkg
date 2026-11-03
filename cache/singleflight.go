@@ -2,8 +2,10 @@ package cache
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	"github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/internal/singleflight"
 )
 
@@ -71,6 +73,22 @@ func (sf *SingleFlightCache[T]) Set(ctx context.Context, key string, value *T) e
 // SetWithTTL 设置缓存（自定义 TTL）。
 func (sf *SingleFlightCache[T]) SetWithTTL(ctx context.Context, key string, value *T, ttl time.Duration) error {
 	return sf.inner.SetWithTTL(ctx, key, value, ttl)
+}
+
+// ErrNXUnsupported SetNX 转发时内层不具备 NXSetter 能力（fail-loud，不静默假成功）。
+var ErrNXUnsupported = errors.New("cache: inner does not support NX semantics (cache.NXSetter)")
+
+// SetNX 不存在才写入（NX 语义，转发不打折，契约全文见 NXSetter）。
+//
+// 装饰器必须透明：「不存在」判定与写入的原子性完全由内层的单次锁区间保证
+// ——本方法只做能力转发，绝不退化为 Get+Set 两步（并发下会双双判「不存在」
+// 而互相覆盖，NX 语义当场作废）。内层不具备 NXSetter 时返回可 errors.Is
+// 判定的 ErrNXUnsupported（能力缺失要看得见，不能假装成功）。
+func (sf *SingleFlightCache[T]) SetNX(ctx context.Context, key string, value *T, ttl time.Duration) (bool, error) {
+	if nx, ok := sf.inner.(NXSetter[T]); ok {
+		return nx.SetNX(ctx, key, value, ttl)
+	}
+	return false, errors.Wrap(ErrNXUnsupported, "SingleFlightCache.SetNX", "inner", fmt.Sprintf("%T", sf.inner))
 }
 
 // Del 删除缓存。
@@ -257,9 +275,10 @@ func (sf *SingleFlightCache[T]) Refresh(ctx context.Context, key string) (*T, er
 	return val, nil
 }
 
-// 编译期能力契约：SingleFlightCache 具备观测计数能力（pkg#76）与按调用
-// 注入回源的能力（pkg#77）——装饰器不丢能力。
+// 编译期能力契约：SingleFlightCache 具备观测计数能力（pkg#76）、按调用
+// 注入回源的能力（pkg#77）与 NX 写入能力（NXSetter）——装饰器不丢能力。
 var (
 	_ StatsProvider       = (*SingleFlightCache[int])(nil)
 	_ SourceInjector[int] = (*SingleFlightCache[int])(nil)
+	_ NXSetter[int]       = (*SingleFlightCache[int])(nil)
 )

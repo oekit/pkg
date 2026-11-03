@@ -245,3 +245,136 @@ func RunNoBackgroundGoroutine[T any](t *testing.T, factory func(t *testing.T, so
 		t.Fatalf("构造缓存不应新增后台 goroutine：before=%d after=%d", before, after)
 	}
 }
+
+// RunSetNXWithClock 跑「不存在才写入」契约（NXSetter）。
+//
+// 实现须提供 cache.NXSetter（SetNX(ctx, key, value, ttl) (bool, error)）
+// ——未提供即判失败。
+//
+// 每个情形独立实例 + 独立假时钟（时间推进互不串扰）。每种情形都构造出
+// 「不满足契约就一定失败」的状态：
+//
+//  1. 先到先得：空键 SetNX 成功；同键再来失败且原值不变；
+//  2. nil 真值占位：SetNX(key, nil) 成功后同键 SetNX 失败——键占位是 NX
+//     的核心语义（Redis 对空值键的 SET NX 同样未命中），值为 nil 也占位；
+//  3. 过期条目按不存在：TTL 条目过期后同键 SetNX 成功并以新值覆盖；
+//  4. null marker 按不存在：GetOrLoad 缓存的「已知无值」标记可被 SetNX
+//     真值覆盖，随后 Get 拿到的是真值；
+//  5. 失败零副作用：失败的 SetNX 不覆盖值、**不刷新 TTL**（写入 30s、
+//     10s 后失败一次，31s 时必须已过期——失败写若重置/刷新了过期时点，
+//     此处仍命中即红）；
+//  6. ttl<=0 不过期：写入后大幅推进时钟仍在。
+func RunSetNXWithClock[T any](t *testing.T, c Contract[T], factory ClockFactory[T]) {
+	t.Helper()
+	ctx := context.Background()
+
+	nxOf := func(cc cache.CacheAside[T]) cache.NXSetter[T] {
+		nx, ok := cc.(cache.NXSetter[T])
+		if !ok {
+			t.Fatalf("实现须提供 cache.NXSetter 能力（SetNX(ctx, key, value, ttl) (bool, error)）")
+		}
+		return nx
+	}
+
+	// 1. 先到先得 + 失败不覆盖
+	{
+		clock := NewFakeClock()
+		cc := factory(t, unusedSource[T](t), clock)
+		nx := nxOf(cc)
+		if ok, err := nx.SetNX(ctx, "nx-first", c.NewValue(1), 0); err != nil || !ok {
+			t.Fatalf("空键 SetNX 应成功，got (%v, %v)", ok, err)
+		}
+		if ok, err := nx.SetNX(ctx, "nx-first", c.NewValue(2), 0); err != nil || ok {
+			t.Fatalf("同键 SetNX 应失败，got (%v, %v)", ok, err)
+		}
+		if v, err := cc.Get(ctx, "nx-first"); err != nil || !c.Equal(v, c.NewValue(1)) {
+			t.Fatalf("失败的 SetNX 不得覆盖原值，got (%v, %v)", v, err)
+		}
+	}
+
+	// 2. nil 真值占位
+	{
+		clock := NewFakeClock()
+		cc := factory(t, unusedSource[T](t), clock)
+		nx := nxOf(cc)
+		if ok, err := nx.SetNX(ctx, "nx-nil", nil, 0); err != nil || !ok {
+			t.Fatalf("空键 SetNX(nil) 应成功，got (%v, %v)", ok, err)
+		}
+		if ok, err := nx.SetNX(ctx, "nx-nil", c.NewValue(2), 0); err != nil || ok {
+			t.Fatalf("nil 真值条目应占位（同键 SetNX 失败），got (%v, %v)", ok, err)
+		}
+	}
+
+	// 3. 过期条目按不存在
+	{
+		clock := NewFakeClock()
+		cc := factory(t, unusedSource[T](t), clock)
+		nx := nxOf(cc)
+		if ok, err := nx.SetNX(ctx, "nx-exp", c.NewValue(3), 30*time.Second); err != nil || !ok {
+			t.Fatalf("空键 SetNX 应成功，got (%v, %v)", ok, err)
+		}
+		clock.Advance(31 * time.Second)
+		if ok, err := nx.SetNX(ctx, "nx-exp", c.NewValue(4), 0); err != nil || !ok {
+			t.Fatalf("过期条目按不存在，SetNX 应成功，got (%v, %v)", ok, err)
+		}
+		if v, err := cc.Get(ctx, "nx-exp"); err != nil || !c.Equal(v, c.NewValue(4)) {
+			t.Fatalf("应以新值覆盖过期条目，got (%v, %v)", v, err)
+		}
+	}
+
+	// 4. null marker 按不存在（真值覆盖「已知无值」标记）
+	{
+		clock := NewFakeClock()
+		cc := factory(t, func(_ context.Context, key string) (*T, error) {
+			if key == "nx-marker" {
+				return nil, nil // 回源声明「无值」⇒ 缓存 null marker
+			}
+			return c.NewValue(0), nil
+		}, clock)
+		nx := nxOf(cc)
+		if v, err := cc.GetOrLoad(ctx, "nx-marker"); err != nil || v != nil {
+			t.Fatalf("GetOrLoad(nx-marker) 应得 (nil, nil)，got (%v, %v)", v, err)
+		}
+		if ok, err := nx.SetNX(ctx, "nx-marker", c.NewValue(5), 0); err != nil || !ok {
+			t.Fatalf("null marker 按不存在，SetNX 应成功，got (%v, %v)", ok, err)
+		}
+		if v, err := cc.Get(ctx, "nx-marker"); err != nil || !c.Equal(v, c.NewValue(5)) {
+			t.Fatalf("真值应覆盖 null marker，got (%v, %v)", v, err)
+		}
+	}
+
+	// 5. 失败零副作用（不覆盖、不刷新 TTL）
+	{
+		clock := NewFakeClock()
+		cc := factory(t, unusedSource[T](t), clock)
+		nx := nxOf(cc)
+		if ok, err := nx.SetNX(ctx, "nx-side", c.NewValue(5), 30*time.Second); err != nil || !ok {
+			t.Fatalf("空键 SetNX 应成功，got (%v, %v)", ok, err)
+		}
+		clock.Advance(10 * time.Second)
+		if ok, err := nx.SetNX(ctx, "nx-side", c.NewValue(6), 30*time.Second); err != nil || ok {
+			t.Fatalf("同键 SetNX 应失败，got (%v, %v)", ok, err)
+		}
+		if v, err := cc.Get(ctx, "nx-side"); err != nil || !c.Equal(v, c.NewValue(5)) {
+			t.Fatalf("失败的 SetNX 不得覆盖原值，got (%v, %v)", v, err)
+		}
+		clock.Advance(21 * time.Second) // 距写入共 31s > 30s TTL
+		if v, err := cc.Get(ctx, "nx-side"); err != nil || v != nil {
+			t.Fatalf("失败的 SetNX 不得刷新 TTL（31s 后应过期），got (%v, %v)", v, err)
+		}
+	}
+
+	// 6. ttl<=0 不过期
+	{
+		clock := NewFakeClock()
+		cc := factory(t, unusedSource[T](t), clock)
+		nx := nxOf(cc)
+		if ok, err := nx.SetNX(ctx, "nx-nottl", c.NewValue(7), 0); err != nil || !ok {
+			t.Fatalf("空键 SetNX 应成功，got (%v, %v)", ok, err)
+		}
+		clock.Advance(24 * time.Hour)
+		if v, err := cc.Get(ctx, "nx-nottl"); err != nil || !c.Equal(v, c.NewValue(7)) {
+			t.Fatalf("ttl<=0 应不过期，got (%v, %v)", v, err)
+		}
+	}
+}

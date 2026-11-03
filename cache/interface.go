@@ -170,6 +170,29 @@ type PeekGetter[T any] interface {
 	Peek(ctx context.Context, key string) (*T, bool, error)
 }
 
+// NXSetter 是可选能力接口：不存在才写入（LocalCache 实现：SetNX）。
+//
+// 与 Redis SET NX 同语义：占位/一次性标记/生成码唯一性这类「先到先得」的
+// 写入，判定与写入必须原子完成（Get + Set 两步在并发下会双双判「不存在」
+// 而覆盖彼此）。同 HitGetter/PeekGetter 的「可选能力接口 + 类型断言」哲学
+// ——不加入 Cache[T]，不破坏其它后端实现。
+//
+// 实现契约：
+//
+//   - 「不存在」= 键无条目、条目已过期（含 StaleIfError 保留的过期真值），
+//     或命中 null marker（那是「已知无值」的缓存声明，真值写入自然覆盖）；
+//     「已存在」= 有未过期的真值条目——即使其值为 nil（键占位是本原语的
+//     核心语义，Redis 对空值键的 SET NX 同样返回未命中）；
+//   - 失败（返回 false）必须是**纯无操作**：不覆盖值、不动 TTL、不刷新
+//     淘汰顺序（对齐 Redis SET NX 失败零副作用）；
+//   - ttl 与 SetWithTTL 同口径：>0 按其过期，<=0 不过期；
+//   - 写路径不计入 Stats（与 Set/Del 同口径；失败的 SetNX 是写尝试，
+//     不是读 miss）。
+type NXSetter[T any] interface {
+	// SetNX 仅当 key 不存在时写入并返回 true；已存在返回 false（原子）。
+	SetNX(ctx context.Context, key string, value *T, ttl time.Duration) (bool, error)
+}
+
 // Stats 是缓存的观测计数快照（pkg#76）。
 //
 // 口径（LocalCache 实现；各计数单调不减，只增不减）：

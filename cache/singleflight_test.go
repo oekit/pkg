@@ -174,3 +174,34 @@ func TestSingleFlightCache_FallbackToGet(t *testing.T) {
 		t.Fatal("回退路径应走 inner.Get")
 	}
 }
+
+// TestSingleFlightCache_SetNX 装饰器必须透明转发 NX 语义：判定与写入的
+// 原子性由内层的单次锁区间保证，绝不退化为 Get+Set 两步（并发下会双双判
+// 「不存在」互相覆盖，NX 语义当场作废）。内层不具备 NXSetter 时 fail-loud
+// 返回可 errors.Is 判定的 ErrNXUnsupported——能力缺失要看得见，不能假装成功。
+func TestSingleFlightCache_SetNX(t *testing.T) {
+	ctx := context.Background()
+	inner := NewLocalCache(LocalConfig[string]{TTL: time.Minute})
+	t.Cleanup(func() { _ = inner.Close(ctx) })
+	sf := NewSingleFlightCache(inner)
+
+	if ok, err := sf.SetNX(ctx, "k", ptr("v1"), 0); err != nil || !ok {
+		t.Fatalf("转发内层 SetNX 空键应成功，got (%v, %v)", ok, err)
+	}
+	if ok, err := sf.SetNX(ctx, "k", ptr("v2"), 0); err != nil || ok {
+		t.Fatalf("同键 SetNX 应失败，got (%v, %v)", ok, err)
+	}
+	if got, err := sf.Get(ctx, "k"); err != nil || got == nil || *got != "v1" {
+		t.Fatalf("失败不得覆盖原值，got (%v, %v)", got, err)
+	}
+
+	// 内层不具备 NXSetter（第三方后端替身）：fail-loud
+	noNX := NewSingleFlightCache(&noPeekInner{values: map[string]*string{}})
+	ok, err := noNX.SetNX(ctx, "k", ptr("v"), 0)
+	if ok || err == nil {
+		t.Fatalf("内层无 NXSetter 应报错，got (%v, %v)", ok, err)
+	}
+	if !errors.Is(err, ErrNXUnsupported) {
+		t.Fatalf("错误应可 errors.Is(ErrNXUnsupported) 判定，got %v", err)
+	}
+}

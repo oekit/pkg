@@ -109,6 +109,29 @@ func TestContract_LocalCache_Extras(t *testing.T) {
 		})
 }
 
+// TestContract_NX 跑「不存在才写入」契约（NXSetter）——LocalCache 直连与
+// SingleFlightCache 包装 LocalCache 两个形态都跑（装饰器必须透明转发 NX
+// 语义，不得退化为 Get+Set 两步：并发下会双双判「不存在」互相覆盖）。
+// 套件入口硬失败（能力缺失即红）：显式调用即视为声明该能力。
+func TestContract_NX(t *testing.T) {
+	localFactory := func(t *testing.T, source cache.SourceFunc[string], clock *cachetest.FakeClock) cache.CacheAside[string] {
+		c := cache.NewLocalCache(cache.LocalConfig[string]{
+			TTL:     30 * time.Second,
+			NullTTL: time.Minute,
+			Source:  source,
+			Now:     clock.Now,
+		})
+		t.Cleanup(func() { _ = c.Close(context.Background()) })
+		return c
+	}
+	cachetest.RunSetNXWithClock(t, cachetest.Comparable[string](), localFactory)
+
+	cachetest.RunSetNXWithClock(t, cachetest.Comparable[string](),
+		func(t *testing.T, source cache.SourceFunc[string], clock *cachetest.FakeClock) cache.CacheAside[string] {
+			return cache.NewSingleFlightCache(localFactory(t, source, clock))
+		})
+}
+
 // TestContract_StaleIfError 跑 pkg#72 的 stale-if-error 契约（回源失败回退
 // 已过期的历史真值，fail-open）——LocalCache 直连与 SingleFlightCache 包装
 // LocalCache 两个形态都跑。
