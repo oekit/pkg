@@ -33,7 +33,7 @@ func TestRoundTrip(t *testing.T) {
 			t.Fatalf("Seal(%q): %v", pt, err)
 		}
 		if !strings.HasPrefix(sealed, "v1:") {
-			t.Fatalf("密文应带 v1 前缀，got %q", sealed[:min(10, len(sealed))]) //nolint:gocritic // Go 1.21+ 内建 min
+			t.Fatalf("密文应带 v1 前缀，got %q", sealed[:min(10, len(sealed))])
 		}
 		payload := strings.TrimPrefix(sealed, "v1:")
 		raw, err := base64.StdEncoding.DecodeString(payload)
