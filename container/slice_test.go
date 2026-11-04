@@ -2,7 +2,9 @@ package container
 
 import (
 	"reflect"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -82,5 +84,92 @@ func TestSliceConcurrent(t *testing.T) {
 	wg.Wait()
 	if s.Len() != 800 {
 		t.Fatalf("Len = %d; want 800", s.Len())
+	}
+}
+
+// ---- AppendIfAbsent（#178）：有序注册表的原子「查重+追加」 ----
+
+// TestSlice_AppendIfAbsent_ExactEqual 锁定原子性契约：已存在等值元素时返回
+// false 且不改动切片；不存在时追加返回 true。修复前「Range 查重 + Append」
+// 两步之间重复注册会插进两个同名条目。
+func TestSlice_AppendIfAbsent_ExactEqual(t *testing.T) {
+	s := NewSlice[string]()
+	if !s.AppendIfAbsent("host-a", nil) {
+		t.Fatal("首个元素应追加成功")
+	}
+	if s.AppendIfAbsent("host-a", nil) {
+		t.Fatal("重复注册应返回 false")
+	}
+	if got := s.Len(); got != 1 {
+		t.Fatalf("重复注册不应改动切片：Len=%d，want 1", got)
+	}
+	if !s.AppendIfAbsent("host-b", nil) {
+		t.Fatal("新元素应追加成功")
+	}
+	// 有序性：追加到尾部，先注册先命中
+	if v, _ := s.Get(0); v != "host-a" {
+		t.Fatalf("有序性破坏：Get(0)=%q", v)
+	}
+	if v, _ := s.Get(1); v != "host-b" {
+		t.Fatalf("Get(1)=%q，want host-b", v)
+	}
+}
+
+// TestSlice_AppendIfAbsent_CustomEq 自定义等价关系（大小写归一）。
+func TestSlice_AppendIfAbsent_CustomEq(t *testing.T) {
+	s := NewSlice[string]("Host-A")
+	ci := func(a, b string) bool { return strings.EqualFold(a, b) }
+	if s.AppendIfAbsent("host-a", ci) {
+		t.Fatal("大小写归一后应视为已存在")
+	}
+	if !s.AppendIfAbsent("host-b", ci) {
+		t.Fatal("不同 host 应追加")
+	}
+}
+
+// TestSlice_AppendIfAbsent_StructElement 结构体元素：== 口径（同值同类型）。
+func TestSlice_AppendIfAbsent_StructElement(t *testing.T) {
+	type reg struct {
+		Name string
+		Prio int
+	}
+	s := NewSlice[reg]()
+	if !s.AppendIfAbsent(reg{"a", 1}, nil) {
+		t.Fatal("首个元素应追加")
+	}
+	if s.AppendIfAbsent(reg{"a", 1}, nil) {
+		t.Fatal("同值同类型应视为已存在")
+	}
+	if !s.AppendIfAbsent(reg{"a", 2}, nil) {
+		t.Fatal("值不同应追加")
+	}
+	if got := s.Len(); got != 2 {
+		t.Fatalf("Len=%d，want 2", got)
+	}
+}
+
+// TestSlice_AppendIfAbsent_Concurrent 原子性：并发注册同 key 只能有恰好一个
+// 成功（两步查重+追加在竞态下会插进多个同名条目，go-git-platform 查重
+// fail-fast 的窗口）。
+func TestSlice_AppendIfAbsent_Concurrent(t *testing.T) {
+	const goroutines = 50
+	s := NewSlice[string]()
+	var success atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if s.AppendIfAbsent("same-key", nil) {
+				success.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if success.Load() != 1 {
+		t.Fatalf("并发注册同 key 应恰好一个成功，got %d", success.Load())
+	}
+	if got := s.Len(); got != 1 {
+		t.Fatalf("Len=%d，want 1", got)
 	}
 }

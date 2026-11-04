@@ -25,6 +25,34 @@ func (s *Slice[T]) Append(items ...T) {
 	s.s = append(s.s, items...)
 }
 
+// AppendIfAbsent 原子地「查重 + 追加」（#178）：已存在等值元素时返回 false 且
+// 不改动切片；不存在时**在同一把写锁内**追加并返回 true。有序注册表场景
+// （先注册先命中、查重 fail-fast）对应 SafeMap.GetOrSet 的「一次性原子」承诺——
+// 先 Range/Snapshot 查重再 Append 是两步，重复注册的 fail-fast 窗口里会插进
+// 两个同名条目。
+//
+// eq 为 nil 时按 == 比较（interface 相等：动态类型与值都相等；元素动态类型
+// 不可比较时 panic，与 map 访问不可比较键同一运行时契约）。需要深比较
+// （指针指向内容、切片逐元素）或自定义等价关系（host 别名大小写归一等）
+// 时传入 eq。遍历按注册顺序进行，命中第一个等值元素即停。
+func (s *Slice[T]) AppendIfAbsent(v T, eq func(a, b T) bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.s {
+		if eq != nil {
+			if eq(existing, v) {
+				return false
+			}
+			continue
+		}
+		if any(existing) == any(v) {
+			return false
+		}
+	}
+	s.s = append(s.s, v)
+	return true
+}
+
 // Len 返回元素个数。
 func (s *Slice[T]) Len() int {
 	s.mu.RLock()
