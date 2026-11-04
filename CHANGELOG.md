@@ -1,3 +1,9 @@
+## [v0.34.1] — 2026-11-05
+
+- fix(jsonrepair): `StripCodeFence` 剥掉任意语言标记（[#180](https://github.com/oekit/pkg/issues/180)）——正则从 `(?:json)?` 白名单改为 `[a-zA-Z0-9_+-]*` 字符集，\`\`\`yaml/\`\`\`toml/\`\`\`sql 等围栏的语言名不再残留进结果污染下游解析（下游实证 oagentkit/textx#21）；大小写变体（\`\`\`JSON）一并覆盖，\`\`\`json{...}\`\`\` 同行形态语义不变
+
+关联问题单：pkg#180。
+
 ## [v0.34.0] — 2026-11-05
 
 - feat(secretx): 新增静态敏感凭证的信封加密原语（[#177](https://github.com/oekit/pkg/issues/177)）——domain-manage/zeus/user/octopus/fuxi_flow 四仓各自手搓 AES 已漂移出四个形态（fuxi 的 AES-CFB 无认证密文可篡改不报错、octopus 缺钥明文透传入库、三家无版本前缀真要轮换时密文无法分发），本包收成一份正确默认：`ParseKey`（base64 + 16/24/32B 校验，错误带实际长度上下文）+ `NewBox` 构造期 fail-fast（缺钥 `ErrNoKey`、长度非法 `ErrBadKeySize`——**不提供缺钥明文透传降级**，本地开发请自行用恒等实现绕过）+ `Box.Seal/Open`（`"v1:" + base64(nonce‖ct)`，AES-GCM 必带认证、crypto/rand 随机 nonce、与 domain-manage 手搓形态**逐字节兼容——存量数据零迁移**）+ `SealWithAAD/OpenWithAAD`（绑定行 id/用途，防密文在行间挪用）+ `ErrUnsupportedVersion` 版本前缀识别位（v2 主密钥落地后下游按前缀选钥重封的缝线）+ `ErrBadCiphertext` 统一表述（密钥不匹配与密文损坏不可区分，不向日志泄露「哪条密文用哪把钥封」）。零第三方依赖（crypto/* 标准库），Box 不可变可并发
