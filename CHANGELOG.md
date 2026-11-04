@@ -1,3 +1,10 @@
+## [v0.34.0] — 2026-11-05
+
+- feat(secretx): 新增静态敏感凭证的信封加密原语（[#177](https://github.com/oekit/pkg/issues/177)）——domain-manage/zeus/user/octopus/fuxi_flow 四仓各自手搓 AES 已漂移出四个形态（fuxi 的 AES-CFB 无认证密文可篡改不报错、octopus 缺钥明文透传入库、三家无版本前缀真要轮换时密文无法分发），本包收成一份正确默认：`ParseKey`（base64 + 16/24/32B 校验，错误带实际长度上下文）+ `NewBox` 构造期 fail-fast（缺钥 `ErrNoKey`、长度非法 `ErrBadKeySize`——**不提供缺钥明文透传降级**，本地开发请自行用恒等实现绕过）+ `Box.Seal/Open`（`"v1:" + base64(nonce‖ct)`，AES-GCM 必带认证、crypto/rand 随机 nonce、与 domain-manage 手搓形态**逐字节兼容——存量数据零迁移**）+ `SealWithAAD/OpenWithAAD`（绑定行 id/用途，防密文在行间挪用）+ `ErrUnsupportedVersion` 版本前缀识别位（v2 主密钥落地后下游按前缀选钥重封的缝线）+ `ErrBadCiphertext` 统一表述（密钥不匹配与密文损坏不可区分，不向日志泄露「哪条密文用哪把钥封」）。零第三方依赖（crypto/* 标准库），Box 不可变可并发
+- feat(container): `Slice.AppendIfAbsent` 原子「查重 + 追加」（[#178](https://github.com/oekit/pkg/issues/178)）——有序注册表场景（先注册先命中 + 查重 fail-fast，如 host 别名表、协议分发表）的 GetOrSet 对应物：先 Range/Snapshot 查重再 Append 是两步，重复注册的 fail-fast 窗口里会插进两个同名条目；`eq` 为 nil 按 == 比较（interface 相等，元素动态类型不可比较时 panic，与 map 访问不可比较键同一运行时契约），非 nil 时自定义等价关系（大小写归一等）。查重与追加在同一把写锁内完成，-race 下并发注册同 key 恰好一个成功
+
+关联问题单：pkg#177、pkg#178。
+
 ## [v0.33.0] — 2026-11-03
 
 - feat(cache): 选择性 stale——回源后重捕获兜底资格，Source 内 Del 即取消 + ErrNoStale 哨兵（#172）
