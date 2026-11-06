@@ -66,9 +66,19 @@ func (r *BytesReader) ReadBinary(p []byte) (int, error) {
 // ReadLen 实现 Reader。
 func (r *BytesReader) ReadLen() int { return r.readLen }
 
-// Release 实现 Reader：重置读位置与计数，buf 引用清空。
-func (r *BytesReader) Release(error) error {
-	r.buf = nil
+// Release 实现 Reader。
+//
+//   - e == nil：回到起点（游标归零、ReadLen 归零），buf 引用保留——本类型
+//     面对的是「已整体收包的固定帧」，重新解析同一帧是它的常见用法。
+//   - e != nil：**整段丢弃**，buf 引用清空，此后读取返回 ErrNoRemainingData。
+//
+// 与 DefaultReader 的差异不是随意为之：那边面对的是可续读的流，残留字节既
+// 无法重读、又可能是下一条报文的开头，所以 e==nil 时保留残留；而固定帧「重置」
+// 的自然含义就是回到起点。两者的共同点是 e != nil 一律丢弃（[#216]）。
+func (r *BytesReader) Release(e error) error {
+	if e != nil {
+		r.buf = nil
+	}
 	r.ri = 0
 	r.readLen = 0
 	return nil
