@@ -94,15 +94,34 @@ func Parse(spec string) (Schedule, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid month field: %w", err)
 	}
-	schedule.Dow, err = getField(fields[5], 0, 6)
+	// dow 接受 7≡Sunday（[#186]）：vixie cron/crontab(5)/robfig 均接受 7，
+	// 此前判越界——从系统 crontab 迁移表达式（`0 2 * * 7`）加载即失败，报错
+	// 不提示「本实现不支持 7」，排错方向被误导到「表达式写错」。方言差异
+	// （MON/JAN 名字、L/W/# 均不支持）见 doc.go。
+	dowSpec := fields[5]
+	if dowSpec == "7" {
+		dowSpec = "0"
+	}
+	schedule.Dow, err = getField(dowSpec, 0, 6)
 	if err != nil {
-		return nil, fmt.Errorf("invalid day of week field: %w", err)
+		return nil, fmt.Errorf("invalid day of week field %q (注意: 7≡Sunday 已支持; MON/JAN 等名字与 L/W/# 扩展不支持): %w", fields[5], err)
 	}
 
 	return schedule, nil
 }
 
 // Every 返回一个以固定间隔调度的 Schedule。
+//
+// ⚠️ 语义三件套（[#184](https://github.com/oekit/pkg/issues/184)，此前零声明）：
+//   - duration < 1s **静默钳到 1s**（本调度器秒级粒度，ConstantDelaySchedule
+//     沿用 robfig 形态）——配 Every(500ms) 期望半秒节奏会得到 1s，调度密度
+//     减半无任何信号；
+//   - 亚秒部分**截断**（1500ms ⇒ 1s）；
+//   - Next 按传入时间的秒对齐，实际触发间隔 = delay 但不保证与「上次执行
+//     完成」挂钩（固定时刻表，非完成后间隔；后者用 oekit/concurrency/loop
+//     的 IntervalAfterCompletion）。
+//
+// 需要亚秒级高频节奏不该用 cron——直接 go-timer/loop。
 func Every(duration time.Duration) ConstantDelaySchedule {
 	if duration < time.Second {
 		duration = time.Second
@@ -122,6 +141,10 @@ func (s *SpecSchedule) Next(t time.Time) time.Time {
 	// 移动到下一秒
 	t = t.Add(1*time.Second - time.Duration(t.Nanosecond())*time.Nanosecond)
 
+	// ⚠️ 不可满足表达式（如 `0 0 31 2 *`：2 月永无 31 日）在此静默返回零值
+	// time.Time（[#185]）：无 error 通道、5 年硬搜索上限后放弃。调用方拿到
+	// 零值后 time.Until(zero) 是极大负值——据此 sleep 会立即触发风暴，据此
+	// 判「已过期」语义相反。调度器消费 Next 前应判 IsZero。
 	yearLimit := t.Year() + 5
 
 WRAP:

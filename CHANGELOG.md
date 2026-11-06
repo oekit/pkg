@@ -1,3 +1,14 @@
+## [v0.35.1] — 2026-11-06
+
+- fix(mathx): `Round`/`Floor` 补 n>308 溢出防护——返回原值而非 NaN/Inf（[#182](https://github.com/oekit/pkg/issues/182)）——`math.Pow10(400)`=+Inf ⇒ `x*Inf`=±Inf（x=0 时 NaN）⇒ `toFixed` 内 ParseFloat("NaN") 竟成功 ⇒ **静默返回 NaN**，指标/金额进库不报错；同文件 `DivisionN` 有同款 IsInf 防护而这两函数没有（同包两套哲学）。附：`ToFixed(x,-1)` 的负精度 panic 在 doc 声明（行为不变）
+- fix(stringx): `FirstN` n<0 对齐 Trunc 家族「非法上限=全截断」口径（[#183](https://github.com/oekit/pkg/issues/183)）——此前循环永不命中截断点 ⇒ 静默返回整串（截断护栏整段失效）；自家 `LastN` 的 doc 已白纸黑字指认「那是实现怪癖不是语义」——属于修复而非行为变更
+- fix(stringx): `Union` 改保序实现（先 first 后 second 扫重）（[#187](https://github.com/oekit/pkg/issues/187)）——此前从 map 迭代构造结果，每次调用顺序不同（Go map 遍历随机化）；同库 `slicex.Unique` 明确「保持原始顺序」——两族口径相反。合并结果进 UI 列表/审计日志/签名串/缓存 key 时顺序抖动 = diff 噪声、快照比对 flaky。成本一致（O(n+m)+map 查重）
+- fix(timex/cron): 方言差异收口——dow 支持 7≡Sunday、无解表达式/亚秒钐制 doc 声明（[#184](https://github.com/oekit/pkg/issues/184)、[#185](https://github.com/oekit/pkg/issues/185)、[#186](https://github.com/oekit/pkg/issues/186)）——doc.go 宣称「标准 5 字段」但 dow=7 判越界（vixie cron/crontab(5)/robfig 均接受）、MON/JAN 名字不支持：从系统 crontab 迁移 `0 2 * * 7` 加载即报错且不提示方言差异。修法：dow=7 归一为 0 + 报错信息点名方言差异；`Every` 的三件套语义（<1s 钝 1s/亚秒截断/秒对齐）与 `SpecSchedule.Next` 的无解零值返回 doc 声明（调度器消费 Next 前应判 IsZero）
+- fix(cache): `Key` doc 补碰撞警示与「段内不得含 ':'」契约（[#188](https://github.com/oekit/pkg/issues/188)）——同文件 HashKey 用整篇幅幅记录过 #146 同款事故并上了长度前缀编码，但更常用的 Key 入口零警示：`Key("a","b:c")==Key("a:b","c")` ——段值来自用户输入含冒号时静默串缓存
+- fix(httpjson): 2xx 空 body 且 out!=nil 时跳过解码（[#189](https://github.com/oekit/pkg/issues/189)）——#158（out=nil 侧）的对偶面：DELETE/POST 端点返回 204、调用方习惯性传 `&resp` 时 `json.Unmarshal([]byte{}, out)` 必报「响应解析失败」——**把成功误报为失败**，重试即重复施加副作用；204 语义上就没有 body
+
+关联问题单：pkg#182、pkg#183、pkg#184、pkg#185、pkg#186、pkg#187、pkg#188、pkg#189。
+
 ## [v0.35.0] — 2026-11-06
 
 - feat(pathx): 新增 MatchSimpleGlob 单星名字通配原语——只有第一颗 * 是通配符（第二颗起按字面量）、空串判不匹配、? 非通配，与 full-backtracking 的 MatchGlob 是反语义对（来源：kuboard-go simpleGlobMatch 已验证实现上移，2,000,000 例差分 fuzz 0 差异）。feat(stringx): 新增 MaskJSONFields JSON 字段级脱敏原语——顶层对象字段值替换为固定文案，字段缺省时补上，解析失败透传 json 包原始错误不包装（消费方透传错误文本到响应）

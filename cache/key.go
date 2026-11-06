@@ -11,6 +11,12 @@ import (
 // Key 用冒号连接各部分生成缓存 key。
 //
 //	cache.Key("user", "123", "profile") // "user:123:profile"
+//
+// ⚠️ 碰撞警示（[#188]，与同文件 HashKey 的 #146 同款事故、不同入口）：
+// 段内含 ':' 即跨 key 碰撞——`Key("a","b:c") == Key("a:b","c")`。key 的
+// 某段来自用户输入（租户名/路径/关键词）且含冒号时**静默串缓存**（A 的
+// 结果被当成 B 的返回）。契约：**各段不得含 ':'**；参数形态的 key 或段值
+// 不可信时用 HashKey（长度前缀无歧义编码）。
 func Key(parts ...string) string {
 	return strings.Join(parts, ":")
 }

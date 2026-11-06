@@ -87,6 +87,13 @@ func DoJSON(ctx context.Context, client *http.Client, req Request, out any) erro
 	if out == nil {
 		return nil
 	}
+	// 2xx 空 body 跳过解码（[#189]，#158 的对偶面）：DELETE/POST 端点返回
+	// 204（或 200 无 body）且调用方习惯性传 &resp 时，json.Unmarshal([]byte{}, out)
+	// 必然报「unexpected end of JSON input」——把成功误报为失败，重试即重复
+	// 施加副作用。204 语义上就没有 body：跳过解码，*out 保持零值。
+	if len(raw) == 0 {
+		return nil
+	}
 	if err := json.Unmarshal(raw, out); err != nil {
 		return fmt.Errorf("响应解析失败: %w", err)
 	}
