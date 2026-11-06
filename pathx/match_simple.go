@@ -37,6 +37,10 @@ func MatchSimpleGlob(pattern, s string) bool {
 		return strings.Contains(s, pattern[1:len(pattern)-1])
 	}
 	starIdx := strings.Index(pattern, "*")
+	if starIdx < 0 {
+		// 不可达（上方 Contains("*") 已过滤），gocritic offBy1 防御位
+		return pattern == s
+	}
 	prefix := pattern[:starIdx]
 	suffix := pattern[starIdx+1:]
 	if prefix == "" && suffix == "" {
