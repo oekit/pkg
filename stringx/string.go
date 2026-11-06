@@ -16,11 +16,6 @@ var (
 	ErrInvalidRange = errors.New("substring range is inverted")
 )
 
-// placeholder 是一个占位符类型，用于 map 集合操作。
-type placeholder = struct{}
-
-var mark placeholder
-
 // Contains 检查 str 是否在 list 中。
 func Contains(list []string, str string) bool {
 	for _, each := range list {
