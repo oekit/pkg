@@ -44,15 +44,25 @@ func DivisionN(dividend, divisor float64, n int) float64 {
 }
 
 // Round 对 float64 进行四舍五入，保留 n 位小数。
+// n 过大（>308，math.Pow10 溢出为 +Inf）时返回原值——对齐 DivisionN 的
+// IsInf 防护（#182）：此前 x*Inf=±Inf（x=0 时 NaN），NaN 进 ParseFloat 竟
+// 成功 ⇒ 静默返回 NaN，指标/金额进库不报错。
 func Round(x float64, n int) float64 {
 	times := math.Pow10(n)
+	if math.IsInf(times, 0) {
+		return x
+	}
 	x = math.Round(x * times)
 	return toFixed(x/times, n)
 }
 
 // Floor 对 float64 向下取整，保留 n 位小数。
+// n 过大（>308）时返回原值（同 Round 的溢出防护，#182）。
 func Floor(x float64, n int) float64 {
 	times := math.Pow10(n)
+	if math.IsInf(times, 0) {
+		return x
+	}
 	x = math.Floor(x * times)
 	return toFixed(x/times, n)
 }

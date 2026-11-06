@@ -435,3 +435,22 @@ func TestAddJitter_StaysInRange(t *testing.T) {
 		}
 	}
 }
+
+// TestDo_EmptyBody2xx_ZeroOut 钉住 #189：2xx 空 body（204/200-no-content）+
+// out!=nil 时跳过解码——此前 json.Unmarshal([]byte{}) 必报「响应解析失败」，
+// 把成功误报为失败（重试即重复施加副作用）。
+func TestDo_EmptyBody2xx_ZeroOut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent) // 204 无 body
+	}))
+	defer srv.Close()
+
+	var resp map[string]any
+	err := DoJSON(context.Background(), srv.Client(), Request{
+		Method: http.MethodDelete,
+		URL:    srv.URL + "/x",
+	}, &resp)
+	if err != nil {
+		t.Fatalf("204 + out!=nil 应成功跳过解码, got %v", err)
+	}
+}

@@ -156,3 +156,19 @@ func TestClamp_String(t *testing.T) {
 		t.Errorf("Clamp(\"zzz\", \"a\", \"m\") = %v, want m", got)
 	}
 }
+
+// TestRoundFloor_OverflowGuard 钉住 #182：n>308（Pow10 溢出）返回原值而非
+// NaN/Inf——此前 NaN 经 ParseFloat 竟成功，指标/金额进库不报错。
+func TestRoundFloor_OverflowGuard(t *testing.T) {
+	for _, n := range []int{400, 309} {
+		if got := Round(1.5, n); got != 1.5 {
+			t.Fatalf("Round(1.5,%d) = %v, want 1.5（原值）", n, got)
+		}
+		if got := Floor(1.5, n); got != 1.5 {
+			t.Fatalf("Floor(1.5,%d) = %v, want 1.5（原值）", n, got)
+		}
+	}
+	if got := Round(0, 400); got != 0 {
+		t.Fatalf("Round(0,400) = %v（此前 NaN）, want 0", got)
+	}
+}

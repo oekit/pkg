@@ -16,11 +16,6 @@ var (
 	ErrInvalidRange = errors.New("substring range is inverted")
 )
 
-// placeholder 是一个占位符类型，用于 map 集合操作。
-type placeholder = struct{}
-
-var mark placeholder
-
 // Contains 检查 str 是否在 list 中。
 func Contains(list []string, str string) bool {
 	for _, each := range list {
@@ -88,6 +83,17 @@ func DeleteFunc(s string, del func(r rune) bool) string {
 
 // FirstN 返回 s 的前 n 个字符，可选添加省略号。
 func FirstN(s string, n int, ellipsis ...string) string {
+	// n<0 对齐 LastN/TruncRunes 的「非法上限=全截断」口径（#183）：此前
+	// 循环永不命中截断点 ⇒ 静默返回整串——截断护栏整段失效，且与 Trunc
+	// 家族其它函数行为相反（自家 LastN 的 doc 已自认「那是实现怪癖不是
+	// 语义」）。修复而非行为变更。
+	if n < 0 {
+		ret := ""
+		for _, each := range ellipsis {
+			ret += each
+		}
+		return ret
+	}
 	var i int
 	for j := range s {
 		if i == n {
@@ -251,17 +257,24 @@ func ToCamelCase(s string) string {
 
 // Union 合并两个字符串切片并去重。
 func Union(first, second []string) []string {
-	set := make(map[string]placeholder)
+	// 保序实现（#187）：先 first 后 second 扫重——此前从 map 迭代构造结果，
+	// 每次调用顺序不同（Go map 遍历随机化），而同库 slicex.Unique 明确「保持
+	// 原始顺序」——两族口径相反。合并结果进 UI 列表/审计日志/签名串/缓存 key
+	// 时顺序抖动 = diff 噪声、快照比对 flaky、缓存命中率玄学下降。成本一致
+	// （同是 O(n+m) + 一次 map 查重）。
+	seen := make(map[string]struct{}, len(first)+len(second))
+	merged := make([]string, 0, len(first)+len(second))
 	for _, each := range first {
-		set[each] = mark
+		if _, ok := seen[each]; !ok {
+			seen[each] = struct{}{}
+			merged = append(merged, each)
+		}
 	}
 	for _, each := range second {
-		set[each] = mark
-	}
-
-	merged := make([]string, 0, len(set))
-	for k := range set {
-		merged = append(merged, k)
+		if _, ok := seen[each]; !ok {
+			seen[each] = struct{}{}
+			merged = append(merged, each)
+		}
 	}
 	return merged
 }

@@ -1,6 +1,7 @@
 package stringx
 
 import (
+	"strings"
 	"testing"
 	"unicode"
 
@@ -258,5 +259,34 @@ func TestJoinByComma(t *testing.T) {
 func TestPluralize_NegativeCount(t *testing.T) {
 	if got := Pluralize(-3, "file"); got != "-3 files" {
 		t.Errorf("Pluralize(-3, file) = %q, want %q", got, "-3 files")
+	}
+}
+
+// TestFirstN_Negative_FullTruncate 钉住 #183：n<0 对齐 Trunc 家族「非法上限=
+// 全截断」口径——此前静默返回整串（截断护栏失效，与 LastN 自认的怪癖相反）。
+func TestFirstN_Negative_FullTruncate(t *testing.T) {
+	if got := FirstN("hello", -1); got != "" {
+		t.Fatalf("FirstN(hello,-1) = %q, want \"\"", got)
+	}
+	if got := FirstN("hello", -1, "…"); got != "…" {
+		t.Fatalf("FirstN(hello,-1,…) = %q, want \"…\"", got)
+	}
+	// n>=0 行为不变
+	if got := FirstN("hello", 3); got != "hel" {
+		t.Fatalf("FirstN(hello,3) = %q", got)
+	}
+}
+
+// TestUnion_OrderStable 钉住 #187：Union 保序（先 first 后 second）——
+// 此前 map 迭代构造，每次调用顺序不同。
+func TestUnion_OrderStable(t *testing.T) {
+	first := []string{"b", "a", "c"}
+	second := []string{"a", "d"}
+	want := []string{"b", "a", "c", "d"}
+	for i := 0; i < 20; i++ {
+		got := Union(first, second)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("run %d: got %v want %v（顺序应稳定）", i, got, want)
+		}
 	}
 }
