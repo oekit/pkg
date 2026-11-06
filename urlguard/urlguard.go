@@ -574,9 +574,16 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 		if err != nil {
 			return nil, fmt.Errorf("urlguard: split %q: %w", addr, err)
 		}
-		// host 维度的自定义判定（pkg#91）：拨号层也过一遍消费方策略——
-		// 消费方可能只挂 DialFunc（不挂 CheckURL），此时 host 判定不能缺席。
-		if herr := g.checkHostPolicy(canonicalHost(host)); herr != nil {
+		// host 字面量判定（pkg#91 / pkg#204）：拨号层也走与 CheckHost 同源的
+		// checkHostLiteral，而不是只跑消费方钩子。消费方可能只挂 DialFunc
+		// （不挂 CheckURL），此时内置约定域判定不能缺席——否则只要
+		// `foo.local` / `x.internal` / `localhost` 解析出的 IP 不在私网段，
+		// 拨号层就完全放行，而同一目标经 CheckURL 是被拒的。
+		//
+		// 复用而非重写是有意的：内置后缀判定、exotic IPv4 字面量判定、
+		// allowDomains 优先与 allowPrivate 短路，四条规则各写一份必然漂移，
+		// 而漂移的形态是「写面拒绝、拨号面放行」这种最难发现的不一致。
+		if herr := g.checkHostLiteral(canonicalHost(host)); herr != nil {
 			return nil, fmt.Errorf("urlguard: dial %q blocked: %w", addr, herr)
 		}
 		ips, err := g.resolve(ctx, host)
