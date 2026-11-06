@@ -331,6 +331,12 @@ func AnyToFloat32(v any) float32 {
 
 // AnyToBool 任意类型转 bool，无法转换返回 false。
 // 数值类型非零为 true；字符串按 strconv.ParseBool 解析。
+//
+// 数值分支**不得**经整数中转（[#205]）：AnyToInt64 会把 |v|<1 的浮点截断成 0，
+// 于是 0.5 / -0.9 / json.Number("0.5") 全被判成 false，与「非零为 true」的
+// 承诺相反。而 (0,1) 恰是概率、比例、阈值这类字段的典型取值，判错方向会让
+// JSON 配置或查询参数里的开关静默失真。故经 AnyToFloat64 比较——浮点只在
+// 自身为 0 时才舍入到 0，整数值经 float64 转换也不会变成 0。
 func AnyToBool(v any) bool {
 	switch val := v.(type) {
 	case nil:
@@ -338,13 +344,13 @@ func AnyToBool(v any) bool {
 	case bool:
 		return val
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
-		return AnyToInt64(val) != 0
+		return AnyToFloat64(val) != 0
 	case string:
 		return Str2Bool(val, false)
 	case []byte:
 		return Str2Bool(string(val), false)
 	case json.Number:
-		return AnyToInt64(val) != 0
+		return AnyToFloat64(val) != 0
 	}
 	return false
 }
