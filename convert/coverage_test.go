@@ -177,12 +177,12 @@ func TestConvertStruct_MismatchedFields(t *testing.T) {
 	}
 }
 
-// TestConvertStruct_NilDst covers the nil-dst case (returns nil
-// without panic).
+// TestConvertStruct_NilDst covers the nil-dst case: it must report a
+// contract violation instead of returning nil ([#207]).
 func TestConvertStruct_NilDst(t *testing.T) {
 	type S struct{ Name string }
-	if err := ConvertStruct(S{Name: "x"}, (*S)(nil)); err != nil {
-		t.Errorf("expected nil error for nil dst, got %v", err)
+	if err := ConvertStruct(S{Name: "x"}, (*S)(nil)); err == nil {
+		t.Error("expected error for nil dst, got nil")
 	}
 }
 
