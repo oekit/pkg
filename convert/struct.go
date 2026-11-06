@@ -1,30 +1,52 @@
 package convert
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 )
 
 // ConvertStruct 将 src 结构体的同名字段映射到 dst。
-// dst 必须是指针。通过反射匹配字段名，相同名称且类型兼容的字段会被复制。
+// dst 必须是指向结构体的非 nil 指针。通过反射匹配字段名，相同名称且类型
+// 兼容的字段会被复制。
 //
 //	type Src struct { Name string; Age int }
 //	type Dst struct { Name string; Age int }
 //	var d Dst
 //	ConvertStruct(Src{Name: "test", Age: 18}, &d)
+//
+// 入参不满足上述契约时返回错误，而不是静默 no-op（[#207]）：调用方若拿到
+// nil 就认为已填充，实际 dst 一个字都没变，是最难排查的那类 bug。被检查的
+// 情形包括 dst 非指针、dst 为 nil 指针、src 为 nil（含 nil 接口值与 nil 的
+// typed pointer），以及 src/dst 指向的不是结构体。
+//
+// 字段层面则仍是**尽力而为**：src 中不存在于 dst 的字段、类型不一致的字段、
+// 不可导出的字段都会被跳过而不报错——映射是「同名字段尽可能复制」，不是严格
+// 转换。
 func ConvertStruct(src, dst any) error {
-	srcVal := reflect.ValueOf(src)
-	dstVal := reflect.ValueOf(dst)
-
-	if dstVal.Kind() != reflect.Pointer || dstVal.IsNil() {
-		return nil
+	if dst == nil {
+		return fmt.Errorf("convert: dst must be a non-nil pointer to struct, got %T", dst)
 	}
 
-	srcVal = reflect.Indirect(srcVal)
-	dstVal = dstVal.Elem()
+	dstVal := reflect.ValueOf(dst)
+	if dstVal.Kind() != reflect.Pointer {
+		return fmt.Errorf("convert: dst must be a non-nil pointer to struct, got %T", dst)
+	}
+	if dstVal.IsNil() {
+		return fmt.Errorf("convert: dst must be a non-nil pointer to struct, got nil %T", dst)
+	}
 
-	if srcVal.Kind() != reflect.Struct || dstVal.Kind() != reflect.Struct {
-		return nil
+	srcVal := reflect.Indirect(reflect.ValueOf(src))
+	if !srcVal.IsValid() {
+		return fmt.Errorf("convert: src must be a struct or non-nil pointer to struct, got %T", src)
+	}
+	if srcVal.Kind() != reflect.Struct {
+		return fmt.Errorf("convert: src must be a struct or non-nil pointer to struct, got %T", src)
+	}
+
+	dstVal = dstVal.Elem()
+	if dstVal.Kind() != reflect.Struct {
+		return fmt.Errorf("convert: dst must point to a struct, got pointer to %s", dstVal.Kind())
 	}
 
 	srcType := srcVal.Type()
