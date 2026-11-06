@@ -18,6 +18,11 @@ const (
 	// **无限循环**（实测 Next(1<<62+1) 永久挂起，goroutine 死等）。
 	// 超过上限直接报错，不进倍增循环。
 	maxBufferSize = 1 << 30 // 1GiB
+
+	// compactSlackFactor 是 Release 收缩缓冲的触发倍数：容量超过残留的这么多倍
+	// 就换成右尺寸数组。取 4 是为了避开「残留与容量同量级」时的无谓拷贝——
+	// 那种情形原地左移已经够用，换数组只会白付一次分配。
+	compactSlackFactor = 4
 )
 
 // ErrTooLarge 的判定辅助：请求长度是否超出单个缓冲的容量上限。
@@ -324,18 +329,50 @@ func (r *DefaultReader) Read(bs []byte) (n int, err error) {
 	return n, nil
 }
 
-// Release 实现 Reader：丢掉保活引用与缓冲，重置读计数、ref 与终态错误；
-// 终态错误在 Release 时清掉——下一个读取周期重新感知底层状态（与 bufio 的
-// Reset 同口径）。
-func (r *DefaultReader) Release(error) error {
+// Release 实现 Reader。
+//
+// 两种情形（[#216]）：
+//
+//   - e != nil：**整段丢弃**。缓冲置空、游标归零——连接层错误意味着残留字节
+//     已不可信（可能是半包、可能是上一个连接的尾巴），留着只会被当数据用。
+//   - e == nil：**保留未消费残留**并把游标归零。socket 上已经读出的字节无法
+//     重读，丢弃就是丢数据；而残留恰恰可能是下一个报文的开头（同一 TCP 段里
+//     常含多条消息），这正是本类型存在的理由。
+//
+// 两种情形都会清掉终态错误（下一个读取周期重新感知底层状态，与 bufio.Reset
+// 同口径）、把 ReadLen 归零、并归还零拷贝视图的保活引用。
+//
+// 关于「视图失效」：Release 之后调用方**一律不得**再使用此前 Next/Peek 返回的
+// 视图。但请注意这是**契约要求**，不是运行时保证——Go 里被「释放」的切片不会
+// 变成野指针，读它不会 fault，只会读到已不属于你的字节。e == nil 且游标非零时
+// 残留会被原地左移，旧视图指向的区域正是被覆盖的位置（内容已变）；残留远小于
+// 容量时还会有换小数组的收缩，旧底层数组随之可回收。
+func (r *DefaultReader) Release(e error) error {
 	for i := range r.toFree {
 		r.toFree[i] = nil
 	}
 	r.toFree = r.toFree[:0]
-	if r.Buffered() == 0 {
+
+	switch {
+	case e != nil:
 		r.buf = nil
 		r.ri = 0
+	case r.Buffered() == 0:
+		r.buf = nil
+		r.ri = 0
+	case r.ri > 0:
+		// 零分配地把残留左移到位，游标归零：这样「重置状态」对残留同样成立
+		// （buf[ri:] 即全部未消费数据，ri 恒为 0），且旧视图指向的区域被覆盖。
+		n := copy(r.buf, r.buf[r.ri:])
+		r.buf = r.buf[:n]
+		if cap(r.buf) > compactSlackFactor*n {
+			// 容量远大于残留（例如刚读过一个大帧，只剩几个字节）⇒ 换成右
+			// 尺寸数组，把大缓冲还给 GC，而不是让它随残留帧滞留下来。
+			r.buf = append([]byte(nil), r.buf...)
+		}
+		r.ri = 0
 	}
+
 	r.ref = false
 	r.rn = 0
 	r.rdErr = nil
