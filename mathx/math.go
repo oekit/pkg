@@ -83,15 +83,21 @@ func Floor(x float64, n int) float64 {
 // 全 0，Probability 恒选 index 0——概率路由静默出错比快速失败更危险。
 // （precise < 1 时 10^ceil(log10(precise/minW)) < 1/minW ⇒ 最小权重分不到
 // 任何一个单位 ⇒ band[0] == 0。）
+//
+// 权重跨度同样有边界（[#208]）：`总权重/最小权重 × precise` 必须落在 int
+// 表示范围内，否则同样 panic。这是整数 band 表示法的**固有**边界而非实现
+// 限制——最小桶要 ≥ 1 个单位、最大桶要 ≤ MaxInt，两者不可兼得时无解。
+// 实际触发需要总权重比最小权重大 15~18 个数量级，正常的概率路由到不了。
 func ProbabilityElems(elems []float64, precise float64) []int {
 	if len(elems) == 0 {
 		return nil
 	}
-	if math.IsNaN(precise) || precise < 1 {
-		panic("mathx: ProbabilityElems requires precise >= 1, got " +
+	if math.IsNaN(precise) || math.IsInf(precise, 0) || precise < 1 {
+		panic("mathx: ProbabilityElems requires precise >= 1 and finite, got " +
 			fmt.Sprintf("%v", precise))
 	}
 	minW := elems[0]
+	total := 0.0
 	for _, w := range elems {
 		if math.IsNaN(w) || math.IsInf(w, 0) {
 			panic("mathx: ProbabilityElems requires finite weights, got " +
@@ -104,10 +110,39 @@ func ProbabilityElems(elems []float64, precise float64) []int {
 		if w < minW {
 			minW = w
 		}
+		total += w
 	}
 	// 精度基数：让**最小权重**也至少分到 1 个单位。
-	n := math.Ceil(math.Log10(precise / minW))
+	//
+	// n 用 log10 之差而不是 log10(precise/minW)：后者在 minW 是次正规数时
+	// **中间量先溢出**——precise=1、minW=1e-320 时 1/1e-320 已是 +Inf，于是
+	// n=+Inf，而 `int(+Inf)` 同样是实现相关的（arm64 给 MaxInt64、amd64 给
+	// MinInt64）⇒ p 在 arm64 上是 +Inf、在 amd64 上是 0，两个平台走进完全
+	// 不同的分支。取对数之差数学等价且不产生溢出中间量（log10(1e-320) 正常
+	// 返回 -320）。
+	n := math.Ceil(math.Log10(precise) - math.Log10(minW))
 	p := math.Pow10(int(n))
+
+	// 动态范围上界（[#208]）：band 是「以最小权重为精度单位」的整数表示，
+	// 最大值是 total × p。超出 int 表示范围时 float64 → int 的转换结果是
+	// **实现相关的**：实测 arm64 饱和到 MaxInt64，amd64 给 MinInt64。两者都
+	// 不是错误信号——
+	//
+	//   - 饱和会把多个大桶挤成同一个数，比例被静默改写（实测
+	//     [1e-30, 1e-30, 1e3] 下第二个桶被高估约 17 个数量级）；
+	//   - MinInt64 让 Probability 的 max<=0 分支直接退化到「恒选 index 0」。
+	//
+	// 这不是「算错了」，而是这个表示法装不下：总权重与最小权重相差超过 int
+	// 的动态范围时，没有任何整数 band 能同时表达「最小桶 ≥ 1 个单位」与
+	// 「最大桶 ≤ MaxInt」。
+	//
+	// 故与既有输入校验同口径——快速失败。给出一份静默失真的分布比 panic
+	// 危险得多，这正是本函数拒绝 0/负权重与 precise<1 的同一条理由。
+	if maxBand := total * p; !(maxBand <= float64(math.MaxInt64)) {
+		panic("mathx: ProbabilityElems weights span too wide a dynamic range for an int band: " +
+			fmt.Sprintf("total/min ratio %v/%v x precise %v = %v exceeds %v",
+				total, minW, precise, maxBand, float64(math.MaxInt64)))
+	}
 	band := make([]int, len(elems))
 	acc := 0.0
 	for i, w := range elems {

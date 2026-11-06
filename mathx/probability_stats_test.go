@@ -69,6 +69,10 @@ func TestProbabilityElems_InvalidInputPanics(t *testing.T) {
 		{"precise 小于 1（band 会退化为全 0）", []float64{0.1, 0.3, 0.6}, 0.1},
 		{"precise 为 0", []float64{0.1, 0.3}, 0},
 		{"precise 为 NaN", []float64{0.1, 0.3}, math.NaN()},
+		// +Inf 也是非法：log10(+Inf) = +Inf ⇒ n 无穷 ⇒ int(n) 实现相关
+		// （arm64 给 MaxInt64、amd64 给 MinInt64），p 随之在 +Inf / 0 之间
+		// 分叉，两个平台走进完全不同的分支（#208）。
+		{"precise 为 +Inf", []float64{0.1, 0.3}, math.Inf(1)},
 		{"权重为 NaN", []float64{math.NaN(), 0.3}, 1},
 	}
 	for _, c := range cases {
