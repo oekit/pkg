@@ -1,3 +1,7 @@
+## [v0.35.0] — 2026-11-06
+
+- feat(pathx): 新增 MatchSimpleGlob 单星名字通配原语——只有第一颗 * 是通配符（第二颗起按字面量）、空串判不匹配、? 非通配，与 full-backtracking 的 MatchGlob 是反语义对（来源：kuboard-go simpleGlobMatch 已验证实现上移，2,000,000 例差分 fuzz 0 差异）。feat(stringx): 新增 MaskJSONFields JSON 字段级脱敏原语——顶层对象字段值替换为固定文案，字段缺省时补上，解析失败透传 json 包原始错误不包装（消费方透传错误文本到响应）
+
 ## [v0.34.1] — 2026-11-05
 
 - fix(jsonrepair): `StripCodeFence` 剥掉任意语言标记（[#180](https://github.com/oekit/pkg/issues/180)）——正则从 `(?:json)?` 白名单改为 `[a-zA-Z0-9_+-]*` 字符集，\`\`\`yaml/\`\`\`toml/\`\`\`sql 等围栏的语言名不再残留进结果污染下游解析（下游实证 oagentkit/textx#21）；大小写变体（\`\`\`JSON）一并覆盖，\`\`\`json{...}\`\`\` 同行形态语义不变
