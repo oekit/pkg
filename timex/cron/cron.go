@@ -94,17 +94,14 @@ func Parse(spec string) (Schedule, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid month field: %w", err)
 	}
-	// dow 接受 7≡Sunday（[#186]）：vixie cron/crontab(5)/robfig 均接受 7，
-	// 此前判越界——从系统 crontab 迁移表达式（`0 2 * * 7`）加载即失败，报错
-	// 不提示「本实现不支持 7」，排错方向被误导到「表达式写错」。方言差异
-	// （MON/JAN 名字、L/W/# 均不支持）见 doc.go。
-	dowSpec := fields[5]
-	if dowSpec == "7" {
-		dowSpec = "0"
-	}
-	schedule.Dow, err = getField(dowSpec, 0, 6)
+	// dow 接受 7≡Sunday（[#186] / [#215]）：vixie cron / cronie / crontab(5) /
+	// robfig 都接受 7，且**在列表与范围的端点同样接受**（`6,7`、`5-7`）——
+	// #186 只按整串判等归一的写法覆盖不到复合形态，从系统 crontab 迁移
+	// `0 2 * * 5-7` 会加载失败，而报错文案却写着「7≡Sunday 已支持」，排错
+	// 方向被反向误导。方言差异（MON/JAN 名字、L/W/# 均不支持）见 doc.go。
+	schedule.Dow, err = getDowField(fields[5])
 	if err != nil {
-		return nil, fmt.Errorf("invalid day of week field %q (注意: 7≡Sunday 已支持; MON/JAN 等名字与 L/W/# 扩展不支持): %w", fields[5], err)
+		return nil, fmt.Errorf("invalid day of week field %q (0/7 都是 Sunday; MON/JAN 等名字与 L/W/# 扩展不支持): %w", fields[5], err)
 	}
 
 	return schedule, nil
@@ -292,6 +289,107 @@ func (s *SpecSchedule) dayMatches(t time.Time) bool {
 		return domMatch && dowMatch
 	}
 	return domMatch || dowMatch
+}
+
+// maxDow 是 day-of-week 字段**输入**的上界。域是 0–6（0 = Sunday），
+// 而 7 是 Sunday 的别名——vixie cron / cronie / robfig 都这样接受，系统
+// crontab 里 `5-7`（周五到周日）、`6,7` 是常见写法。
+const maxDow = 7
+
+// dowValue 把输入值映射到实际位：7 是 0 的别名。
+func dowValue(v uint64) uint64 {
+	if v == maxDow {
+		return 0
+	}
+	return v
+}
+
+// getDowField 解析 day-of-week 字段，7≡Sunday 在**所有形态**下都成立：
+// 单值（`7`）、列表（`6,7`）、范围（`5-7`）、带步长（`5-7/2`、`0-7/2`）。
+func getDowField(field string) (uint64, error) {
+	var bits uint64
+	for _, part := range strings.Split(field, ",") {
+		if err := parseDowPart(part, &bits); err != nil {
+			return 0, err
+		}
+	}
+	return bits, nil
+}
+
+// parseDowPart 解析 dow 字段的一个逗号分段。
+//
+// 不能简单地把 token 里的 "7" 文本替换成 "0"：范围 `5-7` 归一后是**环形**
+// 区间（5,6,0），而 `start > end` 的检查会把 `5-0` 判成非法区间——这正是
+// 「只在 getField 层做数值归一」的坑。故范围按**端点原值**遍历、落位时再
+// 走 dowValue。
+func parseDowPart(s string, bits *uint64) error {
+	// "*" 与 "*/n" 与 7 无关，直接交给通用解析（域 0–6）
+	if s == "*" || strings.HasPrefix(s, "*/") {
+		return parseRange(s, 0, 6, bits)
+	}
+
+	body, step, err := splitStep(s)
+	if err != nil {
+		return err
+	}
+
+	if startStr, endStr, ok := strings.Cut(body, "-"); ok {
+		start, perr := parseUint(startStr)
+		if perr != nil {
+			return perr
+		}
+		end, perr := parseUint(endStr)
+		if perr != nil {
+			return perr
+		}
+		if start > end {
+			return fmt.Errorf("invalid range: %s", s)
+		}
+		if end > maxDow || start > maxDow {
+			return fmt.Errorf("out of range [0, 7]: %s", s)
+		}
+		for i := start; i <= end; i += step {
+			*bits |= 1 << dowValue(i)
+		}
+		return nil
+	}
+
+	start, err := parseUint(body)
+	if err != nil {
+		return err
+	}
+	if start > maxDow {
+		return fmt.Errorf("out of range [0, 7]: %s", s)
+	}
+	start = dowValue(start)
+
+	// 单值步长 "N/step"：从 N 步进到字段最大值。上界取 6 而不是 7 ——
+	// 7 与 0 是同一个 Sunday，把 7 也算进去等于重复遍历一圈。
+	if strings.Contains(s, "/") {
+		for i := start; i <= 6; i += step {
+			*bits |= 1 << i
+		}
+		return nil
+	}
+	// 纯单值（含 "7"）：只置位，不步进
+	*bits |= 1 << start
+	return nil
+}
+
+// splitStep 把 "a/b" 切成 ("a", b)；不含步长时 step = 1。
+func splitStep(s string) (body string, step uint64, err error) {
+	body, stepStr, ok := strings.Cut(s, "/")
+	if !ok {
+		return s, 1, nil
+	}
+	step, err = parseUint(stepStr)
+	if err != nil {
+		return "", 0, err
+	}
+	if step == 0 {
+		return "", 0, fmt.Errorf("step cannot be zero")
+	}
+	return body, step, nil
 }
 
 func getField(field string, min, max uint64) (uint64, error) {
