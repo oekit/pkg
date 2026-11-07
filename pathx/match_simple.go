@@ -14,13 +14,23 @@ import "strings"
 //   - 其余含 `*` ⇒ 第一颗星切前后缀，HasPrefix && HasSuffix && len(name) >= len(prefix)+len(suffix)
 //     ——注意第二颗起的 `*` 落在**字面量**里（"a*b*c" 的后缀是字面量 "b*c"）。
 //
+// `*` 跨 `/`（"kube-*" 命中 "kube-system/nested"）——与 MatchGlob 同、与
+// filepath.Match（MatchesPath）反（那里的星只在单个路径段内匹配）。实现即
+// HasPrefix/HasSuffix/Contains，天然不感知分隔符。名字含 `/` 的消费方
+// （分支名 "release/v1"、K8s 资源 "ns/pod-name"）按 filepath.Match 直觉
+// 预期「星不跨段」会**静默多匹配**（放行判定可能跨命名空间/跨目录放大）；
+// 需要星不跨段语义时，先按 `/` 切段再逐段匹配，或改用 filepath.Match。
+//
 // 什么时候用它而不是 MatchGlob：消费方要的是**保守的单星匹配**（多星/`?` 不展开），
 // 且**空串必须判不匹配**——两条都是 MatchGlob 的反语义，混用会静默改判。
+// 在「星跨不跨 `/`」这一点上两者**同语义**（都跨）——躲过前两个坑的消费方
+// 别栽在第三个上。
 //
 // 用法:
 //
 //	pathx.MatchSimpleGlob("*", "kube-system") // true
 //	pathx.MatchSimpleGlob("kube-*", "kube-system") // true
+//	pathx.MatchSimpleGlob("kube-*", "kube-system/nested") // true（* 跨 /）
 //	pathx.MatchSimpleGlob("kube-*", "")        // false（空串不匹配）
 //	pathx.MatchSimpleGlob("a*b*c", "axb*c")    // true（第二颗星按字面量）
 func MatchSimpleGlob(pattern, s string) bool {
