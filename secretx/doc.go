@@ -6,7 +6,8 @@
 //
 // 密文格式（与 domain-manage 手搓形态兼容，存量数据零迁移）：
 //
-//	"v1:" + base64( nonce(12B) ‖ ciphertext+tag )
+//	"v1:" + base64( nonce(12B) ‖ ciphertext+tag )                // 原始主密钥形态（NewBox）
+//	"v2:" + base64( salt(16B) ‖ nonce(12B) ‖ ciphertext+tag )     // passphrase 派生形态（NewPassphraseBox，#212）
 //
 // 设计立场：
 //   - **必须带认证**（GCM），CFB 这类无完整性保护的原语不在可选项里；
@@ -31,4 +32,13 @@
 //	// 可选：绑定行 id/用途做 AAD，防密文在行间挪用（换行 AAD 解封必失败）
 //	sealed, err := box.SealWithAAD(pt, []byte("credential:"+rowID))
 //	pt, err := box.OpenWithAAD(sealed, []byte("credential:"+rowID))
+//
+// 消费方拿到的是 passphrase（环境变量/配置文件口令）而非原始主密钥时，
+// 用派生前置形态 NewPassphraseBox（#212）：KDF 从 passphrase 派生主密钥，
+// salt 随密文明文前置、调用方无需管理：
+//
+//	box, err := secretx.NewPassphraseBox(os.Getenv("ENCRYPTION_KEY"))
+//	if err != nil { panic(err) }
+//	sealed, err := box.Seal([]byte(plaintext))     // "v2:xxxx"（KDF+salt 前置）
+//	pt, err := box.Open(sealed)
 package secretx
