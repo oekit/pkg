@@ -18,11 +18,20 @@ func TestContains(t *testing.T) {
 		{"found", []string{"a", "b", "c"}, "b", true},
 		{"not found", []string{"a", "b", "c"}, "d", false},
 		{"empty list", []string{}, "a", false},
+		{"nil list", nil, "a", false},
+		{"contains empty string", []string{"", "a"}, "", true},
+		{"spaces and semicolon", []string{"a b", "c;d"}, "c;d", true},
+		{"single quote", []string{"it's"}, "it's", true},
 	}
+	// #242：实现转发 slicex.Contains[string] 后，逐项同时钉住两函数一致
+	//（语义单源在 slicex，本包不再有第二份循环体）。
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := Contains(tt.list, tt.str); got != tt.want {
 				t.Errorf("Contains() = %v, want %v", got, tt.want)
+			}
+			if got := slicex.Contains(tt.list, tt.str); got != tt.want {
+				t.Errorf("slicex.Contains() = %v, want %v（两函数必须一致）", got, tt.want)
 			}
 		})
 	}
