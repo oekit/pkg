@@ -229,6 +229,73 @@ func TestSingleFlightCache_Stats_StaleFallbackMatchesDirect(t *testing.T) {
 	}
 }
 
+// TestSingleFlightCache_Stats_NilValueHitCountedOnce 钉住 #203：命中**值为
+// nil 的真值条目**（Set(ctx, key, nil) 存入）时，一次读恰好计一次命中——
+// 不是两次。
+//
+// 缺陷形态：GetOrLoad 前置 Peek 命中 nil 值条目已计一次 hit，但早退条件是
+// hit && value != nil，nil 值命中落入 flight.Do → 加载路径的命中分支再计
+// 一次 hit ⇒ 命中率被系统性抬高（违背 pkg#90「一次读恰好计入命中或未命中
+// 之一」）。
+func TestSingleFlightCache_Stats_NilValueHitCountedOnce(t *testing.T) {
+	inner := NewLocalCache(LocalConfig[string]{TTL: 0})
+	t.Cleanup(func() { _ = inner.Close(context.Background()) })
+	sf := NewSingleFlightCache[string](inner)
+
+	// 显式存入 nil 真值（isNull=false、value=nil 的条目——包级契约
+	// 「(nil, nil) 三种情形」的第 3 种）
+	if err := sf.Set(context.Background(), "nil", nil); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	const reads = 5
+	for i := 0; i < reads; i++ {
+		v, err := sf.GetOrLoad(context.Background(), "nil")
+		if err != nil {
+			t.Fatalf("GetOrLoad: %v", err)
+		}
+		if v != nil {
+			t.Fatalf("nil 真值条目应返回 nil，got %q", *v)
+		}
+	}
+	s := inner.Stats()
+	if s.Hits != reads || s.Misses != 0 {
+		t.Fatalf("%d 次 nil 值命中应恰好计 %d 次命中、0 次未命中，got %+v", reads, reads, s)
+	}
+	if total := s.Hits + s.Misses; total != reads {
+		t.Fatalf("%d 次读应恰好计入 %d 次读，got %d", reads, reads, total)
+	}
+}
+
+// TestSingleFlightCache_Stats_NilValueHitCountParity：nil 值命中的计数口径
+// 与内层直连一致（#203——三个回源变体同源缺陷，这里覆盖按调用注入的变体）。
+func TestSingleFlightCache_Stats_NilValueHitCountParity(t *testing.T) {
+	// 形态 A：内层直连
+	direct := NewLocalCache(LocalConfig[string]{TTL: 0})
+	t.Cleanup(func() { _ = direct.Close(context.Background()) })
+	// 形态 B：装饰器
+	inner := NewLocalCache(LocalConfig[string]{TTL: 0})
+	t.Cleanup(func() { _ = inner.Close(context.Background()) })
+	decorated := NewSingleFlightCache[string](inner)
+
+	ctx := context.Background()
+	for _, c := range []CacheAside[string]{direct, decorated} {
+		if err := c.Set(ctx, "nil", nil); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		for i := 0; i < 3; i++ {
+			if _, err := c.GetOrLoad(ctx, "nil"); err != nil {
+				t.Fatalf("GetOrLoad: %v", err)
+			}
+		}
+	}
+
+	want, got := snapshot(direct), snapshot(inner)
+	if got != want {
+		t.Fatalf("nil 值命中计数口径应与内层直连一致，direct=%+v decorated=%+v", want, got)
+	}
+}
+
 // TestSingleFlightCache_Stats_ConcurrentMissCounted 钉住并发口径：N 个并发
 // 未命中记 N 次未命中（与内层直连一致），回源仍只调用一次（单飞有效）。
 //
