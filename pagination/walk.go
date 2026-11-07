@@ -35,7 +35,7 @@ var (
 //
 // 不做并发预取：上游 API 多数按页序有 token/游标依赖，收益不值得复杂度。
 // 此前 zentao-mini 的 client_* 五个「翻页直到 len<pageSize」循环各写一份
-// （页长 100/200/500 各异），下沉为一份原语（yi-nology/zentao-mini#22）。
+// （页长 100/200/500 各异），下沉为一份原语（上游 zentao-mini#22）。
 func Walk[T any](ctx context.Context, pageSize int, fetch func(ctx context.Context, page int) ([]T, error)) ([]T, error) {
 	if pageSize <= 0 {
 		return nil, ErrBadPageSize

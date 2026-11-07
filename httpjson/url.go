@@ -11,7 +11,7 @@ import "strings"
 //     显式配置 https 的调用方不受影响；
 //   - 结尾斜杠全部去掉，调用方拼路径时无需再写 strings.TrimSuffix。
 //
-// 收编自 zentao-mini/zentao-max 四份同源内联规范化（yi-nology#22 下沉）。
+// 收编自 zentao-mini/zentao-max 四份同源内联规范化（上游 zentao 矩阵#22 下沉）。
 func NormalizeBaseURL(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

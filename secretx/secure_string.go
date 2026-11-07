@@ -20,7 +20,7 @@ import (
 //   - 随机密钥生成失败（crypto/rand 几乎不可能）降级为 hex 自混淆而不是
 //     panic——持有器不因环境退化拒绝服务。
 //
-// 收编自 zentao-mini/zentao-max 同源实现（yi-nology#22 下沉，逐字节等价
+// 收编自 zentao-mini/zentao-max 同源实现（上游 zentao 矩阵#22 下沉，逐字节等价
 // 迁移后补齐用例）。
 
 // SecureString 安全字符串持有器：XOR 混淆存储，防止内存明文扫描。
