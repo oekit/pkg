@@ -579,7 +579,7 @@ func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], 
 			stored = cloned
 		}
 	}
-	if !c.setWithTTLIfGen(ctx, key, stored, ttl, gen) {
+	if !c.setWithTTLIfGen(key, stored, ttl, gen) {
 		cacheLogger().Debug("local cache backfill skipped: key invalidated during load", "key", key)
 	}
 
@@ -628,7 +628,7 @@ func (c *LocalCache[T]) writeEntryLocked(key string, value *T, ttl time.Duration
 // setWithTTLIfGen 世代未变时写入真值条目（#200）——「复查世代 + 回填」在
 // 同一写锁区间内原子完成，不存在「复查通过、写入前又被 Del」的窗口。
 // 世代已变（Source 执行期间该 key 被 Del/覆盖写入）返回 false 且不写入。
-func (c *LocalCache[T]) setWithTTLIfGen(ctx context.Context, key string, value *T, ttl time.Duration, gen uint64) bool {
+func (c *LocalCache[T]) setWithTTLIfGen(key string, value *T, ttl time.Duration, gen uint64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.gens[key] != gen {

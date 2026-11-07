@@ -178,8 +178,8 @@ func TestSingleValue_SetAndDel(t *testing.T) {
 	}
 
 	// Del 失效 → 下一次 Get 重新回源
-	if err := sv.Del(ctx); err != nil {
-		t.Fatalf("Del: %v", err)
+	if delErr := sv.Del(ctx); delErr != nil {
+		t.Fatalf("Del: %v", delErr)
 	}
 	v, err = sv.Get(ctx)
 	if err != nil || v == nil || *v != "from-source" {
