@@ -50,11 +50,11 @@ func Split(s string) ([]string, error) {
 	}
 
 	for i := 0; i < len(s); {
-		switch c := s[i]; {
-		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+		switch c := s[i]; c {
+		case ' ', '\t', '\n', '\r':
 			flush()
 			i++
-		case c == '\'': // 单引号内一切原样（含反斜杠）
+		case '\'': // 单引号内一切原样（含反斜杠）
 			pending = true
 			j := strings.IndexByte(s[i+1:], '\'')
 			if j < 0 {
@@ -62,7 +62,7 @@ func Split(s string) ([]string, error) {
 			}
 			cur.WriteString(s[i+1 : i+1+j])
 			i += 1 + j + 1
-		case c == '"': // 双引号：反斜杠仅转义 " \ $ ` 与换行
+		case '"': // 双引号：反斜杠仅转义 " \ $ ` 与换行
 			pending = true
 			i++
 			closed := false
@@ -91,7 +91,7 @@ func Split(s string) ([]string, error) {
 			if !closed {
 				return nil, ErrUnclosedQuote
 			}
-		case c == '\\': // 裸反斜杠：转义任意下一字符；行拼接同上
+		case '\\': // 裸反斜杠：转义任意下一字符；行拼接同上
 			if i+1 >= len(s) {
 				return nil, ErrTrailingEscape
 			}
@@ -100,7 +100,7 @@ func Split(s string) ([]string, error) {
 				pending = true
 			}
 			i += 2
-		case c == ';' || c == '|' || c == '&': // 独立 token，相邻同类合并
+		case ';', '|', '&': // 独立 token，相邻同类合并
 			flush()
 			tok := string(c)
 			if c != ';' && i+1 < len(s) && s[i+1] == c {
