@@ -795,14 +795,10 @@ func (c *LocalCache[T]) DelBatch(ctx context.Context, keys ...string) error {
 	return nil
 }
 
-// MGet 批量获取：单次读锁区间取回一批键（契约见 BatchGetter——缺席语义
-// 与 (nil, nil) 双关一致：不存在与 null marker 一律缺席；纯读不回填，
-// 已过期条目按缺席处理，回收留给 Get/Exists 的双检路径——TTL=0 时无
-// cleanup goroutine，过期条目仅在这些路径被惰性回收）。
-//
-// CloneOnRead 开启时按配置返回副本（pkg#25）；EvictLRU 策略下批量命中同样
-// 提升顺序（读锁区间之外一次性提升，避免逐键取写锁）。
-func (c *LocalCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T, error) {
+// mcollect 批量读取的共用收集路径（MGet / MGetEx）：单次读锁区间取回一批
+// 键的命中条目，锁区间之外完成 LRU 提升与命中/未命中计数。命中口径与单键
+// 读一致：不存在、已过期与 null marker 一律缺席（计数为未命中）。
+func (c *LocalCache[T]) mcollect(keys []string) []readHit[T] {
 	now := c.now()
 	c.mu.RLock()
 	items := make([]readHit[T], 0, len(keys))
@@ -821,7 +817,18 @@ func (c *LocalCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T
 
 	// 批量读命中逐键计数（口径与单键读一致：命中真值条目计命中）。
 	c.hits.Add(int64(len(items)))
+	return items
+}
 
+// MGet 批量获取：单次读锁区间取回一批键（契约见 BatchGetter——缺席语义
+// 与 (nil, nil) 双关一致：不存在与 null marker 一律缺席；纯读不回填，
+// 已过期条目按缺席处理，回收留给 Get/Exists 的双检路径——TTL=0 时无
+// cleanup goroutine，过期条目仅在这些路径被惰性回收）。
+//
+// CloneOnRead 开启时按配置返回副本（pkg#25）；EvictLRU 策略下批量命中同样
+// 提升顺序（读锁区间之外一次性提升，避免逐键取写锁）。
+func (c *LocalCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T, error) {
+	items := c.mcollect(keys)
 	out := make(map[string]*T, len(items))
 	for _, it := range items {
 		// 命中真值但值为 nil 的条目同样进 map（键在场，值为 nil）
@@ -830,8 +837,36 @@ func (c *LocalCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T
 	return out, nil
 }
 
+// MGetEx 批量获取并区分「nil 真值命中」与「缺席」（pkg#238）——GetEx 的
+// 批量形态。MGet 返回的 map[string]*T 里，v, ok := m[k] 的 ok 对 nil 值
+// 命中也为 true，与缺席的区分只能靠键存在性，消费方极易误用（v == nil
+// 判缺席 ⇒ nil 真值条目被误判、触发不必要的回源；不判 nil 直接解引用 ⇒
+// panic）。
+//
+// 返回 map 对**每个请求键**各给一条 BatchEntry：
+//   - Hit=true：命中真值条目——Value 可能为 nil（调用方显式存了 nil 值）；
+//   - Hit=false：key 不存在、已过期，或命中 null marker（缺席语义与
+//     MGet 一致，见 BatchGetter 契约）。
+//
+// 其余行为与 MGet 同口径：纯读不回填、CloneOnRead 副本、EvictLRU 批量
+// 提升、Stats 逐键计数。
+func (c *LocalCache[T]) MGetEx(ctx context.Context, keys ...string) (map[string]BatchEntry[T], error) {
+	items := c.mcollect(keys)
+	out := make(map[string]BatchEntry[T], len(keys))
+	for _, key := range keys {
+		out[key] = BatchEntry[T]{} // 缺席基线（命中键在下方覆盖）
+	}
+	for _, it := range items {
+		out[it.key] = BatchEntry[T]{Value: c.cloneOnRead(it.entry.value), Hit: true}
+	}
+	return out, nil
+}
+
 // 编译期能力契约：LocalCache 具备批量读取能力。
 var _ BatchGetter[int] = (*LocalCache[int])(nil)
+
+// 编译期能力契约：LocalCache 具备区分命中的批量读取能力（pkg#238）。
+var _ BatchHitGetter[int] = (*LocalCache[int])(nil)
 
 // 编译期能力契约：LocalCache 具备非删除式读取能力（pkg#72）。
 var _ PeekGetter[int] = (*LocalCache[int])(nil)

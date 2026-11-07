@@ -167,6 +167,11 @@ type Option func(*Guard)
 
 // WithAllowPrivate 放行全部内网/loopback 地址——仅供测试环境打本机 mock server；
 // 生产构造不要使用。
+//
+// 豁免口径（pkg#236 收敛）：只豁免**内置网段（CIDR）判定**——exotic IPv4
+// 字面量形态（2852039166 / 0177.0.0.1 / 0x7f000001 / 127.1 等）仍无条件拒绝。
+// 打本机请写标准点分十进制（127.0.0.1 / [::1]）——宽松解析器（inet_aton
+// 语义）对 exotic 形态的解析行为不可控，字面量形态判定不随本豁免放开。
 func WithAllowPrivate() Option {
 	return func(g *Guard) { g.allowPrivate = true }
 }
@@ -426,14 +431,22 @@ func (g *Guard) checkHostLiteral(host string) error {
 	if ip := net.ParseIP(stripIPv6Zone(host)); ip != nil {
 		return g.CheckIP(ip)
 	}
-	if g.allowPrivate {
-		return g.checkHostPolicy(host)
-	}
 	// exotic IPv4 字面量：标准库解析器不认，但宽松解析器（cgo resolver 的
 	// inet_aton 语义、浏览器 URL 解析器）会当地址——字面量层直接拒，
 	// 不把它推给 DNS（判据见 looksLikeExoticIPv4）。
+	//
+	// 本闸门**无条件执行**（pkg#236）：不受 allowPrivate 豁免——豁免语义是
+	// 「只豁免内置网段（CIDR）判定」，不是「豁免字面量形态判定」。此前它排在
+	// allowPrivate 短路之后，allowPrivate 消费方可经十进制整型字面量
+	// （2852039166 = 169.254.169.254）访问云 metadata：写面跳过闸门放行 →
+	// cgo 解析器按 inet_aton 语义解出链路本地地址 → CheckIP 在 allowPrivate
+	// 下豁免全部内置网段 → 完整走通。宽松解析器行为不可控，字面量形态判定
+	// 必须先于一切豁免（allowPrivate 消费方要打本机请写标准点分十进制）。
 	if looksLikeExoticIPv4(host) {
 		return fmt.Errorf("urlguard: host %q is an exotic IPv4 literal form", host)
+	}
+	if g.allowPrivate {
+		return g.checkHostPolicy(host)
 	}
 	if _, ok := g.allowDomains[host]; ok {
 		return g.checkHostPolicy(host)
@@ -624,7 +637,9 @@ func (g *Guard) resolve(ctx context.Context, host string) ([]net.IP, error) {
 	// exotic IPv4 字面量：标准库解析器不认 → 本会走 DNS 解析，但宽松解析器
 	// （cgo resolver 的 inet_aton 语义）会把它当地址（127.1 → 127.0.0.1）。
 	// 字面量层直接拒，不把它推给 DNS——拨号层与写面同源判定。
-	if !g.allowPrivate && looksLikeExoticIPv4(host) {
+	// 与 checkHostLiteral 的闸门同口径**无条件执行**（pkg#236）：不受
+	// allowPrivate 豁免——allowPrivate 只豁免网段判定，不豁免字面量形态判定。
+	if looksLikeExoticIPv4(host) {
 		return nil, fmt.Errorf("urlguard: host %q is an exotic IPv4 literal form", host)
 	}
 	addrs, err := g.lookup(ctx, host)

@@ -163,8 +163,12 @@ func Append(left error, right error) error {
 
 	if _, ok := right.(*MultiError); !ok {
 		if l, ok := left.(*MultiError); ok && !l.copyNeeded.Swap(true) {
-			//nolint:gocritic // 有意 append 到新变量，避免修改共享的 l.errors 切片
-			errs := append(l.errors, right)
+			// COW 路径必须先克隆再 append（pkg#237）：l.errors 的 backing array
+			// 有余量时 append(l.errors, right) 会写进共享数组——Swap 只挡住了
+			// 并发方对同一 *MultiError 的第二次 COW，挡不住并发 fromSlice /
+			// Errors() 经其它共享同一数组的 MultiError 读到半写状态。
+			// slices.Clone 保证本路径每次写新数组，COW 语义名副其实。
+			errs := append(slices.Clone(l.errors), right)
 			return &MultiError{errors: errs}
 		} else if !ok {
 			return &MultiError{errors: []error{left, right}}
