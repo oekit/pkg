@@ -142,6 +142,11 @@ type LocalConfig[T any] struct {
 //     达到 MaxSize 后淘汰最早写入（且未被重写刷新）的条目；
 //   - EvictLRU：读命中也提升顺序，最近最少使用的条目先淘汰。
 //
+// 写后失效保障（#200）：写路径（Set/SetWithTTL/SetNX/Del/DelBatch 与回填）
+// 推进 per-key 世代号；回源路径在 Source 返回后、回填前复查世代，期间该
+// key 被 Del/覆盖写入则**放弃回填**——在途回源不会把失效前的旧值重新灌回
+// 缓存击穿整个 TTL 窗口。
+//
 // 后台清理：TTL>0 时默认起一个后台清扫 goroutine，NoBackgroundSweep 置 true
 // 可关闭它（进程内不新增任何 goroutine，过期条目由惰性删除与调用方显式
 // Sweep 回收）。使用 Close(ctx) 停止后台清理 goroutine；Close 可安全重复
@@ -155,6 +160,16 @@ type LocalCache[T any] struct {
 	orderIdx  map[string]*list.Element // key → order 元素（O(1) 定位）
 	done      chan struct{}
 	closeOnce sync.Once
+
+	// 世代号（#200）：genSeq 是全局单调序列（永不复用——Clear 后新条目的
+	// 世代不与在途回源捕获过的旧值碰撞），gens 记录每个 key 的最新世代。
+	// 写路径推进、回源路径捕获/复查：Source 执行期间世代被推进 ⇒ 回填放弃。
+	//
+	// 内存口径：gens 与 data 同键空间；Del 不回收 gens 条目（墓碑语义——
+	// 首次加载期间被 Del 的 key 也需要可识别的世代推进），代价是被 Del 的
+	// key 各留一个 uint64。
+	genSeq atomic.Uint64
+	gens   map[string]uint64
 
 	// 观测计数（pkg#76）：读命中/读未命中、容量淘汰、TTL 过期回收。
 	// 原子计数——读路径无锁递增，不给热路径加锁竞争。
@@ -176,6 +191,7 @@ func NewLocalCache[T any](cfg LocalConfig[T]) *LocalCache[T] {
 		now:      now,
 		order:    list.New(),
 		orderIdx: make(map[string]*list.Element),
+		gens:     make(map[string]uint64),
 		done:     make(chan struct{}),
 	}
 
@@ -472,7 +488,12 @@ func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], 
 		c.misses.Add(1)
 	}
 
-	// 2. 回源（按调用注入优先于构造期；SourceWithTTL 优先于 Source）
+	// 2. 回源前捕获 key 世代（#200）：Source 执行期间该 key 被 Del / 覆盖
+	//    写入（写后失效）时世代推进，回填阶段据此放弃——在途回源不能把
+	//    失效前的旧值重新灌回缓存。
+	gen := c.generation(key)
+
+	// 回源（按调用注入优先于构造期；SourceWithTTL 优先于 Source）
 	var (
 		val *T
 		ttl time.Duration
@@ -521,11 +542,17 @@ func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], 
 		return nil, err
 	}
 
-	// 3. 回填缓存（best-effort，失败仅记录不影响主流程）
+	// 3. 回填缓存（best-effort，失败仅记录不影响主流程）。
+	//    回填前先复查世代（#200）：Source 执行期间该 key 被 Del / 覆盖写入
+	//    ⇒ 本次回填放弃——写后失效语义不能被在途回源击穿整个 TTL 窗口。
+	//    取到的值仍返回给调用方（读已发生，值是它发起回源拿到的）。
 	if val == nil {
-		// 缓存空值防穿透
+		// 缓存空值防穿透（同样受世代复查约束：失效后的 null marker 会把
+		// 下一次读挡在 NullTTL 窗口外）
 		if nullTTL := c.effectiveNullTTL(); nullTTL > 0 {
-			c.setNullMarker(key, nullTTL)
+			if !c.setNullMarkerIfGen(key, nullTTL, gen) {
+				cacheLogger().Debug("local cache null-marker backfill skipped: key invalidated during load", "key", key)
+			}
 		}
 		return nil, nil
 	}
@@ -552,11 +579,63 @@ func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], 
 			stored = cloned
 		}
 	}
-	if e := c.SetWithTTL(ctx, key, stored, ttl); e != nil {
-		cacheLogger().Warn("local cache backfill failed", "key", key, "err", e)
+	if !c.setWithTTLIfGen(ctx, key, stored, ttl, gen) {
+		cacheLogger().Debug("local cache backfill skipped: key invalidated during load", "key", key)
 	}
 
 	return val, nil
+}
+
+// generation 读取 key 的当前世代（#200）。
+// 世代由写路径推进（见 bumpGen）；从未写过的 key 世代为 0。
+func (c *LocalCache[T]) generation(key string) uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.gens[key]
+}
+
+// bumpGen 推进 key 的世代（#200；调用方需持写锁）。
+// 世代取值来自全局单调序列 genSeq——永不复用，Clear 之后新写入的世代
+// 不会与任何在途回源捕获过的旧世代相等（相等是「可以回填」的判据，
+// 复用会把误判变成静默击穿）。
+func (c *LocalCache[T]) bumpGen(key string) {
+	c.gens[key] = c.genSeq.Add(1)
+}
+
+// writeEntryLocked 写入真值条目并推进世代（#200；调用方需持写锁）。
+// SetWithTTL / SetNX / setWithTTLIfGen 的共同写路径。
+func (c *LocalCache[T]) writeEntryLocked(key string, value *T, ttl time.Duration) {
+	var expiresAt time.Time
+	if ttl > 0 {
+		expiresAt = c.now().Add(ttl)
+	}
+
+	// 检查是否需要淘汰
+	if c.cfg.MaxSize > 0 && len(c.data) >= c.cfg.MaxSize {
+		if _, exists := c.data[key]; !exists {
+			c.evictOldest()
+		}
+	}
+
+	c.data[key] = &localEntry[T]{
+		value:     value,
+		expiresAt: expiresAt,
+	}
+	c.moveToBack(key)
+	c.bumpGen(key)
+}
+
+// setWithTTLIfGen 世代未变时写入真值条目（#200）——「复查世代 + 回填」在
+// 同一写锁区间内原子完成，不存在「复查通过、写入前又被 Del」的窗口。
+// 世代已变（Source 执行期间该 key 被 Del/覆盖写入）返回 false 且不写入。
+func (c *LocalCache[T]) setWithTTLIfGen(ctx context.Context, key string, value *T, ttl time.Duration, gen uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gens[key] != gen {
+		return false
+	}
+	c.writeEntryLocked(key, value, ttl)
+	return true
 }
 
 // effectiveNullTTL 返回生效的空值缓存 TTL：
@@ -626,10 +705,15 @@ func (c *LocalCache[T]) sweepInterval() time.Duration {
 	return interval
 }
 
-// setNullMarker 写入 null marker 条目（与 Set 相同的锁纪律与淘汰逻辑）。
-func (c *LocalCache[T]) setNullMarker(key string, ttl time.Duration) {
+// setNullMarkerIfGen 世代未变时写入 null marker 条目（#200——回源路径的
+// null marker 回填与 setWithTTLIfGen 同纪律：「复查世代 + 写入」原子完成，
+// 失效后的 null marker 不写入）。世代已变返回 false 且不写入。
+func (c *LocalCache[T]) setNullMarkerIfGen(key string, ttl time.Duration, gen uint64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.gens[key] != gen {
+		return false
+	}
 
 	var expiresAt time.Time
 	if ttl > 0 {
@@ -648,6 +732,8 @@ func (c *LocalCache[T]) setNullMarker(key string, ttl time.Duration) {
 		expiresAt: expiresAt,
 	}
 	c.moveToBack(key)
+	c.bumpGen(key)
+	return true
 }
 
 // Set 设置缓存（使用默认 TTL）。
@@ -655,30 +741,11 @@ func (c *LocalCache[T]) Set(ctx context.Context, key string, value *T) error {
 	return c.SetWithTTL(ctx, key, value, c.cfg.TTL)
 }
 
-// SetWithTTL 设置缓存（自定义 TTL）。
+// SetWithTTL 设置缓存（自定义 TTL）。写入推进 key 世代（#200）。
 func (c *LocalCache[T]) SetWithTTL(ctx context.Context, key string, value *T, ttl time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	var expiresAt time.Time
-	if ttl > 0 {
-		expiresAt = c.now().Add(ttl)
-	}
-
-	// 检查是否需要淘汰
-	if c.cfg.MaxSize > 0 && len(c.data) >= c.cfg.MaxSize {
-		if _, exists := c.data[key]; !exists {
-			c.evictOldest()
-		}
-	}
-
-	c.data[key] = &localEntry[T]{
-		value:     value,
-		expiresAt: expiresAt,
-	}
-
-	// 更新访问顺序
-	c.moveToBack(key)
+	c.writeEntryLocked(key, value, ttl)
 	return nil
 }
 
@@ -689,6 +756,7 @@ func (c *LocalCache[T]) SetWithTTL(ctx context.Context, key string, value *T, tt
 // 过期条目（含 StaleIfError 保留的过期真值）与 null marker 一律按不存在
 // 处理并被本次写入覆盖。失败（false）是纯无操作：不覆盖值、不动 TTL、
 // 不刷新淘汰顺序。ttl 与 SetWithTTL 同口径（<=0 不过期）；写路径不计 Stats。
+// 成功写入推进 key 世代（#200）。
 func (c *LocalCache[T]) SetNX(ctx context.Context, key string, value *T, ttl time.Duration) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -697,37 +765,24 @@ func (c *LocalCache[T]) SetNX(ctx context.Context, key string, value *T, ttl tim
 		return false, nil
 	}
 
-	var expiresAt time.Time
-	if ttl > 0 {
-		expiresAt = c.now().Add(ttl)
-	}
-
-	// 检查是否需要淘汰（同 SetWithTTL）
-	if c.cfg.MaxSize > 0 && len(c.data) >= c.cfg.MaxSize {
-		if _, exists := c.data[key]; !exists {
-			c.evictOldest()
-		}
-	}
-
-	c.data[key] = &localEntry[T]{
-		value:     value,
-		expiresAt: expiresAt,
-	}
-	c.moveToBack(key)
+	c.writeEntryLocked(key, value, ttl)
 	return true, nil
 }
 
-// Del 删除缓存。
+// Del 删除缓存。删除推进 key 世代（#200）：写后失效（write-invalidate）模式
+// 下，正在回源途中的加载会在 Source 返回后复查世代并放弃回填——失效语义
+// 不被在途回源用旧值击穿整个 TTL 窗口。
 func (c *LocalCache[T]) Del(ctx context.Context, key string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	delete(c.data, key)
 	c.removeFromOrder(key)
+	c.bumpGen(key)
 	return nil
 }
 
-// DelBatch 批量删除缓存。
+// DelBatch 批量删除缓存。同 Del 推进各 key 世代（#200）。
 func (c *LocalCache[T]) DelBatch(ctx context.Context, keys ...string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -735,6 +790,7 @@ func (c *LocalCache[T]) DelBatch(ctx context.Context, keys ...string) error {
 	for _, key := range keys {
 		delete(c.data, key)
 		c.removeFromOrder(key)
+		c.bumpGen(key)
 	}
 	return nil
 }
@@ -843,13 +899,16 @@ func (c *LocalCache[T]) Stats() Stats {
 // 编译期能力契约：LocalCache 具备观测计数能力（pkg#76）。
 var _ StatsProvider = (*LocalCache[int])(nil)
 
-// Clear 清空缓存。
+// Clear 清空缓存。世代表一并重置（#200）：捕获过旧世代（>0）的在途回源
+// 复查时不相等 ⇒ 放弃回填；从未写过的 key 世代本就是 0，不受影响。
+// genSeq 不重置——序列单调递增保证 Clear 之后的新世代不与旧捕获值碰撞。
 func (c *LocalCache[T]) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.data = make(map[string]*localEntry[T])
 	c.order.Init()
 	c.orderIdx = make(map[string]*list.Element)
+	c.gens = make(map[string]uint64)
 }
 
 // Sweep 手动清扫过期条目，返回本次清除的条目数（pkg#25）。
