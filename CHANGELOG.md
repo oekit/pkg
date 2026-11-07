@@ -1,3 +1,11 @@
+## [v0.36.0] — 2026-11-07
+
+- feat(secretx): 内存态敏感凭证持有原语 `SecureString`/`SecureBytes`——XOR 混淆存储防内存明文扫描 + Set/Clear 双向零化 + Get 每次独立副本解出（外部改写不穿透）+ `EqualConstantTime` 走 crypto/subtle（时序侧信道）；随机密钥生成失败降级 hex 自混淆而非 panic（持有器不因环境退化拒绝服务）。设计立场写进源码：**定位是内存扫描缓解而非加密**，能读进程内存的攻击者只多一步还原，静态落库走本包 Box（AES-GCM 信封），两套原语不互相冒充。收编自 zentao-mini/zentao-max 逐字节同源的 secure_string.go（yi-nology/zentao-mini#22 下沉，下游各删 -183 行），原实现零用例，本版补齐 roundtrip/Set 替换/Clear 复用/常量时间比较/副本隔离/并发 race 七面
+- feat(pagination): `Walk` 翻页聚合单源——固定 pageSize 从第 1 页逐页 fetch，**短页即末页**（len < pageSize 含 0 即停），按页序拼接；逐页 ctx 取消检查；任何一页失败立即返回带页码上下文的错误，已聚合部分不返回（要么全量要么错误，没有半截结果）。`MaxWalkPages`（10000）防呆把「上游越界页恒返整页」这类契约违例从死循环变 `ErrTooManyPages` 明确报错；`ErrBadPageSize`/`ErrNilFetcher` 构造期哨兵。此前 zentao-mini 的 client_* 五个「翻页直到 len<pageSize」循环各写一份（页长 100/200/500 各异），本轮下游收编
+- feat(httpjson): `NormalizeBaseURL`——SDK base 配置规范化（补 `http://` scheme——不猜 https，内网自建占多数；结尾斜杠全去；首尾空白去除；空串原样返回不吞「未配置」语义）。字符级规则不解析 URL，畸形输入走同样规则。收编 zentao-mini/max 四份同源内联规范化（yi-nology/zentao-mini#22 下沉）
+
+关联上游：yi-nology/zentao-mini#22（SecureString/URL 规范化/翻页 helper 下沉本仓，common 已归档由本仓接档）、yi-nology/zentao-mini#20（翻页循环泛型化落地依赖）。
+
 ## [v0.35.2] — 2026-11-07
 
 - fix(timex/cron): Next 在夏令时回拨/前跳日退化成过去时刻或内部死循环（[#214](https://github.com/oekit/pkg/issues/214)）——根因是每次推进都「绝对时间 Add 后按墙钟重建」，而 time.Date 对**重复**墙钟取较早一次、对**不存在**墙钟归一到前一天 23:00：回拨日 01:59 EDT +1min 重建回 01:00 EDT（倒退 59 分钟）⇒ Next 返回**早于入参**的时刻，调度器 `next := Next(prev) → sleep → prev = next` 立即热转且永不前进；小时字段受限时更糟——从 02:00 EDT 推 03:00，绝对时间先落 01:00 EST、重建回 01:00 EDT ⇒ **Next 内部死循环**，调用方连返回都拿不到。前跳日同理：time.Date 与 AddDate 同落 09-05 23:00 ⇒ 日期循环原地打转、永不返回（#214 原文只说「补用例」，实测出第二个独立缺陷）。改法：推进一律走绝对时间（nextHour/nextMinute 天然单调，现代时区偏移都是整分钟 ⇒ 绝对整点必落墙钟整分），日期加减改以**正午**为锚点、落到目标日最早存在的时刻，外层再加最多 3 次单调性兜底；语义写入 doc.go——回拨日两次出现都会各自被推进到、表达式要求的墙钟时刻当天不存在则顺延到次年命中
