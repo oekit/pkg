@@ -1,3 +1,10 @@
+## [v0.37.1] — 2026-11-07
+
+- fix(mathx): Clamp 对 lo>hi fail-fast panic——静默产生区间外结果关闭，配置上下限写反即刻暴露（#228）
+- fix(mathx): RandIntn 对 maxInt<=0 显式 panic——替代 math/rand 裸 panic，消息带上下文（#229）
+
+关联问题单：pkg#228、pkg#229。
+
 ## [v0.37.0] — 2026-11-07
 
 - feat(timex): ParseFirst 多 layout 容错解析原语——first-match 语义，同一时间字段多平台格式不一的通用形态（#197）
