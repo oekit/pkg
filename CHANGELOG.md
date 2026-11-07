@@ -1,3 +1,13 @@
+## [v0.37.4] — 2026-11-08
+
+- fix(httpjson): NormalizeBaseURL scheme 前缀判定大小写不敏感（EqualFold，RFC 3986 §3.1）+ 命中后 scheme 归一小写——`HTTPS://EXAMPLE.COM` 不再被二次补 `http://` 产出 `http://HTTPS://EXAMPLE.COM`（scheme 静默降级 https→http、host 截成 `HTTPS:`）；只认 http/https 两个 scheme，`host:port` 等其余形态仍按无 scheme 补 `http://`（#239）
+- fix(httpjson): NormalizeBaseURL 尾斜杠裁剪收窄到 authority+path 段——先剥 scheme 前缀再裁（scheme 的 `//` 永不动：`http://`、`http:///` 保持 `http://`，不再截成 `http:`），首个 `?`/`#` 之后的 query/fragment 原样保留（`http://host/?x=/` 的 query 值 `/` 不再被整串 TrimRight 静默吃成空串）；刻意不走 url.Parse 重组以保「小写输入零变化」（#240）
+- fix(jsonrepair): StripCodeFence 弃整串正则改逐行状态机——非贪婪 `(.*?)` 把围栏内容里的 ``` 当结束标记，嵌套围栏（JSON 字符串带代码块、4 反引号外栏包 3 反引号内栏）被腰斩致下游 Unmarshal 报「无法解析」而数据其实完整；闭栏按 markdown 规则要求行首、反引号个数 ≥ 开栏，「多块取第一块」契约不变，只有开栏没有闭栏时返回开栏后全部（#241）
+- refactor(stringx): Contains 委托 slicex.Contains[string]——删掉与泛型版逐字同构的第二份循环体（两份副本改口径时只改一处、另一处静默保持旧行为）；签名不变调用面零改动，doc 注明语义单源与保留理由，用例逐项钉住两函数一致（#242）
+- feat(shellx): Split 分词器——Quote/QuoteArgv 的逆运算（`Split(QuoteArgv(args...))` 逐项还原 args，往返判据用例钉住）：单引号原样（含反斜杠）、双引号内反斜杠仅转义 `" \ $ \`` 与换行（`\x` 非 escape 字面保留）、未加引号的 `; | &` 独立 token 且相邻同类合并 `&&`/`||`、未闭合引号（ErrUnclosedQuote）与尾随转义（ErrTrailingEscape）报错不做尽力解析、空参数保留；只拆词不展开（变量/命令替换/glob 不碰——与 Quote「只转义、不判策略」同一立场）（#243）
+
+关联问题单：pkg#239、pkg#240、pkg#241、pkg#242、pkg#243。
+
 ## [v0.37.3] — 2026-11-08
 
 - chore: 发版链修复重发——v0.37.2 tag 先于 CHANGELOG 落地，触发 tag 检出的「CHANGELOG/tag 一致性」门禁红（protect-release-tags 规则下 tag 不可移动，红 run 不可恢复）；本 tag 为同内容的干净发版，代码与 v0.37.2 完全一致（#244 的 merge commit）
