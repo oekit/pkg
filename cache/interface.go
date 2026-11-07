@@ -24,11 +24,23 @@ import (
 //	LocalConfig.CloneOnRead）——开启后读命中返回副本，调用方可改写
 //	返回值而不污染缓存条目；未开启时按上面的共享引用口径。
 //
-// (nil, nil) 双关：
+// (nil, nil) 三种情形：
 //
-//	Get/GetOrLoad 返回 (nil, nil) 表示"数据不存在"——key miss 或命中
-//	null marker（见 SourceFunc）二者之一；error 非 nil 时值无效。
-//	miss 不是 error，不应记错误日志。
+//		Get/GetOrLoad 返回 (nil, nil) 表示"无值可返"，具体有**三种**情形：
+//
+//	 1. key miss——key 不存在或条目已过期；
+//	 2. 命中 null marker（见 SourceFunc）——回源曾判定"数据不存在"的
+//	    防穿透标记；
+//	 3. 命中**显式存入的 nil 真值**——Set/SetWithTTL(ctx, key, nil) 存入
+//	    isNull=false、value=nil 的条目：调用方声明"该 key 的值就是 nil"，
+//	    它不是 miss，TTL 内不应回源。
+//
+//		按本契约实现「(nil, nil) ⇒ 数据不存在 ⇒ 回源回填」的装饰器/后端
+//		必须把情形 3 排除在外（否则会在该条目 TTL 内反复回源覆盖）。
+//		区分三种情形是 GetEx/Peek（HitGetter/PeekGetter 可选接口）的职责：
+//		hit=true 即情形 3（命中真值条目，值可能为 nil）；hit=false 覆盖
+//		情形 1/2（对读语义等价，区分它们是回源策略/Exists 的事）。
+//		error 非 nil 时值无效；miss 不是 error，不应记错误日志。
 //
 // 回填 best-effort：
 //
@@ -52,7 +64,8 @@ import (
 //	Close(ctx context.Context) error + sync.Once 幂等。
 type Cache[T any] interface {
 	// Get 获取缓存。
-	// 返回 (nil, nil) 表示数据不存在（见包级"实现契约"）。
+	// 返回 (nil, nil) 表示无值可返（miss / null marker / 显式存入的 nil 真值
+	// 三种情形，见包级"实现契约"）。
 	Get(ctx context.Context, key string) (*T, error)
 
 	// Set 设置缓存（使用实现构造时的默认 TTL）。

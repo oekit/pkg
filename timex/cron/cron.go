@@ -529,12 +529,34 @@ func (d DelaySchedule) Next(t time.Time) time.Time {
 }
 
 // NewDelaySchedule 创建一个延迟调度器。
+//
+// delay < 0 panic（#227）：负延迟让 Next 返回**过去**时刻——调度器收到
+// 不晚于当前时间的触发点，可能原地热转或跳过任务，是非法配置而非可钳制
+// 的边界（对比 Every 对 <1s 的静默钳制：亚秒只是精度损失，负值是语义
+// 错误）。fail-fast 在构造期，不静默。
 func NewDelaySchedule(delay time.Duration) DelaySchedule {
+	if delay < 0 {
+		panic(fmt.Sprintf("cron: NewDelaySchedule 参数非法: delay 不能为负, got %v", delay))
+	}
 	return DelaySchedule{Delay: delay}
 }
 
 // NewRandomDelaySchedule 创建一个随机延迟调度器。
+//
+// 构造期校验 0 <= min <= max，非法 panic（#227，fail-fast）：
+//
+//   - min > max：delta 为负会命中 Next 的 delta<=0 分支，随机延迟**静默
+//     退化**为固定延迟 min——配置错误无任何信号；
+//   - min < 0 或 max < 0：Next 产生负值延迟 ⇒ 返回过去时刻——调度器
+//     收到不晚于当前时间的触发点，可能原地热转或跳过任务。
+//
+// 签名不返回 error：非法区间是调用方的常量配置错误（同 NewDelaySchedule
+// 的 panic 口径；直接构造 RandomDelaySchedule{...} 字面量绕过校验属自担
+// 行为，Next 保留 delta<=0 的防御分支）。
 func NewRandomDelaySchedule(min, max time.Duration) RandomDelaySchedule {
+	if min < 0 || max < 0 || min > max {
+		panic(fmt.Sprintf("cron: NewRandomDelaySchedule 参数非法: 需要 0 <= min <= max, got min=%v max=%v", min, max))
+	}
 	return RandomDelaySchedule{Min: min, Max: max}
 }
 
@@ -544,9 +566,12 @@ type RandomDelaySchedule struct {
 }
 
 // Next 返回当前时间加上 [Min, Max] 范围内随机延迟后的时间。
+// min == max 时确定性地返回 t + min（delta == 0 无随机空间）。
 func (r RandomDelaySchedule) Next(t time.Time) time.Time {
 	delta := r.Max - r.Min
 	if delta <= 0 {
+		// 防御分支：构造期已校验 0 <= min <= max，正常路径不会进入；
+		// 字面量直构绕过校验时按固定延迟 min 兜底。
 		return t.Add(r.Min)
 	}
 	jitter := time.Duration(rand.Int63n(int64(delta)))

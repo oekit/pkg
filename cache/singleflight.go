@@ -118,13 +118,19 @@ func (sf *SingleFlightCache[T]) Exists(ctx context.Context, key string) (bool, e
 // ⚠️ 前置检查走**非删除式**读路径（Peek，pkg#72）：走 Get 会命中 LocalCache
 // 的惰性删除路径，把 stale-if-error 兜底需要的过期真值删掉 ⇒ 包装 LocalCache
 // 后 StaleIfError 形同虚设（回源失败直接抛错，不再兜底历史真值）。
+//
+// 命中即早退（#203）：hit=true 时**无条件**返回（值可能为 nil——显式存入的
+// nil 真值条目，见包级契约「(nil, nil) 三种情形」）。此前的条件是
+// hit && value != nil，nil 值命中会落入 flight.Do → 加载路径，而加载路径的
+// 命中分支会**再计一次 hit** ⇒ 一次读被计成两次命中，命中率被系统性抬高
+// （违背 pkg#90「一次读恰好计入命中或未命中之一」）。
 func (sf *SingleFlightCache[T]) GetOrLoad(ctx context.Context, key string) (*T, error) {
-	// 1. 先查缓存
+	// 1. 先查缓存（命中即返——含值为 nil 的真值命中，#203）
 	value, hit, err := sf.peek(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	if hit && value != nil {
+	if hit {
 		return value, nil
 	}
 
@@ -147,8 +153,11 @@ func (sf *SingleFlightCache[T]) GetOrLoad(ctx context.Context, key string) (*T, 
 // 过期条目时不删除它（stale-if-error 兜底需要那份值留在表内，pkg#72）；
 // 内层不支持时退回 Get（历史行为：由内层自行决定过期条目的回收口径）。
 //
-// 命中判定与历史实现一致：拿到非 nil 值才算命中（null marker 与「命中但
-// 值为 nil」都按未命中走，由 inner.GetOrLoad 给出最终结果）。
+// 命中口径：内层支持 PeekGetter 时 hit 由内层给出（值为 nil 的真值命中同样
+// hit=true，调用方命中即早退——#203）；退回 Get 的路径上拿到非 nil 值才算
+// 命中（null marker 与「命中但值为 nil」都按未命中走，由 inner.GetOrLoad
+// 给出最终结果——该路径无法区分 nil 真值，不做早退，代价是该口径下 nil
+// 值命中可能被内层按其自身语义计一次命中）。
 func (sf *SingleFlightCache[T]) peek(ctx context.Context, key string) (*T, bool, error) {
 	if pg, ok := sf.inner.(PeekGetter[T]); ok {
 		return pg.Peek(ctx, key)
@@ -169,12 +178,13 @@ func (sf *SingleFlightCache[T]) peek(ctx context.Context, key string) (*T, bool,
 // 内层不支持按调用注入（未实现 cache.SourceInjector）时退回内层的构造期
 // Source——能力缺失是内层的事实，不是装饰器引入的偏差。
 func (sf *SingleFlightCache[T]) GetOrLoadWithSource(ctx context.Context, key string, source SourceFunc[T]) (*T, error) {
-	// 1. 前置检查走非删除式读路径（同 GetOrLoad——pkg#72）
+	// 1. 前置检查走非删除式读路径（同 GetOrLoad——pkg#72；命中即返含
+	//    nil 值真值命中，#203）
 	value, hit, err := sf.peek(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	if hit && value != nil {
+	if hit {
 		return value, nil
 	}
 
@@ -205,12 +215,13 @@ func (sf *SingleFlightCache[T]) GetOrLoadWithSource(ctx context.Context, key str
 // 内层不支持按调用注入（未实现 cache.SourceInjector）时退回内层的构造期
 // 回源；此时 ttl > 0 仍生效（覆盖构造期回源给出的 TTL）。
 func (sf *SingleFlightCache[T]) GetOrLoadWithSourceTTL(ctx context.Context, key string, source SourceFuncWithTTL[T], ttl time.Duration) (*T, error) {
-	// 1. 前置检查走非删除式读路径（同 GetOrLoad——pkg#72）
+	// 1. 前置检查走非删除式读路径（同 GetOrLoad——pkg#72；命中即返含
+	//    nil 值真值命中，#203）
 	value, hit, err := sf.peek(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	if hit && value != nil {
+	if hit {
 		return value, nil
 	}
 

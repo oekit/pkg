@@ -53,6 +53,45 @@ func (s *Slice[T]) AppendIfAbsent(v T, eq func(a, b T) bool) bool {
 	return true
 }
 
+// RemoveIf 原子删除所有命中谓词的元素，返回删除个数（#199——
+// AppendIfAbsent 的删除侧对偶：有序注册表的「按名注销/按前缀删」主路径）。
+//
+// 「先 Snapshot/Range 找下标、再 Delete(i)」的两步组合在并发写入下不安全：
+// Range 在快照副本上遍历（它正确的并发语义），副本下标与活体切片在并发
+// Append/Delete 下会错位 ⇒ Delete(i) 删的是**另一个元素**。本方法把遍历
+// 与删除收进**同一把写锁**（与 AppendIfAbsent 同纪律）。
+//
+// 谓词在锁内调用——必须轻量且**不得回调本切片的任何方法**（死锁边界；
+// 同族先例：sync.Map 的 Range 也在锁语义内回调）。pred 为 nil 时 no-op
+// 返回 0。返回删除**个数**而非被删元素副本（要副本先 Snapshot 自查——
+// 返回副本列表会助长「谓词内副作用」的用法）。
+func (s *Slice[T]) RemoveIf(pred func(v T) bool) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if pred == nil || len(s.s) == 0 {
+		return 0
+	}
+	kept := s.s[:0]
+	removed := 0
+	for _, v := range s.s {
+		if pred(v) {
+			removed++
+			continue
+		}
+		kept = append(kept, v)
+	}
+	if removed > 0 {
+		// 清尾（大对象滞留纪律，同 Delete/Clear）：过滤后尾部残留的旧引用
+		// 会钉住已删元素，GC 收不走。
+		var zero T
+		for i := len(kept); i < len(s.s); i++ {
+			s.s[i] = zero
+		}
+		s.s = kept
+	}
+	return removed
+}
+
 // Len 返回元素个数。
 func (s *Slice[T]) Len() int {
 	s.mu.RLock()
