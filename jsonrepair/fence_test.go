@@ -31,6 +31,24 @@ func TestStripCodeFence(t *testing.T) {
 		{"multi fence takes first", "```\nfirst\n```\n```\nsecond\n```", "first"},
 		// 围栏外有散文：只取围栏内容
 		{"prose around fence", "好的，结果如下：\n```json\n{\"a\":1}\n```\n希望有用", `{"a":1}`},
+		// #241：围栏内容本身含围栏——行中 ``` 不在行首，不再被当结束标记；
+		// 输出完整 JSON（\n 为 JSON 字符串内的字面转义，非换行）
+		{
+			"nested fence in content",
+			"```json\n{\"script\": \"```bash\\necho hi\\n```\"}\n```",
+			"{\"script\": \"```bash\\necho hi\\n```\"}",
+		},
+		// #241 面 2：markdown 标准 4 反引号外栏包 3 反引号内栏——闭栏要求
+		// 反引号个数 ≥ 开栏，内层 3 反引号行是内容
+		{
+			"longer outer fence",
+			"````md\nbefore\n```go\nfmt.Println(1)\n```\nafter\n````",
+			"before\n```go\nfmt.Println(1)\n```\nafter",
+		},
+		// #241：只有开栏没有闭栏——返回开栏后全部（模型漏写闭栏，内容仍是要的 JSON）
+		{"unclosed fence keeps content", "```json\n{\"a\":1}", `{"a":1}`},
+		// 闭栏行带尾随空白仍是闭栏
+		{"closing fence with trailing space", "```\nx\n```  ", "x"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

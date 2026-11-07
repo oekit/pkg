@@ -5,6 +5,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/oekit/pkg/slicex"
 )
 
 var (
@@ -17,13 +19,12 @@ var (
 )
 
 // Contains 检查 str 是否在 list 中。
+//
+// 语义单源在 slicex.Contains[string]（泛型版），本函数保留仅为字符串场景
+// 的可读性——实现是一行转发，不是第二份副本（#242：两份逐字同构的循环体
+// 在改口径时只会改一处，另一处静默保持旧行为）。
 func Contains(list []string, str string) bool {
-	for _, each := range list {
-		if each == str {
-			return true
-		}
-	}
-	return false
+	return slicex.Contains(list, str)
 }
 
 // Filter 返回 s 中满足 filter 条件的字符（保留命中）。
