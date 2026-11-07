@@ -1,6 +1,7 @@
 package mathx
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -170,5 +171,41 @@ func TestRoundFloor_OverflowGuard(t *testing.T) {
 	}
 	if got := Round(0, 400); got != 0 {
 		t.Fatalf("Round(0,400) = %v（此前 NaN）, want 0", got)
+	}
+}
+
+// TestRandIntn_InvalidMaxPanics 钉住 #229：maxInt <= 0 必须以**带上下文**的
+// panic 快速失败，而不是把 math/rand 的裸 panic（"invalid argument to
+// Intn"）透传给调用方——同模块 ToFixed 对负精度已确立该纪律。
+//
+// 成对判据：最小合法入参 maxInt=1 必须照常工作（恒返 0），校验不得误伤。
+func TestRandIntn_InvalidMaxPanics(t *testing.T) {
+	cases := []struct {
+		name   string
+		maxInt int
+	}{
+		{"maxInt 为 0", 0},
+		{"maxInt 为 -1", -1},
+		{"maxInt 深负", -100},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("RandIntn(%d) 应 panic（裸透传 math/rand 的 panic 不可接受）", c.maxInt)
+				}
+				msg, _ := r.(string)
+				if !strings.Contains(msg, "maxInt > 0") {
+					t.Fatalf("panic 信息应指明入参约束，got %v", r)
+				}
+			}()
+			_ = RandIntn(c.maxInt)
+		})
+	}
+	for i := 0; i < 100; i++ {
+		if v := RandIntn(1); v != 0 {
+			t.Fatalf("RandIntn(1) = %d, want 0（最小合法入参不得被校验误伤）", v)
+		}
 	}
 }

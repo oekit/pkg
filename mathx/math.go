@@ -18,7 +18,14 @@ var (
 
 // RandIntn 返回 [0, maxInt) 范围内的随机整数。
 // 并发安全，使用包级 rng 避免同纳秒碰撞。
+//
+// maxInt <= 0 时 panic（带上下文的快速失败，#229）——不把 math/rand 的
+// 裸 panic（"invalid argument to Intn"）透传给调用方；与 ToFixed 对负
+// 精度、ProbabilityElems 对非法权重的处理同纪律。
 func RandIntn(maxInt int) int {
+	if maxInt <= 0 {
+		panic("mathx: RandIntn requires maxInt > 0, got " + fmt.Sprintf("%d", maxInt))
+	}
 	rngMu.Lock()
 	v := rng.Intn(maxInt)
 	rngMu.Unlock()
