@@ -121,13 +121,20 @@ func TestPassphraseBox_TamperedCiphertext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
-	// 篡改负载尾字节（密文区）
-	tampered := flipB64(sealed, len(sealed)-2)
+	// 篡改负载尾字节（密文区）——**字节级翻转**。
+	//
+	// ⚠️ 不能用字符级翻转：base64 末组（剩 2 字节 ⇒ 3 字符 + '='）的第 3 个
+	// 字符只承载 2 个**有效位**，其余 4 位是解码时丢弃的 padding 位 ⇒ 翻它
+	// 可能只改到 padding 位 ⇒ **解码后字节完全不变** ⇒ 密文根本没被篡改 ⇒
+	// GCM 认证当然通过 ⇒ Open 返回 nil ⇒ 本用例按 1/16 概率假红
+	// （实测 2026-11-07 CI 红即此因，见 pkg#275）。
+	tampered := tamperBase64Byte(t, sealed, -1)
 	if _, err := box.Open(tampered); !errors.Is(err, ErrBadCiphertext) {
 		t.Fatalf("篡改密文应 ErrBadCiphertext, got %v", err)
 	}
 	// 篡改 salt 区（前缀后的头几个 base64 字节）——派生钥改变，认证失败
 	tamperedSalt := flipB64(sealed, 3)
+	assertDecodedChanged(t, sealed, tamperedSalt)
 	if _, err := box.Open(tamperedSalt); !errors.Is(err, ErrBadCiphertext) {
 		t.Fatalf("篡改 salt 应 ErrBadCiphertext, got %v", err)
 	}
@@ -135,12 +142,111 @@ func TestPassphraseBox_TamperedCiphertext(t *testing.T) {
 
 // flipB64 把 base64 字符串的一个字符换成另一个（保证串长不变、仍是合法
 // base64 字符集）。
+//
+// ⚠️ **只对「6 位全有效」的位置安全**：base64 末组的第 3 字符只有 2 个有效位
+// （其余是丢弃的 padding 位）⇒ 翻它可能不改变解码后的字节 ⇒ 篡改是空操作。
+// 载荷区改动请用 tamperBase64Byte（字节级）。
 func flipB64(s string, i int) string {
 	c := byte('A')
 	if s[i] == 'A' {
 		c = 'B'
 	}
 	return s[:i] + string(rune(c)) + s[i+1:]
+}
+
+// tamperBase64Byte 解码 base64 负载 → 翻指定字节的最低位 → 重新编码。
+// byteIdx < 0 表示「从尾部数」（-1 = 最后一个字节）。
+//
+// 字节级翻转保证「篡改一定是真的」——字符级翻转会命中 base64 的丢弃位
+// （见 flipB64 的说明），那样「篡改」实为空操作，用例变成随机的假红。
+func tamperBase64Byte(t *testing.T, sealed string, byteIdx int) string {
+	t.Helper()
+	prefix, payload, ok := strings.Cut(sealed, ":")
+	if !ok {
+		t.Fatalf("密文 %q 缺版本前缀", sealed)
+	}
+	raw, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if byteIdx < 0 {
+		byteIdx = len(raw) + byteIdx
+	}
+	if byteIdx < 0 || byteIdx >= len(raw) {
+		t.Fatalf("byteIdx %d 越界（负载 %d 字节）", byteIdx, len(raw))
+	}
+	raw[byteIdx] ^= 0x01
+	return prefix + ":" + base64.StdEncoding.EncodeToString(raw)
+}
+
+// assertDecodedChanged 断言两个密文的 base64 负载**解码后确实不同**
+// ——「篡改」必须是真的，否则「未被检出」证明不了任何事。
+func assertDecodedChanged(t *testing.T, a, b string) {
+	t.Helper()
+	_, pa, _ := strings.Cut(a, ":")
+	_, pb, _ := strings.Cut(b, ":")
+	ra, err := base64.StdEncoding.DecodeString(pa)
+	if err != nil {
+		t.Fatalf("decode a: %v", err)
+	}
+	rb, err := base64.StdEncoding.DecodeString(pb)
+	if err != nil {
+		t.Fatalf("decode b: %v", err)
+	}
+	if bytes.Equal(ra, rb) {
+		t.Fatalf("篡改后负载逐字节相同 ⇒ 这次「篡改」是空操作，断言无意义")
+	}
+}
+
+// TestFlipB64_ChangesPayload 钉住 helper 的性质：**6 位全有效**的字符位置上，
+// 字符级翻转必然改变解码后的负载；而 base64 末组的第 3 字符只有 2 个有效位
+// （其余 4 位是解码时丢弃的 padding 位）⇒ 翻它可能**不改变**负载 ⇒ 篡改是
+// 空操作（pkg#275 的根因）。本用例把「哪些位置安全」写成可证伪的门禁。
+func TestFlipB64_ChangesPayload(t *testing.T) {
+	raw := make([]byte, 50) // 与 v2 载荷同长：salt16+nonce12+密文6+tag16 ⇒ 末组剩 2 字节
+	for i := range raw {
+		raw[i] = byte(i * 7)
+	}
+	payload := base64.StdEncoding.EncodeToString(raw)
+	if len(payload) < 4 || payload[len(payload)-1] != '=' {
+		t.Fatalf("夹具形态不对：末字符 %q（期望 '='）", payload[len(payload)-1])
+	}
+	// 末组第 3 字符（= len-2）是危险位：它的低 4 位是丢弃位 ⇒ 翻转可能无效。
+	danger := len(payload) - 2
+	for i := 0; i < len(payload)-4; i++ {
+		if i == danger {
+			continue
+		}
+		flipped := flipB64(payload, i)
+		a, err := base64.StdEncoding.DecodeString(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := base64.StdEncoding.DecodeString(flipped)
+		if err != nil {
+			t.Fatalf("位置 %d 翻转后不是合法 base64: %v", i, err)
+		}
+		if bytes.Equal(a, b) {
+			t.Fatalf("位置 %d 翻转后负载逐字节相同 ⇒ 该位置不该用字符级翻转", i)
+		}
+	}
+	// 危险位：若恰好翻到丢弃位，解码结果不变 —— 这正是 pkg#275 的成因，
+	// 故断言「存在这种可能」，把「字符级翻转不可用于载荷尾」写成门禁。
+	sawNoop := false
+	for v := 0; v < 16 && !sawNoop; v++ {
+		raw2 := append([]byte(nil), raw...)
+		raw2[len(raw2)-1] = byte(v << 2)
+		p2 := base64.StdEncoding.EncodeToString(raw2)
+		f2 := flipB64(p2, danger)
+		a2, _ := base64.StdEncoding.DecodeString(p2)
+		b2, _ := base64.StdEncoding.DecodeString(f2)
+		if bytes.Equal(a2, b2) {
+			sawNoop = true
+		}
+	}
+	if !sawNoop {
+		t.Fatalf("危险位上竟没出现「翻转为空操作」的情形——base64 末组语义与本用例假设不符，需重新核对")
+	}
 }
 
 // TestPassphraseBox_CrossVersionRejection 跨形态解封按版本位拒绝：
