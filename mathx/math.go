@@ -18,7 +18,14 @@ var (
 
 // RandIntn 返回 [0, maxInt) 范围内的随机整数。
 // 并发安全，使用包级 rng 避免同纳秒碰撞。
+//
+// maxInt <= 0 时 panic（带上下文的快速失败，#229）——不把 math/rand 的
+// 裸 panic（"invalid argument to Intn"）透传给调用方；与 ToFixed 对负
+// 精度、ProbabilityElems 对非法权重的处理同纪律。
 func RandIntn(maxInt int) int {
+	if maxInt <= 0 {
+		panic("mathx: RandIntn requires maxInt > 0, got " + fmt.Sprintf("%d", maxInt))
+	}
 	rngMu.Lock()
 	v := rng.Intn(maxInt)
 	rngMu.Unlock()
@@ -213,7 +220,15 @@ func RangeRandFloat64(min, max float64) float64 {
 
 // Clamp 将 v 限制在 [lo, hi] 范围内。
 // 支持 int、float、string 等所有实现了 cmp.Ordered 的类型。
+//
+// lo > hi 时 panic（#228）：上下界颠倒（如配置里 max/min 顺序写反）是
+// 编程错误——此前会静默返回落在 [hi, lo] 之外的值，比快速失败更危险；
+// 与 ToFixed 对负精度、ProbabilityElems 对非法权重的处理同纪律。
 func Clamp[T cmp.Ordered](v, lo, hi T) T {
+	if lo > hi {
+		panic("mathx: Clamp requires lo <= hi, got lo=" + fmt.Sprintf("%v", lo) +
+			", hi=" + fmt.Sprintf("%v", hi))
+	}
 	if v < lo {
 		return lo
 	}
