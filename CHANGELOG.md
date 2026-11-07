@@ -1,3 +1,21 @@
+## [v0.37.0] — 2026-11-07
+
+- feat(timex): ParseFirst 多 layout 容错解析原语——first-match 语义，同一时间字段多平台格式不一的通用形态（#197）
+- feat(bufiox): TailLines 行粒度尾部窗口读取原语——1MB 单行上限、budget 软上限、truncated 诚实信号、CRLF 归一（#198）
+- feat(container): Slice.RemoveIf 原子谓词删除——AppendIfAbsent 的删除侧对偶（#199）
+- fix(cache): SingleFlightCache 写后失效与在途回源竞态——per-key 世代号：Del 后在途加载不再把旧值/null marker 回填（#200）
+- feat(ctxscope): 新子包——命名空间+值类型双隔离的泛型 Key/With/From/MustFrom，请求级作用域传递不再手搓 WithValue（#201）
+- fix(errors): BizError 包装链字符串形态自洽——嵌套只贡献 message、String()≡Error()、WithStatus 带 cause（#202）
+- fix(cache): SingleFlightCache「命中但值为 nil」双重计 hit 关闭——hit 即早退（#203）
+- docs(cache): (nil,nil) 契约补全「显式存入的 nil 真值」第三种情形（#209）
+- docs(pathx): MatchSimpleGlob 补「* 跨 /」语义声明——与 MatchGlob 同、与 filepath.Match 反（#210）
+- feat(pagination): WalkEach 流式行走器——短页停止/yield false 终止/budget 预算哨兵；与 #226 的 Walk（收集全量）分工：流式 vs 全量（#211）
+- feat(secretx): NewPassphraseBox 派生前置形态——随机 salt + PBKDF2-HMAC-SHA256 600k 迭代（stdlib crypto/pbkdf2，零依赖红线）+ 版本位 v2 跨形态拒绝（#212）
+- feat(cache): SingleValue[T] 单值 TTL 缓存——单值形态不再自造常量键，无真值返回 ErrNoValue（#213）
+- fix(timex/cron): NewRandomDelaySchedule/NewDelaySchedule 构造期校验——min>max/负值 fail-fast panic，不再静默退化固定延迟/过去时刻（#227）
+
+关联问题单：pkg#197、pkg#198、pkg#199、pkg#200、pkg#201、pkg#202、pkg#203、pkg#209、pkg#210、pkg#211、pkg#212、pkg#213、pkg#227。
+
 ## [v0.36.0] — 2026-11-07
 
 - feat(secretx): 内存态敏感凭证持有原语 `SecureString`/`SecureBytes`——XOR 混淆存储防内存明文扫描 + Set/Clear 双向零化 + Get 每次独立副本解出（外部改写不穿透）+ `EqualConstantTime` 走 crypto/subtle（时序侧信道）；随机密钥生成失败降级 hex 自混淆而非 panic（持有器不因环境退化拒绝服务）。设计立场写进源码：**定位是内存扫描缓解而非加密**，能读进程内存的攻击者只多一步还原，静态落库走本包 Box（AES-GCM 信封），两套原语不互相冒充。收编自 zentao-mini/zentao-max 逐字节同源的 secure_string.go（yi-nology/zentao-mini#22 下沉，下游各删 -183 行），原实现零用例，本版补齐 roundtrip/Set 替换/Clear 复用/常量时间比较/副本隔离/并发 race 七面
