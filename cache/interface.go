@@ -194,6 +194,31 @@ type HitGetter[T any] interface {
 	GetEx(ctx context.Context, key string) (*T, bool, error)
 }
 
+// BatchEntry 是批量读取的单键结果（pkg#238）：Hit 区分「nil 真值命中」
+// 与「缺席」——MGet 返回的 map[string]*T 里，v, ok := m[k] 的 ok 对 nil
+// 值条目也为 true，与缺席的区分只能靠键存在性，消费方极易误用
+// （v == nil 判缺席 ⇒ nil 真值条目被误判、触发不必要的回源）。
+type BatchEntry[T any] struct {
+	// Value 命中真值条目的值——可能为 nil（调用方显式存了 nil 值）；
+	// Hit=false 时恒为 nil。
+	Value *T
+	// Hit 是否命中真值条目：false = key 不存在、已过期，或命中 null
+	// marker（与 GetEx 的 hit=false 同口径）。
+	Hit bool
+}
+
+// BatchHitGetter 是可选能力接口：批量读取时区分「未命中」与「命中但值为
+// nil」（pkg#238）——HitGetter 的批量形态（LocalCache：MGetEx）。
+//
+// 与 BatchGetter 的差别只在返回形态：BatchGetter.MGet 的 map 只含命中键
+// （nil 值命中与缺席在 map 里不可区分），本接口对每个请求键都给出 Hit
+// 标志。既有 MGet 签名不变——本接口是可选能力，不加入 Cache[T]。
+type BatchHitGetter[T any] interface {
+	// MGetEx 批量获取，返回 map 对每个请求键各给一条 BatchEntry：
+	// Hit=true 时 Value 可能为 nil；Hit=false 表示该键缺席。
+	MGetEx(ctx context.Context, keys ...string) (map[string]BatchEntry[T], error)
+}
+
 // PeekGetter 是可选能力接口：非删除式读取（LocalCache 实现：Peek）。
 //
 // 与 Get 的唯一差别是**读到过期条目时不删除它**：Get 走惰性删除路径
@@ -238,7 +263,8 @@ type NXSetter[T any] interface {
 // 口径（LocalCache 实现；各计数单调不减，只增不减）：
 //
 //   - Hits：读命中次数——读到**未过期的真值条目**。计入的读路径：
-//     Get / GetEx / Peek / MGet（逐键）/ GetOrLoad（含按调用注入回源的变体）。
+//     Get / GetEx / Peek / MGet 与 MGetEx（逐键）/ GetOrLoad（含按调用注入
+//     回源的变体）。
 //   - Misses：读未命中次数——key 不存在、已过期，或命中 null marker。
 //     null marker 表示「数据不存在」、无值可返 ⇒ 计入未命中（与 GetEx/Peek
 //     的 hit=false 口径一致）。**stale-if-error 兜底（回源失败回退已过期

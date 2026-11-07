@@ -152,3 +152,82 @@ func TestDialFunc_BlocksExoticIPv4(t *testing.T) {
 		t.Fatalf("拒绝原因应是 exotic IPv4 字面量，got %v", err)
 	}
 }
+
+// TestAllowPrivateStillBlocksExoticIPv4 allowPrivate 不豁免 exotic 字面量
+// 闸门（pkg#236）：此前闸门排在 allowPrivate 短路之后，allowPrivate 消费方
+// 可经十进制整型字面量（2852039166 = 169.254.169.254）访问云 metadata——
+// 写面放行 → cgo 解析器按 inet_aton 语义解出链路本地地址 → CheckIP 在
+// allowPrivate 下豁免全部内置网段。豁免语义只覆盖网段（CIDR）判定，
+// 字面量形态闸门无条件执行。
+func TestAllowPrivateStillBlocksExoticIPv4(t *testing.T) {
+	g := mustGuard(t, WithAllowPrivate())
+	// 覆盖 issue 实证链的三种同型变体（均解析到 169.254.169.254 / 127.0.0.1）
+	blocked := []string{
+		"2852039166",          // 十进制 32 位 → 169.254.169.254（云 metadata）
+		"0251.0376.0251.0376", // 八进制逐段 → 169.254.169.254
+		"0xa9fea9fe",          // 十六进制 32 位 → 169.254.169.254
+		"0xA9FEA9FE",          // 大写 0X 前缀同型
+		"2130706433",          // 十进制 32 位 → 127.0.0.1
+		"0177.0.0.1",          // 八进制逐段 → 127.0.0.1
+		"0x7f000001",          // 十六进制 32 位 → 127.0.0.1
+		"127.1",               // 两段式 → 127.0.0.1
+	}
+	for _, host := range blocked {
+		err := g.CheckHost(host)
+		if err == nil {
+			t.Errorf("allowPrivate 下 host %q 仍应被 exotic 闸门阻断，实际放行", host)
+			continue
+		}
+		if !strings.Contains(err.Error(), "exotic IPv4") {
+			t.Errorf("host %q 阻断原因应是 exotic IPv4 字面量，got %v", host, err)
+		}
+	}
+	// CheckURL 与 CheckHost 同源：http://2852039166/ 完整走不通
+	if err := g.CheckURL("http://2852039166/latest/meta-data/"); err == nil {
+		t.Error("allowPrivate 下 http://2852039166/ 应被阻断（云 metadata 十进制整型写法）")
+	}
+	// 拨号层同口径：不把 exotic 字面量推给 DNS 解析
+	dial := g.DialFunc(nil)
+	if _, err := dial(context.Background(), "tcp", "2852039166:80"); err == nil {
+		t.Error("allowPrivate 下拨号层应拒绝 exotic IPv4 字面量")
+	}
+}
+
+// TestAllowPrivateStillAllowsPrivateIPs allowPrivate 的网段豁免不回归：
+// 标准点分十进制写法的私网/loopback/链路本地地址照常放行（打本机 mock
+// server 的正当用法——写法换成标准形态即可）。
+func TestAllowPrivateStillAllowsPrivateIPs(t *testing.T) {
+	g := mustGuard(t, WithAllowPrivate())
+	allowed := []string{
+		"http://127.0.0.1:18080/hook",     // loopback 标准写法
+		"http://10.0.0.1/hook",            // RFC1918
+		"http://192.168.1.1/hook",         // RFC1918
+		"http://[::1]:18080/hook",         // IPv6 loopback 标准写法
+		"http://169.254.169.254/hook",     // 链路本地（网段判定被豁免是 allowPrivate 语义）
+		"http://localhost:18080/hook",     // 约定域名（网段/域名阻断被豁免）
+		"http://mock.internal:18080/hook", // 内网约定域
+	}
+	for _, raw := range allowed {
+		if err := g.CheckURL(raw); err != nil {
+			t.Errorf("%s 在 allowPrivate 下应放行，实际阻断：%v", raw, err)
+		}
+	}
+}
+
+// TestDefaultGuardStillBlocksPrivateIPs 默认 Guard 行为不回归：未开
+// allowPrivate 时私网/loopback/链路本地照常阻断（pkg#236 只收紧 allowPrivate
+// 分支，不动默认口径）。
+func TestDefaultGuardStillBlocksPrivateIPs(t *testing.T) {
+	g := mustGuard(t)
+	blocked := []string{
+		"http://127.0.0.1/hook",
+		"http://10.0.0.1/hook",
+		"http://169.254.169.254/hook",
+		"http://localhost/hook",
+	}
+	for _, raw := range blocked {
+		if err := g.CheckURL(raw); err == nil {
+			t.Errorf("默认 Guard 应阻断 %s", raw)
+		}
+	}
+}
