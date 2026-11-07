@@ -1,3 +1,15 @@
+## [v0.37.3] — 2026-11-08
+
+- chore: 发版链修复重发——v0.37.2 tag 先于 CHANGELOG 落地，触发 tag 检出的「CHANGELOG/tag 一致性」门禁红（protect-release-tags 规则下 tag 不可移动，红 run 不可恢复）；本 tag 为同内容的干净发版，代码与 v0.37.2 完全一致（#244 的 merge commit）
+
+## [v0.37.2] — 2026-11-08
+
+- fix(urlguard): WithAllowPrivate 不再跳过 exotic IPv4 字面量闸门——豁免语义收敛为只豁免网段（CIDR）判定，十进制/八进制/hex 整型字面量（2852039166 = 169.254.169.254）无条件拒，allowPrivate 消费方经云 metadata 的绕过路径关闭；拨号层 resolve 同口径（#236）
+- fix(errors): MultiError.Append 的 copy-on-write 路径先 slices.Clone 再 append——backing array 有余量时不再写进共享数组，并发 Append 同一实例的潜在竞态关闭（#237）
+- feat(cache): LocalCache 新增 MGetEx——GetEx 的批量形态，BatchEntry{Value, Hit} 让批量读也能区分「nil 真值命中」与「缺席」（MGet 的 map 形态二者不可区分）；走「可选能力接口 + 类型断言」哲学（BatchHitGetter），MGet 既有签名不变（#238）
+
+关联问题单：pkg#236、pkg#237、pkg#238。
+
 ## [v0.37.1] — 2026-11-07
 
 - fix(mathx): Clamp 对 lo>hi fail-fast panic——静默产生区间外结果关闭，配置上下限写反即刻暴露（#228）
