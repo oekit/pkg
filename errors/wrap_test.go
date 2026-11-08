@@ -3,6 +3,7 @@ package errors
 import (
 	stderrors "errors"
 	"testing"
+	"time"
 )
 
 var errBase = stderrors.New("base error")
@@ -98,4 +99,36 @@ func TestFormatKV(t *testing.T) {
 			t.Errorf("formatKV(%v) = %q, want %q", tt.kv, got, tt.exp)
 		}
 	}
+}
+
+// 成环 Unwrap 链：Cause 按深度截断返回，不死循环（#298；对齐 Error() 层
+// TestBizError_FormatCycleDefense 的防御先例）。
+func TestCause_CycleDefense(t *testing.T) {
+	a, b := newCyclePair()
+	got := Cause(a)
+	if got == nil {
+		t.Fatal("Cause(成环链) 不得返回 nil")
+	}
+	// 带超时的死循环哨兵：修复回归时这里会先超时
+	done := make(chan struct{})
+	go func() { _ = Cause(a); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Cause 在成环链上死循环（#298 回归）")
+	}
+	_ = b
+}
+
+// cycleErr 是最小成环对：A.Unwrap()=B、B.Unwrap()=A。
+type cycleErr struct{ next *cycleErr }
+
+func (e *cycleErr) Error() string { return "cycle" }
+func (e *cycleErr) Unwrap() error { return e.next }
+
+func newCyclePair() (error, error) {
+	a := &cycleErr{}
+	b := &cycleErr{next: a}
+	a.next = b
+	return a, b
 }

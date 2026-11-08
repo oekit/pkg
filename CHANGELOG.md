@@ -6,6 +6,12 @@
 
 关联问题单：pkg#284、pkg#285、pkg#286、pigeonbox/core#71。
 
+## [v0.38.3] — 2026-11-08
+
+### fix(errors): Cause 成环 Unwrap 链死循环防御——深度上限对齐 Error() 先例（#298）
+
+maxFlattenDepth=32 上限，超限返回已到达的最深节点；环用例含 2s 死循环哨兵。
+
 ## [v0.38.2] — 2026-11-08
 
 ### feat(procx): 进程树终止原语——Setpgid 建组 + 组 TERM/SIGKILL（#284，新包）
