@@ -65,13 +65,17 @@ func TestMaskJSONFields_NullInput(t *testing.T) {
 		t.Fatalf("null 输入应原样返回, got %s", string(out))
 	}
 
-	// 带空白的 null 同口径（Unmarshal 语义下同样是 nil map）
-	if out, err = MaskJSONFields([]byte("  null  "), masks); err != nil {
-		t.Fatalf("带空白的 null 不应报错, got %v", err)
+	// 带空白的 null 同口径（Unmarshal 语义下同样是 nil map）；原样返回 ⇒
+	// 空白也原样保留
+	const wsNull = "  null  "
+	if wsOut, wsErr := MaskJSONFields([]byte(wsNull), masks); wsErr != nil {
+		t.Fatalf("带空白的 null 不应报错, got %v", wsErr)
+	} else if string(wsOut) != wsNull {
+		t.Fatalf("带空白的 null 应原样返回, got %s", string(wsOut))
 	}
 
 	// 对照组（issue 同批输入）：数组是解析失败，返回 json 原始错误
-	if _, err := MaskJSONFields([]byte("[1,2]"), masks); err == nil {
+	if _, arrErr := MaskJSONFields([]byte("[1,2]"), masks); arrErr == nil {
 		t.Fatal("数组输入应报错（顶层必须是对象）")
 	}
 
