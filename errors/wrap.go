@@ -152,11 +152,16 @@ func KvFromChain(err error) []any {
 // Cause 是 errors.Cause 的便捷版:返回 wrap 链最底层的 error。
 // 等价 errors.Unwrap 递归到 nil。
 func Cause(err error) error {
-	for {
+	// 深度上限对齐 biz_error.go 的 maxFlattenDepth 纪律：成环 Unwrap 链
+	// （A 包 B、B 又包 A——biz_error.go 注释承认的重构/聚合形态）会让
+	// 无界 for 永久迭代（goroutine 卡死 + CPU 自旋，#298）。超限返回当前
+	// 已到达的最深节点并停止。
+	for i := 0; i < maxFlattenDepth; i++ {
 		u := stderrors.Unwrap(err)
 		if u == nil {
 			return err
 		}
 		err = u
 	}
+	return err
 }
