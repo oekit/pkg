@@ -39,6 +39,12 @@ type Request struct {
 	Body []byte
 	// Header 鉴权/Content-Type 等请求头注入钩子（可 nil）。
 	Header func(h http.Header)
+
+	// etagStore/etagKey 由 WithETag 选项注入（条件请求面，#269），刻意
+	// 不做成公开字段：条件请求是**行为注入**而非请求描述的一部分，且
+	// 同一 Request 字面量可以配不同 key 复用。
+	etagStore ETagStore
+	etagKey   string
 }
 
 // DoJSON 执行请求并把 2xx 响应体解码进 out。非 2xx 返回带状态码与响应体摘要
@@ -52,45 +58,107 @@ type Request struct {
 // 非 2xx 的判定与 out 无关：照样返回 StatusError（错误体摘要照旧带上）。
 //
 // out 非 nil 时行为不变：解码失败仍返回「响应解析失败」错误。
-func DoJSON(ctx context.Context, client *http.Client, req Request, out any) error {
+//
+// opts 是单次请求的可选行为注入（RequestOption；变参零选项时调用面与旧
+// 签名逐字节一致）。目前支持 WithETag（条件请求：If-None-Match/304 重放
+// 为 200 形响应，#269）——304 在函数内部消化，调用方拿到的 out/err 与
+// 200 路径完全同形，无需感知条件请求的存在。
+func DoJSON(ctx context.Context, client *http.Client, req Request, out any, opts ...RequestOption) error {
+	applyOptions(&req, opts)
 	method := req.Method
 	if method == "" {
 		method = http.MethodGet
 	}
+	// 条件请求只对 GET/HEAD 注入（写方法的 304 语义不同，见 etag.go 包文档
+	// 第 3 条）；其余方法带选项执行时按无条件请求处理。
+	conditional := req.etagStore != nil && req.etagKey != "" &&
+		(method == http.MethodGet || method == http.MethodHead)
+
+	var ifNoneMatch string
+	if conditional {
+		if etag, _, ok := req.etagStore.Get(req.etagKey); ok && etag != "" {
+			ifNoneMatch = etag
+		}
+	}
+
+	for attempt := 0; ; attempt++ {
+		code, raw, etag, err := doSend(ctx, client, req, method, ifNoneMatch)
+		if err != nil {
+			return err
+		}
+		if code == http.StatusNotModified && ifNoneMatch != "" {
+			// 304×驱逐竞态纪律（v0.100.2 教训，#31）：**回查存储**而非复用
+			// 发请求前的旧值——条目已被并发驱逐（LRU/清理）时降级为无条件
+			// 重发，绝不硬失败；条目还在则重放缓存体为 200 形响应。
+			if _, cached, ok := req.etagStore.Get(req.etagKey); ok && cached != "" {
+				return decodeOK([]byte(cached), out)
+			}
+			if attempt == 0 {
+				ifNoneMatch = "" // 降级：重发不带条件头（至多一轮，不再循环）
+				continue
+			}
+			// 防御分支：无条件请求仍被回 304（服务端/代理行为异常）——
+			// 按 StatusError 如实上抛，不再重试。
+			return &StatusError{Code: code, Body: string(raw)}
+		}
+		// 2xx 且带 ETag 头：回写存储（ETag 缺席则不写——下次请求无从注入）。
+		if conditional && etag != "" && code >= 200 && code < 300 {
+			req.etagStore.Put(req.etagKey, etag, string(raw))
+		}
+		if code < 200 || code >= 300 {
+			return &StatusError{Code: code, Body: string(raw)}
+		}
+		return decodeOK(raw, out)
+	}
+}
+
+// applyOptions 依次套用选项（nil 选项跳过——不因某个选项为 nil 中断整批）。
+func applyOptions(req *Request, opts []RequestOption) {
+	for _, opt := range opts {
+		if opt != nil {
+			opt(req)
+		}
+	}
+}
+
+// doSend 构造并发送一次请求，返回 (状态码, 响应体, ETag 响应头, 错误)。
+// ifNoneMatch 非空时注入 If-None-Match。响应体已读完并排空（连接可复用）。
+func doSend(ctx context.Context, client *http.Client, req Request, method, ifNoneMatch string) (int, []byte, string, error) {
 	var body io.Reader
 	if req.Body != nil {
 		body = bytes.NewReader(req.Body)
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, body)
 	if err != nil {
-		return fmt.Errorf("构造请求失败: %w", err)
+		return 0, nil, "", fmt.Errorf("构造请求失败: %w", err)
 	}
 	if req.Header != nil {
 		req.Header(httpReq.Header)
 	}
+	if ifNoneMatch != "" {
+		httpReq.Header.Set("If-None-Match", ifNoneMatch)
+	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("请求失败: %w", err)
+		return 0, nil, "", fmt.Errorf("请求失败: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	// 排空剩余响应体，连接才能被复用（见 drainBody）。
 	drainBody(resp.Body)
 	if err != nil {
-		return fmt.Errorf("读取响应失败: %w", err)
+		return resp.StatusCode, nil, "", fmt.Errorf("读取响应失败: %w", err)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &StatusError{Code: resp.StatusCode, Body: string(raw)}
-	}
-	// out 为 nil = 调用方不要响应体（fire-and-forget）⇒ 跳过解码，
-	// 否则 json.Unmarshal(raw, nil) 恒报 Unmarshal(nil)，把 2xx 误报成失败（#158）。
+	return resp.StatusCode, raw, resp.Header.Get("ETag"), nil
+}
+
+// decodeOK 2xx 响应体解码进 out：out==nil 跳过（fire-and-forget，#158）、
+// 空 body 跳过（204 语义上没有 body，#189）。304 重放路径与 200 路径共用
+// 同一条解码线——重放语义「与 200 完全同形」由此保证（#269）。
+func decodeOK(raw []byte, out any) error {
 	if out == nil {
 		return nil
 	}
-	// 2xx 空 body 跳过解码（[#189]，#158 的对偶面）：DELETE/POST 端点返回
-	// 204（或 200 无 body）且调用方习惯性传 &resp 时，json.Unmarshal([]byte{}, out)
-	// 必然报「unexpected end of JSON input」——把成功误报为失败，重试即重复
-	// 施加副作用。204 语义上就没有 body：跳过解码，*out 保持零值。
 	if len(raw) == 0 {
 		return nil
 	}
@@ -220,7 +288,11 @@ type RetryConfig struct {
 //
 // out 的语义与 DoJSON 完全一致：out==nil 时跳过响应体解码，2xx 即成功返回
 // （fire-and-forget）；非 2xx 仍按可重试判定退避并最终返回 StatusError（#158）。
-func DoJSONWithRetry(ctx context.Context, client *http.Client, reqFn func() (Request, error), cfg RetryConfig, out any) error {
+//
+// opts 逐轮透传给 DoJSON（每次尝试都套用）——轮询消费方把 WithETag 与
+// 重试组合：条件命中的 304 重放对重试层透明，限流预算敏感的场景两件套
+// 各管各的（#269）。
+func DoJSONWithRetry(ctx context.Context, client *http.Client, reqFn func() (Request, error), cfg RetryConfig, out any, opts ...RequestOption) error {
 	attempts := cfg.MaxAttempts
 	if attempts < 1 {
 		attempts = 1
@@ -242,7 +314,7 @@ func DoJSONWithRetry(ctx context.Context, client *http.Client, reqFn func() (Req
 		if err != nil {
 			return err
 		}
-		err = DoJSON(ctx, client, req, out)
+		err = DoJSON(ctx, client, req, out, opts...)
 		if err == nil {
 			return nil
 		}

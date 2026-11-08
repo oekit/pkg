@@ -83,6 +83,27 @@ func (sm *SafeMap[K, V]) Range(fn func(k K, v V) bool) {
 	}
 }
 
+// Snapshot 返回全部键值的整体拷贝（plain map，调用方持有独立副本，可安全
+// 修改/交给非并发安全代码）。副本与容器此后互不影响（#272）。
+//
+// 与 Slice.Snapshot 同纪律：**锁内整体拷贝、锁外交付**——拷贝在读锁内完成，
+// 返回后调用方怎么改都不再经过容器的锁。API 对偶闭合后，「容器内容出口」
+// 两个形态（有序 → []T，键值 → map[K]V）都有单调用原语；调用方不再手写
+// 「Range 构建副本」的样板循环——那段样板写错成边遍历边写活体会绕开容器
+// 纪律（Range 返回的是快照，正确但没有任何契约提示），Snapshot 把正确姿势
+// 收成编译期可调用的单点。
+//
+// 返回值永不为 nil（容器为空时返回空 map），可直接交给序列化/调试转储。
+func (sm *SafeMap[K, V]) Snapshot() map[K]V {
+	sm.mu.RLock()
+	out := make(map[K]V, len(sm.m))
+	for k, v := range sm.m {
+		out[k] = v
+	}
+	sm.mu.RUnlock()
+	return out
+}
+
 // Clear 清空全部键值。
 func (sm *SafeMap[K, V]) Clear() {
 	sm.mu.Lock()
