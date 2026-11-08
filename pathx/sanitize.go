@@ -20,6 +20,9 @@ import "strings"
 //   - 越出根目录（"../x"、"/../x"、"a/../../x"）→ ok=false；
 //   - 清洗后为空（"."、"a/.." —— 指向仓库根目录本身，非具体条目）→ ok=false；
 //   - 空串 / 纯空白 → ok=false。
+//   - 盘符判定按**输出**首段（#253）："./C:/x"、"a/./C:/x" 这类带冗余段
+//     的输入，盘符段在输入下标非 0，此前按输入下标判定会被绕过——放行后
+//     落盘或再次拼接就得到绝对盘符路径，越出目标目录。
 //
 // ".." 段的处理：宽松档下 ".." 抵消前一段（"a/../b" → "b"），但抵消后
 // 仍要留在根目录内（"a/../../b" 越界 → ok=false）。
@@ -58,7 +61,7 @@ func sanitizeRel(p string, strict bool) (string, bool) {
 	}
 	segs := strings.Split(norm, "/")
 	out := make([]string, 0, len(segs))
-	for i, seg := range segs {
+	for _, seg := range segs {
 		switch seg {
 		case "":
 			continue // 重复分隔符（"a//b"）
@@ -74,8 +77,13 @@ func sanitizeRel(p string, strict bool) (string, bool) {
 			out = out[:len(out)-1] // 抵消前一段
 			continue
 		}
-		if i == 0 && isWindowsDrive(seg) {
-			return "", false // Windows 盘符绝对路径（"C:\foo"、"C:foo"）
+		// Windows 盘符闸门按**输出**首段判（#253）：盘符要成为输出首段
+		// 就构成盘符绝对路径，无论它在输入里排在第几个下标——此前按
+		// 输入下标 i==0 判，"./C:/x" 的盘符段下标非 0 被绕过。判定放在
+		// append 处（len(out)==0 即将落为输出首段），".." 抵消后盘符段
+		// 重新成为首段的形态（"C:/../x"）同样被拒。
+		if len(out) == 0 && isWindowsDrive(seg) {
+			return "", false // Windows 盘符绝对路径（"C:\foo"、"C:foo"、"./C:/x"）
 		}
 		out = append(out, seg)
 	}
