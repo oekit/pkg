@@ -218,3 +218,51 @@ func TestParseLenient(t *testing.T) {
 		t.Fatal("非 JSON 应报错")
 	}
 }
+
+// TestParseLenient_SchemaExactBeforeNormalize 钉住 #301：schema 非 nil 时
+// tryParse 曾无条件先 Normalize——完全合法的输入经 map[string]any 往返把
+// 数字全变 float64，>2^53 的整数（雪花 ID/订单号常态量级）在 int64 结构体
+// 目标上被静默改值（末位被吞）。现裸解析优先：合法输入零开销精确返回，
+// 归一只服务修复链（裸解析失败才走 schema）。
+func TestParseLenient_SchemaExactBeforeNormalize(t *testing.T) {
+	schema := &Schema{StringKeys: map[string]bool{"memo": true}}
+
+	// 完全合法 JSON + int64 结构体目标：精确值，不被 float64 往返改写。
+	var out struct {
+		ID   int64  `json:"id"`
+		Memo string `json:"memo"`
+	}
+	if err := ParseLenient(`{"id": 9007199254740993, "memo": "ok"}`, &out, schema); err != nil {
+		t.Fatalf("ParseLenient: %v", err)
+	}
+	if out.ID != 9007199254740993 {
+		t.Fatalf("ID = %d, want 9007199254740993（精确值被 Normalize 往返改写）", out.ID)
+	}
+	if out.Memo != "ok" {
+		t.Fatalf("Memo = %q, want %q", out.Memo, "ok")
+	}
+
+	// 畸形输入（尾逗号）：修复链仍工作——Repair 修好语法后裸解析即精确成功。
+	out = struct {
+		ID   int64  `json:"id"`
+		Memo string `json:"memo"`
+	}{}
+	if err := ParseLenient(`{"id": 9007199254740993, "memo": "ok",}`, &out, schema); err != nil {
+		t.Fatalf("ParseLenient(repair): %v", err)
+	}
+	if out.ID != 9007199254740993 {
+		t.Fatalf("repair 链 ID = %d, want 9007199254740993", out.ID)
+	}
+
+	// 类型不合（数字位的字符串键）：裸解析失败 → schema 归一兜底仍生效。
+	var coerced struct {
+		Count string `json:"count"`
+	}
+	if err := ParseLenient(`{"count": 42}`, &coerced,
+		&Schema{StringKeys: map[string]bool{"count": true}}); err != nil {
+		t.Fatalf("ParseLenient(coerce): %v", err)
+	}
+	if coerced.Count != "42" {
+		t.Fatalf("Count = %q, want \"42\"（归一兜底不得失效）", coerced.Count)
+	}
+}

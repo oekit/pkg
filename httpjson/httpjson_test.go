@@ -454,3 +454,98 @@ func TestDo_EmptyBody2xx_ZeroOut(t *testing.T) {
 		t.Fatalf("204 + out!=nil 应成功跳过解码, got %v", err)
 	}
 }
+
+// retryAfterClient 组装装了 sink + RetryAfterTransport 的调用面（429 建议捕获
+// 与重试环消费以此相遇）。
+func retryAfterClient(t *testing.T, srv *httptest.Server) (context.Context, *http.Client) {
+	t.Helper()
+	ctx := WithRetryAfterSink(context.Background())
+	client := srv.Client()
+	client.Transport = RetryAfterTransport{Base: client.Transport}
+	return ctx, client
+}
+
+// TestDoJSONWithRetry_StaleHintNotAppliedToNon429 钉住 #302：sink 不随尝试清除，
+// 重试环曾对任何 >0 的 RetryAfterFrom(ctx) 建议照单全收——一次 429 之后同 key
+// 的任何可重试错误（5xx/网络超时）都被「限流化」，本地指数曲线被陈旧建议顶到
+// 秒级。修复后仅当**本次失败**确为限流（StatusError.Code==429）才采信，
+// 与 RetryAfterFrom 文档自述纪律（「陈旧建议不得套用到非限流错误上」）一致。
+func TestDoJSONWithRetry_StaleHintNotAppliedToNon429(t *testing.T) {
+	var calls atomic.Int32
+	var hits [4]time.Time // 服务端记录每次到达时刻（含首答 429 的建议回写）
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := int(calls.Add(1))
+		if n <= len(hits) {
+			hits[n-1] = time.Now()
+		}
+		switch n {
+		case 1: // 429 + Retry-After: 1（sink 写入 1s）
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+		case 2: // 瞬时性 502（服务已恢复）——陈旧建议不得套到这次重试上
+			w.WriteHeader(http.StatusBadGateway)
+		default:
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}
+	}))
+	defer srv.Close()
+
+	ctx, client := retryAfterClient(t, srv)
+	var out struct {
+		Ok bool `json:"ok"`
+	}
+	cfg := RetryConfig{MaxAttempts: 3, BaseDelay: 10 * time.Millisecond, MaxDelay: 20 * time.Millisecond}
+	if err := DoJSONWithRetry(ctx, client,
+		func() (Request, error) { return Request{URL: srv.URL}, nil }, cfg, &out); err != nil {
+		t.Fatalf("重试后应成功: %v", err)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("应尝试 3 次, got %d", calls.Load())
+	}
+	// 第 1→2 跳（429 后）：建议属本次限流，照常采信——延迟 ≈ 1s。
+	if gap := hits[1].Sub(hits[0]); gap < 900*time.Millisecond {
+		t.Errorf("429 后的重试应采信 Retry-After:1（gap = %v, want >= 900ms）", gap)
+	}
+	// 第 2→3 跳（502 后）：陈旧建议不得采信——本地曲线 10-20ms；
+	// 若被限流化 gap ≈ 1s。
+	if gap := hits[2].Sub(hits[1]); gap >= 900*time.Millisecond {
+		t.Errorf("502 后的重试被陈旧建议限流化（gap = %v, want < 900ms）——#302 回归", gap)
+	}
+}
+
+// TestDoJSONWithRetry_HintStillAppliedOnConsecutive429 正向对照（#302 门控
+// 不得矫枉过正）：连续 429 时建议照常采信——门控只过滤「非限流错误」，不砍
+// 限流场景本身的服务端退避。
+func TestDoJSONWithRetry_HintStillAppliedOnConsecutive429(t *testing.T) {
+	var calls atomic.Int32
+	var hits [3]time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := int(calls.Add(1))
+		if n <= len(hits) {
+			hits[n-1] = time.Now()
+		}
+		if n <= 2 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	ctx, client := retryAfterClient(t, srv)
+	var out struct {
+		Ok bool `json:"ok"`
+	}
+	cfg := RetryConfig{MaxAttempts: 3, BaseDelay: 10 * time.Millisecond, MaxDelay: 20 * time.Millisecond}
+	if err := DoJSONWithRetry(ctx, client,
+		func() (Request, error) { return Request{URL: srv.URL}, nil }, cfg, &out); err != nil {
+		t.Fatalf("重试后应成功: %v", err)
+	}
+	if gap := hits[1].Sub(hits[0]); gap < 900*time.Millisecond {
+		t.Errorf("第 1 次 429 后应采信建议（gap = %v, want >= 900ms）", gap)
+	}
+	if gap := hits[2].Sub(hits[1]); gap < 900*time.Millisecond {
+		t.Errorf("第 2 次 429（本次失败确为限流）后仍应采信建议（gap = %v, want >= 900ms）", gap)
+	}
+}

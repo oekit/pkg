@@ -319,3 +319,51 @@ func TestUnion_OrderStable(t *testing.T) {
 		}
 	}
 }
+
+// TestFirstN_EmptyString_ZeroMatrix 钉住 #300：LastN doc 明文「n<=0 与 FirstN
+// 同口径——两者不再存在差异」，但 (空串, n==0) 格曾落进 n<0 专门分支与 range
+// 循环（循环体零次）的缝隙，返回裸空串——四格矩阵里唯一不带省略号的格子。
+func TestFirstN_EmptyString_ZeroMatrix(t *testing.T) {
+	if got := FirstN("", 0, "…"); got != "…" {
+		t.Errorf("FirstN(\"\",0,…) = %q, want \"…\"（与 LastN 同口径）", got)
+	}
+	if got := FirstN("", -1, "…"); got != "…" {
+		t.Errorf("FirstN(\"\",-1,…) = %q, want \"…\"", got)
+	}
+	if got := LastN("", 0, "…"); got != "…" {
+		t.Errorf("LastN(\"\",0,…) = %q, want \"…\"", got)
+	}
+	if got := LastN("", -1, "…"); got != "…" {
+		t.Errorf("LastN(\"\",-1,…) = %q, want \"…\"", got)
+	}
+	// 无省略号参数：n<=0 一律空串。
+	if got := FirstN("", 0); got != "" {
+		t.Errorf("FirstN(\"\",0) = %q, want \"\"", got)
+	}
+	// 非空串 + n==0 行为不变（此前经循环 i==n 截断点已是省略号形态）。
+	if got := FirstN("hello", 0, "…"); got != "…" {
+		t.Errorf("FirstN(hello,0,…) = %q, want \"…\"", got)
+	}
+}
+
+// TestJoinWith_SkipsEmptyElements 钉住 #299：JoinWith 跳过空元素（不占位），
+// 与 strings.Join 的占位语义相反——doc 已显式声明该差异，本用例把跳过语义
+// 钉成回归防线，防止未来「对齐名字直觉」时静默改口径。
+func TestJoinWith_SkipsEmptyElements(t *testing.T) {
+	if got := JoinWith([]string{"a", "", "b"}, ","); got != "a,b" {
+		t.Errorf("JoinWith([a,\"\",b],,) = %q, want \"a,b\"（空元素被跳过，与 strings.Join 不同——doc 口径）", got)
+	}
+	if got := JoinWith([]string{"", "", ""}, ","); got != "" {
+		t.Errorf("JoinWith(全空,) = %q, want \"\"", got)
+	}
+	if got := JoinWith([]string{"", "a"}, ","); got != "a" {
+		t.Errorf("JoinWith([\"\",a],,) = %q, want \"a\"（无前导分隔符）", got)
+	}
+	if got := JoinWith([]string{"a", ""}, ","); got != "a" {
+		t.Errorf("JoinWith([a,\"\"],,) = %q, want \"a\"（无尾随分隔符）", got)
+	}
+	// 对照：stdlib 占位语义由 JoinByComma（strings.Join）承担。
+	if got := JoinByComma([]string{"a", "", "b"}); got != "a,,b" {
+		t.Errorf("JoinByComma([a,\"\",b]) = %q, want \"a,,b\"（stdlib 占位语义）", got)
+	}
+}
