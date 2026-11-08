@@ -64,28 +64,31 @@ func TestRun_KillsTreeOnContextCancel(t *testing.T) {
 
 // 验收 2（孙进程负对照）：故意不用本包（无 Setpgid、无组杀）⇒ 同场景
 // 后台孙进程**残留**——证明验收 1 的判据真的在量「树」，不是量「直接子进程」。
+// PID 经临时文件回传（孙进程继承 stdout 管道 ⇒ 进程内 buffer 有数据竞争，
+// -race 必抓——这也正是孙进程继承管道的实证之一）。
 func TestNegative_PlainCommandContextLeaksGrandchild(t *testing.T) {
 	if _, err := os.Stat("/bin/sh"); err != nil {
 		t.Skip("no /bin/sh")
 	}
+	pidFile := t.TempDir() + "/bgpid"
 	ctx, cancel := context.WithCancel(context.Background())
-	var out bytes.Buffer
-	// 后台孙进程把自己 PID 回传到 stdout；sh 前台 exec sleep（命令尾优化）
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 300 & echo $!; exec sleep 300")
-	cmd.Stdout = &out
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
+		"sleep 300 & echo $! > "+pidFile+"; exec sleep 300")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	var bgPid string
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		if f := strings.Fields(strings.TrimSpace(out.String())); len(f) > 0 {
-			bgPid = f[0]
-			break
+		data, err := os.ReadFile(pidFile)
+		if err == nil {
+			if f := strings.Fields(strings.TrimSpace(string(data))); len(f) > 0 {
+				bgPid = f[0]
+				break
+			}
 		}
 		if time.Now().After(deadline) {
 			cancel()
-			_ = cmd.Wait()
 			t.Skip("未捕捉到孙进程 PID，跳过负对照")
 		}
 		time.Sleep(50 * time.Millisecond)
