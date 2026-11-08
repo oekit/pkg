@@ -21,6 +21,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/oekit/pkg/stringx"
@@ -40,11 +41,12 @@ type Request struct {
 	// Header 鉴权/Content-Type 等请求头注入钩子（可 nil）。
 	Header func(h http.Header)
 
-	// etagStore/etagKey 由 WithETag 选项注入（条件请求面，#269），刻意
-	// 不做成公开字段：条件请求是**行为注入**而非请求描述的一部分，且
-	// 同一 Request 字面量可以配不同 key 复用。
+	// etagStore/etagKey/etagVary 由 WithETag/WithETagVary 选项注入（条件
+	// 请求面，#269/#290），刻意不做成公开字段：条件请求是**行为注入**而非
+	// 请求描述的一部分，且同一 Request 字面量可以配不同 key 复用。
 	etagStore ETagStore
 	etagKey   string
+	etagVary  []string
 }
 
 // DoJSON 执行请求并把 2xx 响应体解码进 out。非 2xx 返回带状态码与响应体摘要
@@ -60,9 +62,10 @@ type Request struct {
 // out 非 nil 时行为不变：解码失败仍返回「响应解析失败」错误。
 //
 // opts 是单次请求的可选行为注入（RequestOption；变参零选项时调用面与旧
-// 签名逐字节一致）。目前支持 WithETag（条件请求：If-None-Match/304 重放
-// 为 200 形响应，#269）——304 在函数内部消化，调用方拿到的 out/err 与
-// 200 路径完全同形，无需感知条件请求的存在。
+// 签名逐字节一致）。目前支持 WithETag / WithETagVary（条件请求：If-None-
+// Match/304 重放为 200 形响应，#269；vary 头分区键与 no-store 门禁见
+// #290/#288）——304 在函数内部消化，调用方拿到的 out/err 与 200 路径完全
+// 同形，无需感知条件请求的存在。
 func DoJSON(ctx context.Context, client *http.Client, req Request, out any, opts ...RequestOption) error {
 	applyOptions(&req, opts)
 	method := req.Method
@@ -74,6 +77,21 @@ func DoJSON(ctx context.Context, client *http.Client, req Request, out any, opts
 	conditional := req.etagStore != nil && req.etagKey != "" &&
 		(method == http.MethodGet || method == http.MethodHead)
 
+	// vary 头派生键（#290）：在**本次请求实际生效的请求头**上取 vary 头值
+	// 并入键——凭据轮换/版本协商按头值自然分区。Header 钩子为此多调一次
+	// （独立临时 http.Header，应无副作用）。
+	if conditional && len(req.etagVary) > 0 {
+		h := make(http.Header)
+		if req.Header != nil {
+			req.Header(h)
+		}
+		vals := make([]string, len(req.etagVary))
+		for i, name := range req.etagVary {
+			vals[i] = h.Get(name)
+		}
+		req.etagKey = CanonicalETagKey(method, req.etagKey, vals...)
+	}
+
 	var ifNoneMatch string
 	if conditional {
 		if etag, _, ok := req.etagStore.Get(req.etagKey); ok && etag != "" {
@@ -82,7 +100,7 @@ func DoJSON(ctx context.Context, client *http.Client, req Request, out any, opts
 	}
 
 	for attempt := 0; ; attempt++ {
-		code, raw, etag, err := doSend(ctx, client, req, method, ifNoneMatch)
+		code, raw, etag, noStore, err := doSend(ctx, client, req, method, ifNoneMatch)
 		if err != nil {
 			return err
 		}
@@ -102,7 +120,10 @@ func DoJSON(ctx context.Context, client *http.Client, req Request, out any, opts
 			return &StatusError{Code: code, Body: string(raw)}
 		}
 		// 2xx 且带 ETag 头：回写存储（ETag 缺席则不写——下次请求无从注入）。
-		if conditional && etag != "" && code >= 200 && code < 300 {
+		// Cache-Control: no-store 不写（#288，RFC 9111 §5.2.2.5：任何 cache
+		// MUST NOT store）——服务端要求每次新鲜取/禁止持有的端点，缓存条目
+		// 的存活期不得超过服务端意图。
+		if conditional && etag != "" && !noStore && code >= 200 && code < 300 {
 			req.etagStore.Put(req.etagKey, etag, string(raw))
 		}
 		if code < 200 || code >= 300 {
@@ -121,16 +142,17 @@ func applyOptions(req *Request, opts []RequestOption) {
 	}
 }
 
-// doSend 构造并发送一次请求，返回 (状态码, 响应体, ETag 响应头, 错误)。
-// ifNoneMatch 非空时注入 If-None-Match。响应体已读完并排空（连接可复用）。
-func doSend(ctx context.Context, client *http.Client, req Request, method, ifNoneMatch string) (int, []byte, string, error) {
+// doSend 构造并发送一次请求，返回 (状态码, 响应体, ETag 响应头, 响应是否
+// 带 Cache-Control: no-store, 错误)。ifNoneMatch 非空时注入 If-None-Match。
+// 响应体已读完并排空（连接可复用）。
+func doSend(ctx context.Context, client *http.Client, req Request, method, ifNoneMatch string) (int, []byte, string, bool, error) {
 	var body io.Reader
 	if req.Body != nil {
 		body = bytes.NewReader(req.Body)
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, body)
 	if err != nil {
-		return 0, nil, "", fmt.Errorf("构造请求失败: %w", err)
+		return 0, nil, "", false, fmt.Errorf("构造请求失败: %w", err)
 	}
 	if req.Header != nil {
 		req.Header(httpReq.Header)
@@ -140,16 +162,29 @@ func doSend(ctx context.Context, client *http.Client, req Request, method, ifNon
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return 0, nil, "", fmt.Errorf("请求失败: %w", err)
+		return 0, nil, "", false, fmt.Errorf("请求失败: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	noStore := cacheControlNoStore(resp.Header.Get("Cache-Control"))
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	// 排空剩余响应体，连接才能被复用（见 drainBody）。
 	drainBody(resp.Body)
 	if err != nil {
-		return resp.StatusCode, nil, "", fmt.Errorf("读取响应失败: %w", err)
+		return resp.StatusCode, nil, "", noStore, fmt.Errorf("读取响应失败: %w", err)
 	}
-	return resp.StatusCode, raw, resp.Header.Get("ETag"), nil
+	return resp.StatusCode, raw, resp.Header.Get("ETag"), noStore, nil
+}
+
+// cacheControlNoStore 判定 Cache-Control 头是否含 no-store 指令（#288）。
+// 头是多指令逗号分隔列表（"no-store, max-age=0"），按指令逐段比对，
+// 大小写不敏感（RFC 9111 §5.2 指令名不区分大小写）。
+func cacheControlNoStore(cc string) bool {
+	for _, dir := range strings.Split(cc, ",") {
+		if strings.EqualFold(strings.TrimSpace(dir), "no-store") {
+			return true
+		}
+	}
+	return false
 }
 
 // decodeOK 2xx 响应体解码进 out：out==nil 跳过（fire-and-forget，#158）、
