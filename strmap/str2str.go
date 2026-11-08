@@ -35,6 +35,14 @@ func NewStr2StrFromSlice(kk, vv []string) *Str2Str {
 }
 
 // LoadFromSlice 重置并从等长键值切片加载。
+//
+// 失败原子性（#249）：先在**临时** strStore 上打包新值（strStore.Load
+// 会整体换缓冲，失败无副作用——缓冲是新建的），strMap 建索引成功后才
+// 提交两个组件。此前是先换 strStore 缓冲、再校验 strMap 的两段式编排，
+// 第二段失败（重复键）不回滚 ⇒ strMap 仍持旧 offset，Get 用旧 offset
+// 读**新**缓冲，旧 key 静默取到别的 value（合法但错误的数据，无任何
+// 错误信号）。StrMap.LoadFromSlice 自身对重复键是先检测后变更（失败
+// 不动自身状态），故失败时 strMap 与 strStore 都保持旧表原样。
 func (sm *Str2Str) LoadFromSlice(kk, vv []string) error {
 	if len(kk) != len(vv) {
 		return ErrKvLenMismatch
@@ -45,11 +53,16 @@ func (sm *Str2Str) LoadFromSlice(kk, vv []string) error {
 	if sm.strMap == nil {
 		sm.strMap = New[int]()
 	}
-	ids, err := sm.strStore.Load(vv)
+	store := &strStore{}
+	ids, err := store.Load(vv)
 	if err != nil {
 		return err
 	}
-	return sm.strMap.LoadFromSlice(kk, ids)
+	if err := sm.strMap.LoadFromSlice(kk, ids); err != nil {
+		return err
+	}
+	sm.strStore = store
+	return nil
 }
 
 // LoadFromMap 重置并从 map 加载。
