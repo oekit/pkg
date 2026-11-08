@@ -83,12 +83,16 @@ func DeleteFunc(s string, del func(r rune) bool) string {
 }
 
 // FirstN 返回 s 的前 n 个字符，可选添加省略号。
+//
+// 边界口径：n <= 0 一律按「保留 0 个」处理（返回空串+省略号），与 LastN
+// 同口径——#183 修复了 n<0 静默返回整串，#300 补上 n==0 的缝隙：此前空串
+// + n==0 落进 range 循环（循环体零次）返回裸空串，是 (空串,0) 格上唯一
+// 不带省略号的结论。
 func FirstN(s string, n int, ellipsis ...string) string {
-	// n<0 对齐 LastN/TruncRunes 的「非法上限=全截断」口径（#183）：此前
-	// 循环永不命中截断点 ⇒ 静默返回整串——截断护栏整段失效，且与 Trunc
-	// 家族其它函数行为相反（自家 LastN 的 doc 已自认「那是实现怪癖不是
-	// 语义」）。修复而非行为变更。
-	if n < 0 {
+	// n<=0 与 LastN 逐字同构（#183 + #300）：n<0 对齐「非法上限=全截断」，
+	// n==0 收进同一分支——空串时 range 循环体一次不进，n==0 原样漏到底部
+	// 返回 s（裸空串、无省略号），违反 LastN doc 明文的「两者同口径」。
+	if n <= 0 {
 		ret := ""
 		for _, each := range ellipsis {
 			ret += each
@@ -115,8 +119,9 @@ func FirstN(s string, n int, ellipsis ...string) string {
 // 省略号拼头。未发生截断时原样返回（不拼省略号）。
 //
 // 边界口径：n <= 0 一律按「保留 0 个」处理（返回空串+省略号），与 FirstN
-// 同口径——#183 之后 FirstN 的 n<0 亦全截断（返回空串+省略号），两者不再
-// 存在差异；此前注释声称的「有意不同」描述的是 FirstN 修复前的行为。
+// 同口径——#183/#300 之后 FirstN 亦 n<=0 全截断（返回空串+省略号，含空串
+// +n==0 格），两者不再存在差异；此前注释声称的「有意不同」描述的是 FirstN
+// 修复前的行为。
 func LastN(s string, n int, ellipsis ...string) string {
 	if n <= 0 {
 		ret := ""
