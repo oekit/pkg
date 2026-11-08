@@ -11,9 +11,13 @@ const (
 	headerForgejoSignature = "X-Forgejo-Signature" // Forgejo 新版
 	headerGiteaSignature   = "X-Gitea-Signature"   // Gitea / Forgejo 老版本
 	headerGitCodeSignature = "X-GitCode-Signature" // GitCode
-	headerGiteeToken       = "X-Gitee-Token"       // Gitee 签名/密码双模共用
-	headerGiteeTimestamp   = "X-Gitee-Timestamp"   // Gitee 签名模式附带
-	headerGitCodeStaticTok = "X-GitCode-Token"     // GitCode 静态令牌模式
+	// headerGiteeSign Gitee 的验签载体 header——签名模式装 HMAC-base64、
+	// 密码模式装密码明文（双模共用一个 header，靠 X-Gitee-Timestamp 在场
+	// 与否消歧）。命名避开 "token" 字样（gosec G101 对含 token 的常量名
+	// 报硬编码凭证误报，这里只是 header 名）。
+	headerGiteeSign      = "X-Gitee-Token"
+	headerGiteeTimestamp = "X-Gitee-Timestamp" // Gitee 签名模式附带
+	headerGitCodeStatic  = "X-GitCode-Token"   // GitCode 静态令牌模式
 )
 
 // NewGitHubValidator GitHub 形态：X-Hub-Signature-256，值 sha256=<hex>
@@ -46,7 +50,7 @@ func NewGitCodeValidator(secret []byte, staticToken []byte) Validator {
 	if len(staticToken) == 0 {
 		return sig
 	}
-	return Fallback(sig, NewStaticTokenValidator(headerGitCodeStaticTok, staticToken))
+	return Fallback(sig, NewStaticTokenValidator(headerGitCodeStatic, staticToken))
 }
 
 // NewGiteeValidator Gitee 形态：签名模式（X-Gitee-Timestamp + X-Gitee-Token，
@@ -59,9 +63,9 @@ func NewGitCodeValidator(secret []byte, staticToken []byte) Validator {
 // 密码」，不绑定报文完整性，能不用就不用）。
 func NewGiteeValidator(secret []byte, password []byte, opts ...TimestampOption) Validator {
 	sign := NewTimestampHMACValidator(secret, crypto.SHA256,
-		headerGiteeTimestamp, headerGiteeToken, opts...)
+		headerGiteeTimestamp, headerGiteeSign, opts...)
 	if len(password) == 0 {
 		return sign
 	}
-	return Fallback(sign, NewStaticTokenValidator(headerGiteeToken, password))
+	return Fallback(sign, NewStaticTokenValidator(headerGiteeSign, password))
 }

@@ -21,9 +21,8 @@ type etagServer struct {
 	etag string // 当前资源 ETag（空 = 服务端不支持 ETag）
 	body string
 
-	mu      sync.Mutex
-	reqs    []string // 每轮请求的 If-None-Match 值（"" = 未注入）
-	aborted int      // 收到 304 后客户端是否复用连接的粗略观测（未用，留位）
+	mu   sync.Mutex
+	reqs []string // 每轮请求的 If-None-Match 值（"" = 未注入）
 }
 
 func newETagServer(t *testing.T, etag, body string) *etagServer {
