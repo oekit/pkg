@@ -5,6 +5,14 @@
 
 关联问题单：pkg#285、pkg#286。
 
+## [v0.38.2] — 2026-11-08
+
+### feat(procx): 进程树终止原语——Setpgid 建组 + 组 TERM/SIGKILL（#284，新包）
+
+Run/Command 双形态 + WithGrace；unix 进程组树终止 + WaitDelay 管道收口；windows
+taskkill /T /F（零依赖红线，优雅档不存在已如实声明）；验收 4 判据全带（树正对照/
+无组杀负对照/优雅档/超时档/平台矩阵）。
+
 ## [v0.38.1] — 2026-11-08
 
 ### fix(pagination): WalkEach/Walk 伪翻页（无进展）检测——同页重复按列表末尾收手，返回已收集数据（#285）
