@@ -397,8 +397,10 @@ func walkNormalize(m map[string]any, schema *Schema) {
 }
 
 // ParseLenient 栅栏剥离 → 直接解析 → Repair 重试 → ExtractObject+Repair 重试
-// → ExtractArray+Repair 重试。schema 为 nil 时跳过 Normalize（空 schema 下归一
-// 仍是 Unmarshal+递归+Marshal 三趟纯开销，对解析结果无贡献）。
+// → ExtractArray+Repair 重试。schema 非 nil 时归一只服务修复链：每步先裸解析，
+// 失败才 Normalize 重试（#301）——完全合法的输入必须走精确路径，先归一会经
+// map[string]any 往返把数字全变 float64，>2^53 的整数（雪花 ID/订单号常态
+// 量级）在结构体目标上被静默改值。
 //
 // 抽取兜底对象面/数组面对称（issue #37）：此前只有 ExtractObject 一件，多段数组
 // 与散文含 '{' 的数组文本整段作废。顺序固定为「对象面先、数组面后」——目标类型
@@ -411,13 +413,20 @@ func ParseLenient(raw string, v any, schema *Schema) error {
 		return fmt.Errorf("jsonrepair: 空输入")
 	}
 	tryParse := func(c string) bool {
+		// 裸解析优先（#301）：合法输入零开销精确返回——Normalize 的
+		// Unmarshal→map[string]any→Marshal 往返会把数字全变 float64，先归一
+		// 等于剥夺精确解析的机会。归一只服务修复链：裸解析失败（畸形或类型
+		// 不合，如数字位的 bool 要靠 StringKeys 强转文本）才走 schema 归一。
+		if json.Unmarshal([]byte(c), v) == nil {
+			return true
+		}
 		if schema != nil {
 			normalized, nerr := Normalize(json.RawMessage(c), schema)
-			if nerr == nil {
-				c = normalized
+			if nerr == nil && json.Unmarshal([]byte(normalized), v) == nil {
+				return true
 			}
 		}
-		return json.Unmarshal([]byte(c), v) == nil
+		return false
 	}
 	if tryParse(candidate) {
 		return nil
