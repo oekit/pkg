@@ -11,6 +11,9 @@ import (
 
 type role string
 
+// greeter 是接口类型 Key 的载体（#245 主用例：抽象类型下传）。
+type greeter interface{ Hello() string }
+
 type sessionScope struct {
 	PermissionMode string
 	AppendMemory   bool
@@ -129,6 +132,72 @@ func TestMustFrom_MissingPanics(t *testing.T) {
 		}
 	}()
 	MustFrom(context.Background(), roleKey)
+}
+
+// TestFrom_NilValueRoundTrip 钉住 #245：接口类型 Key 显式存 nil 后 From
+// 必须读回 (零值, true)——「存了 nil」≠「没存」。
+//
+// 缺陷形态：With(ctx, k, nil) 存入的是无类型 nil（interface(nil)），
+// 旧实现的 From 用 ctx.Value(k).(T) 断言，对 nil interface 恒 ok=false
+// ⇒ 写读不对称，接口 T 正是本包主用例（SessionScope/角色/sink）。
+func TestFrom_NilValueRoundTrip(t *testing.T) {
+	k := NewKey[greeter]("probe/greeter")
+	ctx := With(context.Background(), k, nil)
+
+	v, ok := From(ctx, k)
+	if !ok {
+		t.Fatal("显式存入 nil 后 From 应返回 true（写读对称，#245）")
+	}
+	if v != nil {
+		t.Fatalf("存入 nil 应读回 nil, got %v", v)
+	}
+
+	// 非接口类型存零值同样可读回（nil 是 int 零值的一般情形）
+	ik := NewKey[int]("probe/count")
+	if v, ok := From(With(context.Background(), ik, 0), ik); !ok || v != 0 {
+		t.Fatalf("存零值应读回 (0, true), got (%v, %v)", v, ok)
+	}
+}
+
+// TestMustFrom_NilValueNoPanic 钉住 #245 语义面：显式存 nil 是合法值，
+// MustFrom 不 panic（缺值才 panic）。
+func TestMustFrom_NilValueNoPanic(t *testing.T) {
+	k := NewKey[greeter]("probe/greeter")
+	ctx := With(context.Background(), k, nil)
+	if v := MustFrom(ctx, k); v != nil {
+		t.Fatalf("存入 nil 的槽位 MustFrom 应返回 nil, got %v", v)
+	}
+}
+
+// TestIsSet 钉住存在性糖：只查写入与否，不解引用；nil 写入算已写入。
+func TestIsSet(t *testing.T) {
+	k := NewKey[greeter]("probe/greeter")
+	if IsSet(context.Background(), k) {
+		t.Fatal("未写入应 IsSet=false")
+	}
+	if !IsSet(With(context.Background(), k, nil), k) {
+		t.Fatal("显式写 nil 应 IsSet=true（#245）")
+	}
+	if !IsSet(With[greeter](context.Background(), k, stubGreeter{}), k) {
+		t.Fatal("写非 nil 值应 IsSet=true")
+	}
+}
+
+type stubGreeter struct{}
+
+func (stubGreeter) Hello() string { return "hi" }
+
+// TestFrom_BypassWithValueRejected 钉住直写检测：绕过 With 直写
+// context.WithValue 的值（载体不是本包 entry）按「不存在」处理。
+func TestFrom_BypassWithValueRejected(t *testing.T) {
+	k := NewKey[greeter]("probe/greeter")
+	ctx := context.WithValue(context.Background(), k, stubGreeter{})
+	if _, ok := From(ctx, k); ok {
+		t.Fatal("绕过 With 直写的值不应被 From 认作合法槽位值")
+	}
+	if IsSet(ctx, k) {
+		t.Fatal("绕过 With 直写的值不应被 IsSet 认作已写入")
+	}
 }
 
 // TestWith_RealworldPattern git-ferry 三处手写样板的等价改写：中间件
