@@ -5,6 +5,12 @@
 
 关联问题单：pkg#285、pkg#286。
 
+## [v0.38.1] — 2026-11-08
+
+### fix(pagination): WalkEach/Walk 伪翻页（无进展）检测——同页重复按列表末尾收手，返回已收集数据（#285）
+
+### fix(pagination): WalkEach 的 fetch 签名贯穿 ctx + 循环体 ctx.Err() 检查——与 Walk 同形态（#286，BREAKING）
+
 ## [v0.38.0] — 2026-11-08
 
 - feat(httpjson): 条件请求面——限流预算敏感消费方的通用形态（#269）：`WithETag(store, key)` RequestOption 为 DoJSON/DoJSONWithRetry（变参注入，零选项调用面与旧签名一致）注入 If-None-Match/304 重放——命中缓存注入条件头，服务端 304 时把缓存体经与 200 **同一条解码线重放为 200 形响应**（out/err 与 200 完全同形，调用方无感）；ETag 头在场回写存储、缺席不写；**304×驱逐竞态回查存储、条目被驱逐则降级为无条件重发一次而非硬失败**（现场 v0.100.2 教训）；只对 GET/HEAD 注入（写方法的 304 语义不同）；`ETagStore` 存储接口与客户端分离（可插 Redis 等跨进程后端）+ `NewMemETagStore` 进程内实现；store 为 nil/key 空串构造期 panic（仓规总则①）；来源标记（X-From-Cache 类）刻意未做并 doc 声明
