@@ -1,7 +1,9 @@
 package stringx
 
 import (
+	"encoding/csv"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -81,5 +83,76 @@ func TestSplitCSVNonEmpty_DiffersFromSplitByComma(t *testing.T) {
 	wantNew := []string{"a", "b", "c"}
 	if !reflect.DeepEqual(new, wantNew) {
 		t.Errorf("SplitCSVNonEmpty(%q) = %#v, want %#v", in, new, wantNew)
+	}
+}
+
+// TestSplitCSVNonEmpty_QuotedFields 回归（[#259]）：此前实现是裸
+// strings.Split，不认 RFC 4180 引号——`"a,b",c` 被静默切成 ["\"a"
+// "b\"" "c"]，含逗号的引号字段（地址、JSON 片段、SQL 条件、带逗号的
+// 产品名）拆成两段且不报错；引号还被原样保留（`"x"` → `"x"`），既不
+// 解释也不剥离。
+func TestSplitCSVNonEmpty_QuotedFields(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		// #258/#259 issue 复现样本
+		{"引号内逗号不切分", `"a,b",c`, []string{"a,b", "c"}},
+		{"引号剥离", `"x"`, []string{"x"}},
+		{"既有口径不变", "a, b,,c", []string{"a", "b", "c"}},
+		{"多字段含引号", `a,"b,c",d`, []string{"a", "b,c", "d"}},
+		{"尾字段含引号", `"a,b",c,d`, []string{"a,b", "c", "d"}},
+		{"双引号转义为字面引号", `"a""b",c`, []string{`a"b`, "c"}},
+		{"引号内空白是值的一部分", `" a , b" , c`, []string{"a , b", "c"}},
+		{"引号外空白仍 trim", `"a,b" ,c`, []string{"a,b", "c"}},
+		{"闭合引号后残余宽松并入", `"a"x,b`, []string{"ax", "b"}},
+		{"未闭合引号宽松兜底", `"a,b`, []string{"a,b"}},
+		{"未闭合引号带后续段", `"a,b,c,d`, []string{"a,b,c,d"}},
+		{"引号空字段丢弃", `"",a`, []string{"a"}},
+		{"全引号空字段返回 nil", `""`, nil},
+		{"裸引号在字段中部按字面保留", `a"b,c`, []string{`a"b`, "c"}},
+		{"Unicode 内容含逗号", `"产品,名称",x`, []string{"产品,名称", "x"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := SplitCSVNonEmpty(c.in)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("SplitCSVNonEmpty(%q) = %#v, want %#v", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestSplitCSVNonEmpty_MatchesStdlibCSV 与标准库 encoding/csv 交叉验证：
+// 对一行规范的 CSV 记录（issue 建议的实现路径），两条实现拆出的字段
+// 序列必须一致（本函数多做的只有 trim 与空项丢弃）。
+func TestSplitCSVNonEmpty_MatchesStdlibCSV(t *testing.T) {
+	for _, row := range []string{
+		`a,b,c`,
+		`"a,b",c`,
+		`"x"`,
+		`a,"b,c",d`,
+		`"a""b",c`,
+		`"addr, zip",name,2`,
+		`one`,
+		`"multi, comma", tail, x`,
+	} {
+		rec, err := csv.NewReader(strings.NewReader(row)).Read()
+		if err != nil {
+			t.Fatalf("stdlib csv 读 %q 失败: %v", row, err)
+		}
+		var want []string
+		for _, f := range rec {
+			if f = strings.TrimSpace(f); f != "" {
+				want = append(want, f)
+			}
+		}
+		if len(want) == 0 {
+			want = nil
+		}
+		if got := SplitCSVNonEmpty(row); !reflect.DeepEqual(got, want) {
+			t.Errorf("SplitCSVNonEmpty(%q) = %#v, 与 stdlib csv 口径 %#v 不一致", row, got, want)
+		}
 	}
 }

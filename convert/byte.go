@@ -24,20 +24,40 @@ func BytesToInt(data []byte) int {
 }
 
 // BytesToInt64 字节切片转 int64，失败返回 0。
+//
+// 必须判 err（[#257]，与同文件 BytesToInt 一致）：strconv.ParseInt 的
+// 范围错误（ErrRange）会同时返回**钳制后的饱和值**与 err，丢弃 err 就把
+// MaxInt64/MinInt64 当成合法值返回——文档承诺「失败返回 0」，饱和值却
+// 能穿过 `if id > 0` 这类校验继续往下走。
 func BytesToInt64(data []byte) int64 {
-	val, _ := strconv.ParseInt(string(data), 10, 64)
+	val, err := strconv.ParseInt(string(data), 10, 64)
+	if err != nil {
+		return 0
+	}
 	return val
 }
 
 // BytesToFloat32 字节切片转 float32，失败返回 0。
+//
+// 判 err 的理由同 BytesToInt64（[#257]）：ErrRange 时 ParseFloat 返回
+// ±Inf，不判 err 就把 ±Inf 当合法值。
 func BytesToFloat32(data []byte) float32 {
-	val, _ := strconv.ParseFloat(string(data), 32)
+	val, err := strconv.ParseFloat(string(data), 32)
+	if err != nil {
+		return 0
+	}
 	return float32(val)
 }
 
 // BytesToFloat64 字节切片转 float64，失败返回 0。
+//
+// 判 err 的理由同 BytesToInt64（[#257]）：ErrRange 时 ParseFloat 返回
+// ±Inf（"1e999" → +Inf），不判 err 就把 ±Inf 当合法值。
 func BytesToFloat64(data []byte) float64 {
-	val, _ := strconv.ParseFloat(string(data), 64)
+	val, err := strconv.ParseFloat(string(data), 64)
+	if err != nil {
+		return 0
+	}
 	return val
 }
 

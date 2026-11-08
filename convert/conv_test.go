@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -199,5 +200,56 @@ func TestBoolToBytes(t *testing.T) {
 	}
 	if got := string(BoolToBytes(false)); got != "false" {
 		t.Errorf("expected 'false', got %q", got)
+	}
+}
+
+// TestAnyToUint64_JSONNumberClamped 回归（[#256]）：json.Number 分支此前
+// 绕过 float64ToUint64Safe 直接 uint64(fv)——1e22 饱和成 uint64 最大值
+// （看起来像合法值，`if id > 0` 之类校验全部通过），而同一个值走 float64
+// 分支是 0。encoding.Unmarshal 用 UseNumber，JSON 数值到业务侧就是
+// json.Number——这条是主路径，不是边角。
+func TestAnyToUint64_JSONNumberClamped(t *testing.T) {
+	tests := []struct {
+		name string
+		in   any
+		want uint64
+	}{
+		{"json.Number 1e22 溢出归零", json.Number("1e22"), 0},
+		{"float64 1e22 同值同答案", float64(1e22), 0},
+		{"json.Number -5 负数归零", json.Number("-5"), 0},
+		{"json.Number -1 溢出侧饱和归零", json.Number("-99999999999999999999"), 0},
+		{"json.Number 0", json.Number("0"), 0},
+		{"json.Number 42", json.Number("42"), 42},
+		{"json.Number 1.5 截断同 float64", json.Number("1.5"), 1},
+		{"float64 1.5 截断", float64(1.5), 1},
+		{"json.Number 1e19 范围内", json.Number("1e19"), 10000000000000000000},
+		{"json.Number 非法", json.Number("abc"), 0},
+		// 整数分支回归：有符号按位重解释（uint 语义）是文档明写的既有契约，不动
+		{"int64 -5 按位重解释", int64(-5), 18446744073709551611},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := AnyToUint64(tt.in); got != tt.want {
+				t.Errorf("AnyToUint64(%#v) = %d, want %d", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAnyToUint64_JSONNumberMatchesFloatPath 钉住「同值两条入口同答案」：
+// json.Number 与 float64 的唯一差别应是解析来源，不是转换口径。
+func TestAnyToUint64_JSONNumberMatchesFloatPath(t *testing.T) {
+	for _, s := range []string{"1e22", "-5", "0", "42", "1.5", "1e19", "3e20", "abc"} {
+		n := AnyToUint64(json.Number(s))
+		f, err := json.Number(s).Float64()
+		if err != nil {
+			if n != 0 {
+				t.Errorf("AnyToUint64(json.Number(%q)) = %d, want 0（不可解析）", s, n)
+			}
+			continue
+		}
+		if want := AnyToUint64(f); n != want {
+			t.Errorf("AnyToUint64 同值两条入口分叉：json.Number(%q)=%d, float64=%d", s, n, want)
+		}
 	}
 }

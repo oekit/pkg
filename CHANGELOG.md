@@ -1,3 +1,15 @@
+## [v0.37.5] — 2026-11-08
+
+- fix(convert): OptBool 数值/json.Number 分支与 AnyToBool 对齐——anyToBoolOK 此前经 AnyToInt64 中转，|v|<1 的浮点被截断成 0 ⇒ OptBool(0.5) 返回 &false 而 AnyToBool(0.5) 是 true，同一值两个答案且 nil/非 nil 叠加「字段不存在」的第二层降级（#205 的同源漏网）；判定逐字共用 AnyToFloat64 != 0，两入口对任何值不再分叉（#255）
+- fix(convert): AnyToUint64 的 json.Number 分支复用 float64ToUint64Safe——此前直接 uint64(fv)，1e22 饱和成 uint64 最大值（`if id > 0` 之类校验全通过）而同值走 float64 分支是 0；encoding.Unmarshal 用 UseNumber，这条是主路径不是边角。有符号整数的按位重解释是文档明写的既有契约，不动（#256）
+- fix(convert): BytesToInt64 / BytesToFloat32 / BytesToFloat64 判 err 返回 0——strconv 范围错误（ErrRange）同时返回钳制后的饱和值（"99999999999999999999" → MaxInt64、"1e999" → ±Inf），丢弃 err 就把饱和值当合法值，与文档「失败返回 0」及同文件 BytesToInt 相反；顺带关闭 AnyToInt64 的 []byte 与 string 两条入口对同一文本给出不同答案（#257）
+- fix(container): Queue.TryTake 关闭即返回 false——文档写「已关闭返回零值与 false」，实现却无条件 popLocked：Put(1) 后 Close，TryTake 照样把最后一条出队，按「关闭即空」写收尾逻辑的调用方会重复处理最后一条或在 defer Close 后误投递；Close 文档同步写死两入口口径（Take 排空余量、TryTake 关闭即停）（#258）
+- fix(stringx): SplitCSVNonEmpty 补 RFC 4180 引号处理——此前是裸 strings.Split：`"a,b",c` 被静默切成 `"a`/`b"`/`c`（含逗号的地址、JSON 片段、SQL 条件拆成两段且不报错），引号原样保留（`"x"` → `"x"`）。引号字段内逗号不切分、`""` 是字面引号、引号剥离、引号内空白不 trim；未闭合引号与闭合后残余宽松兜底不丢字；与 stdlib encoding/csv 交叉验证用例钉住（#259）
+- fix(encoding): UnmarshalFromReader 不再把整个输入攒进内存——此前 TeeReader 把每个流过的字节复制进 strings.Builder，成功路径也照攒（8 MiB 报文 ~50 MiB 堆）；错误摘录只需开头 256 字节，改用带上限的 excerptWriter 只驻留前 256 字节，错误信息契约（有界、带输入开头）不变（#260）
+- fix(timex): Date2Stamp 在 DST 前跳日不再把日期归一到前一天——Santiago 2026-09-06 00:00:00 这个墙钟时刻不存在，ParseInLocation 归一到 09-05 23:00（时间戳偏移一整天且不报错），GetCurrentDayStartTime 的日切窗口随之整体偏移；对齐 boundary.go dayStart 的既有口径：解析结果墙钟日期与输入不一致时锚定目标日首个存在瞬间并补回时刻偏移（缺口内 00:30 顺延到 01:30，日期不丢）；layout 含时区元素时跳过修正（偏移在串里，无本地歧义）（#261）
+
+关联问题单：pkg#255、pkg#256、pkg#257、pkg#258、pkg#259、pkg#260、pkg#261。
+
 ## [v0.37.4] — 2026-11-08
 
 - fix(httpjson): NormalizeBaseURL scheme 前缀判定大小写不敏感（EqualFold，RFC 3986 §3.1）+ 命中后 scheme 归一小写——`HTTPS://EXAMPLE.COM` 不再被二次补 `http://` 产出 `http://HTTPS://EXAMPLE.COM`（scheme 静默降级 https→http、host 截成 `HTTPS:`）；只认 http/https 两个 scheme，`host:port` 等其余形态仍按无 scheme 补 `http://`（#239）

@@ -3,6 +3,7 @@ package timex
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -65,15 +66,60 @@ func StampInt2Date(timestamp int64, format string) string {
 // Date2Stamp 将日期字符串转换为 Unix 时间戳。
 // 使用本地时区解析（time.ParseInLocation），避免 UTC 偏移问题。
 // 解析失败时返回 0。
+//
+// # DST 前跳日的墙钟归一修正（[#261]）
+//
+// 前跳日的 00:00:00 这类**不存在**的墙钟时刻，Go 的 ParseInLocation 会把
+// 结果归一到**前一天**（America/Santiago 2026-09-06 00:00:00 → 09-05
+// 23:00）——时间戳偏移一整天，而解析不报错。GetCurrentDayStartTime 走的
+// 正是这条路径：DST 前跳日当天「今天 00:00」拿到的是昨天 ⇒ 日切统计、
+// 日限额、日报窗口全部偏移一天。同一个坑在 boundary.go 的 dayStart 已修过
+// 一次，本函数对齐同一口径：解析结果的墙钟**日期**与输入不一致（被归一
+// 挪走）时，改锚定目标日的**首个存在瞬间**，再补回时刻偏移——宁可是当天
+// 01:00，也不是前一天 23:00。
+//
+// layout 含时区元素（MST / ±hh / Z 家族）时时刻由输入串里的偏移决定，
+// 不存在本地墙钟歧义，跳过修正。
 func Date2Stamp(date string, format string) int64 {
 	if format == "" {
 		format = stdLayout
 	}
-	tm, err := time.ParseInLocation(format, date, time.Local)
+	loc := time.Local
+	tm, err := time.ParseInLocation(format, date, loc)
 	if err != nil {
 		return 0
 	}
-	return tm.Unix()
+	if layoutHasZone(format) {
+		return tm.Unix()
+	}
+	// 歧义检测：用无 DST 的 UTC 解析同一字符串，拿到「输入写的墙钟字段」。
+	// 日期一致（含回拨日的重复墙钟——ParseInLocation 取较早一次，日期不变）
+	// 则无归一篡改，按解析结果返回。
+	ref, err := time.ParseInLocation(format, date, time.UTC)
+	if err != nil {
+		return tm.Unix()
+	}
+	if tm.Year() == ref.Year() && tm.Month() == ref.Month() && tm.Day() == ref.Day() {
+		return tm.Unix()
+	}
+	// 输入的墙钟日期被归一挪走：锚定目标日首个存在瞬间，再补回当天内的
+	// 时刻偏移（00:30 这类落在缺口内的时刻顺延到缺口之后，日期不丢）。
+	st := dayStart(ref.Year(), ref.Month(), ref.Day(), loc)
+	off := time.Duration(ref.Hour())*time.Hour +
+		time.Duration(ref.Minute())*time.Minute +
+		time.Duration(ref.Second())*time.Second +
+		time.Duration(ref.Nanosecond())
+	return st.Add(off).Unix()
+}
+
+// layoutHasZone 报告 layout 是否含时区元素（时区名 MST、短偏移 -07、
+// ISO 家族 Z0700/-0700/-07:00 等）。这些元素全部以 MST、"-07"、"Z07"
+// 起头，Contains 覆盖全集；layout 里恰好出现这些字面量只会让修正被
+// 安全地跳过，不会误触发。
+func layoutHasZone(layout string) bool {
+	return strings.Contains(layout, "MST") ||
+		strings.Contains(layout, "-07") ||
+		strings.Contains(layout, "Z07")
 }
 
 // NDateBefore 获取前 n 天的日期列表。

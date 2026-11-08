@@ -2,6 +2,8 @@ package encoding
 
 import (
 	"encoding/json"
+	"io"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -260,5 +262,85 @@ func TestUnmarshalUseNumber_TrailingData(t *testing.T) {
 	}
 	if err := UnmarshalUseNumber([]byte(`{"a":1}`), &v); err != nil {
 		t.Errorf("clean input should succeed: %v", err)
+	}
+}
+
+// TestExcerptWriter_CappedAtMax 单元钉住 excerptWriter 机制（[#260]）：
+// 只收前 max 字节，超出后纯直通不再复制，Write 返回值始终是 len(p)。
+func TestExcerptWriter_CappedAtMax(t *testing.T) {
+	w := &excerptWriter{max: 8}
+	if n, err := w.Write([]byte("12345")); n != 5 || err != nil {
+		t.Fatalf("first write = (%d, %v), want (5, nil)", n, err)
+	}
+	// 跨边界写入：只补足到 max。
+	if n, err := w.Write([]byte("6789")); n != 4 || err != nil {
+		t.Fatalf("boundary write = (%d, %v), want (4, nil)", n, err)
+	}
+	if got := string(w.buf); got != "12345678" {
+		t.Fatalf("buf = %q, want %q", got, "12345678")
+	}
+	// 超限后不再增长，但不得报错（报错会毒化 Tee 的读侧）。
+	before := len(w.buf)
+	if n, err := w.Write([]byte("XYZ")); n != 3 || err != nil {
+		t.Fatalf("over-limit write = (%d, %v), want (3, nil)", n, err)
+	}
+	if len(w.buf) != before {
+		t.Fatalf("buf grew after limit: %d -> %d", before, len(w.buf))
+	}
+}
+
+// TestUnmarshalFromReader_ErrorExcerptBounded 钉住错误路径的摘录契约：
+// 大的非法输入报错，摘录仍截断到 256 字节——head 只收前 maxExcerpt 字节。
+func TestUnmarshalFromReader_ErrorExcerptBounded(t *testing.T) {
+	// 引号永不闭合：decoder 会把 8 KiB 全部消费完才报错，
+	// 摘录因此走满 256 字节截断路径。
+	err := UnmarshalFromReader(strings.NewReader(`{"k":"`+strings.Repeat("x", 8192)), &map[string]any{})
+	if err == nil {
+		t.Fatal("expected error for unterminated string")
+	}
+	if len(err.Error()) > 1024 {
+		t.Errorf("error message should stay bounded, got %d bytes", len(err.Error()))
+	}
+	// head 把摘录钉在 256 字节整（formatError 的 >256 截断不会再触发，
+	// 截断由 excerptWriter 本身完成）；错误信息因此保持有界且带输入开头。
+	if !strings.Contains(err.Error(), strings.Repeat("x", 64)) {
+		t.Errorf("error should carry the input head excerpt: %v", err)
+	}
+}
+
+// TestUnmarshalFromReader_SuccessDoesNotBufferWholeInput 回归（[#260]）：
+// 此前 TeeReader 把每个流过的字节都复制进 strings.Builder——**成功路径
+// 也照攒**（Builder 倍增扩容 + 一次 String() 拷贝 ≈ 输入的 3 倍额外驻留，
+// 8 MiB 报文实测 50 MiB 堆）。输入全部合法、解析成功时，总分配增量必须
+// 显著低于「额外整份复制」的口径（阈值取输入的 3 倍；旧实现约 5-6 倍，
+// 稳定撞线失败）。
+func TestUnmarshalFromReader_SuccessDoesNotBufferWholeInput(t *testing.T) {
+	const pad = 8 << 20 // 8 MiB 合法空白填充，复现 issue 的形状
+	// 与 issue 复现口径一致：reader 在测量窗口外构造好，
+	// Repeat 的那 8 MiB 不计入增量。
+	r := io.MultiReader(
+		strings.NewReader(`{"k":`),
+		strings.NewReader(strings.Repeat(" ", pad)),
+		strings.NewReader("1}"),
+	)
+	var out map[string]any
+	var m1, m2 runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&m1)
+	err := UnmarshalFromReader(r, &out)
+	runtime.ReadMemStats(&m2)
+	if err != nil {
+		t.Fatalf("valid padded input should parse: %v", err)
+	}
+	if v, ok := out["k"].(json.Number); !ok || v.String() != "1" {
+		t.Fatalf("out[k] = %#v, want json.Number(\"1\")", out["k"])
+	}
+	delta := m2.TotalAlloc - m1.TotalAlloc
+	// 阈值取 5 倍 pad：修复后 ≈4 倍（json.Decoder 自身缓冲倍增的固有成本，
+	// 旧实现同样要付）；旧实现在此之上还有 Builder 倍增（≈2 倍）+ 一次
+	// String() 拷贝（≈1 倍）≈ 7 倍，稳定撞线失败。
+	if limit := uint64(5 * pad); delta > limit {
+		t.Errorf("TotalAlloc delta = %.2f MiB, want <= %.2f MiB（成功路径不得把整份输入再攒一遍）",
+			float64(delta)/(1<<20), float64(limit)/(1<<20))
 	}
 }
