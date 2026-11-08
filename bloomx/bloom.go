@@ -34,7 +34,10 @@ type Filter struct {
 
 // New 创建布隆过滤器。estElements 为预计元素数量，fpRate 为目标误判率
 // （如 0.01 表示 1%）。非法入参归一为文档化默认值：estElements<=0 取
-// DefaultEstElements，fpRate 不在 (0,1) 取 DefaultFPRate。
+// DefaultEstElements，fpRate 不在 (0,1) 取 DefaultFPRate——NaN 与任何值
+// 比较都为 false，显式 IsNaN 判定拦住（#248：NaN 漏过归一闸门后
+// uint64(NaN)=0 造出 0 位过滤器，Add/Test 首次写入即越界 panic）；
+// ±Inf 同不在 (0,1)，一并归一。
 //
 // 位数组长度 m = ceil(-n·ln p / (ln2)²)，向上取 2 的幂（与奇数 h2 配合
 // 保证每条哈希序列完整覆盖位数组，取模同时退化为位掩码），下限 64；
@@ -43,13 +46,19 @@ func New(estElements int, fpRate float64) *Filter {
 	if estElements <= 0 {
 		estElements = DefaultEstElements
 	}
-	if fpRate <= 0 || fpRate >= 1 {
+	if math.IsNaN(fpRate) || math.IsInf(fpRate, 0) || fpRate <= 0 || fpRate >= 1 {
 		fpRate = DefaultFPRate
 	}
 
 	n := float64(estElements)
 	ln2 := math.Ln2
 	m := math.Ceil(-n * math.Log(fpRate) / (ln2 * ln2))
+	if math.IsNaN(m) || math.IsInf(m, 0) || m <= 0 {
+		// 理论不可达（fpRate 已归一到 (0,1)、estElements>0 ⇒ m 有限正数），
+		// 防御性兜底：拒绝 uint64(NaN)/uint64(+Inf) 这类未定义渗出渗进
+		// 位数组长度计算（#248 的放大链入口）。
+		m = math.Ceil(-float64(DefaultEstElements) * math.Log(DefaultFPRate) / (ln2 * ln2))
+	}
 	if m < 64 {
 		m = 64
 	}
