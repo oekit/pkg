@@ -8,12 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 )
-
-// sweepTimeout 是跨组逃逸清扫时进程枚举的超时上限（darwin 走 ps(1)）：
-// 超时即放弃清扫（退化为纯进程组击杀），不让取消路径被异常的外部命令挂死。
-const sweepTimeout = 5 * time.Second
 
 // listProcesses 枚举当前全部进程的 (pid, ppid, pgid)：走 /proc/<pid>/stat。
 // comm 字段可含空格与括号，按最后一个 ')' 切开再取后续字段
