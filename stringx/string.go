@@ -286,6 +286,14 @@ func Union(first, second []string) []string {
 }
 
 // JoinWith 将字符串切片用指定分隔符连接。
+//
+// ⚠️ 与 strings.Join 语义不同（#299 声明，非缺陷修复）：空元素被静默丢弃
+// （不占位）——JoinWith([]string{"a","","b"}, ",") = "a,b"，而 strings.Join
+// 得 "a,,b"。本函数名与 strings.Join(elem, sep) 签名同形，跳过语义却相反，
+// 故在此显式声明。同族 Join（变参版）的「忽略空字符串」与此一致。
+//
+// 需要空位占位的按位解析场景（CSV 行/按位拆字段/缓存 key 域数固定）请用
+// strings.Join 或 JoinByComma——按 stdlib 语义保留空位。
 func JoinWith(elem []string, sep string) string {
 	var size int
 	for _, e := range elem {

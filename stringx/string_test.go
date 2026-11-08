@@ -345,3 +345,25 @@ func TestFirstN_EmptyString_ZeroMatrix(t *testing.T) {
 		t.Errorf("FirstN(hello,0,…) = %q, want \"…\"", got)
 	}
 }
+
+// TestJoinWith_SkipsEmptyElements 钉住 #299：JoinWith 跳过空元素（不占位），
+// 与 strings.Join 的占位语义相反——doc 已显式声明该差异，本用例把跳过语义
+// 钉成回归防线，防止未来「对齐名字直觉」时静默改口径。
+func TestJoinWith_SkipsEmptyElements(t *testing.T) {
+	if got := JoinWith([]string{"a", "", "b"}, ","); got != "a,b" {
+		t.Errorf("JoinWith([a,\"\",b],,) = %q, want \"a,b\"（空元素被跳过，与 strings.Join 不同——doc 口径）", got)
+	}
+	if got := JoinWith([]string{"", "", ""}, ","); got != "" {
+		t.Errorf("JoinWith(全空,) = %q, want \"\"", got)
+	}
+	if got := JoinWith([]string{"", "a"}, ","); got != "a" {
+		t.Errorf("JoinWith([\"\",a],,) = %q, want \"a\"（无前导分隔符）", got)
+	}
+	if got := JoinWith([]string{"a", ""}, ","); got != "a" {
+		t.Errorf("JoinWith([a,\"\"],,) = %q, want \"a\"（无尾随分隔符）", got)
+	}
+	// 对照：stdlib 占位语义由 JoinByComma（strings.Join）承担。
+	if got := JoinByComma([]string{"a", "", "b"}); got != "a,,b" {
+		t.Errorf("JoinByComma([a,\"\",b]) = %q, want \"a,,b\"（stdlib 占位语义）", got)
+	}
+}
