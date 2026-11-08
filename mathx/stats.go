@@ -5,6 +5,12 @@ import "math"
 // WilsonCI 通过率的 Wilson 得分置信区间（小样本下比正态近似诚实）。
 // 返回 (lo, hi)；total<=0 时返回 (0,0)；结果钳到 [0,1]。
 //
+// z 按其绝对值参与计算（#251）：z 的合法语义是置信水平对应的正 z 分数
+// （如 1.96），负 z 的 half 带符号会让 lo/hi 上下界颠倒（实测
+// WilsonCI(5,10,-1.96) = (0.76, 0.24)）且不报错——下游 `lo <= p && p <= hi`
+// 判据静默全 false，告警该报不报。归一为 |z| 后负 z 与对应正 z 等价，
+// 恒有 lo <= hi。z 为 NaN/±Inf 时区间无意义，返回 (0,0)。
+//
 // 计数越界（passed<0 或 passed>total）按钳到 [0,total] 处理：越界会让
 // p 落到 [0,1] 之外 ⇒ p*(1-p)<0 ⇒ math.Sqrt(负数)=NaN ⇒ 返回 (NaN,NaN)
 // （实测 WilsonCI(5,3,1.96)）。钳到合法区间后区间才有意义。
@@ -20,9 +26,10 @@ func WilsonCI(passed, total int, z float64) (lo, hi float64) {
 	}
 	p := float64(passed) / float64(total)
 	n := float64(total)
-	denom := 1 + z*z/n
-	center := (p + z*z/(2*n)) / denom
-	half := z * math.Sqrt(p*(1-p)/n+z*z/(4*n*n)) / denom
+	az := math.Abs(z)
+	denom := 1 + az*az/n
+	center := (p + az*az/(2*n)) / denom
+	half := az * math.Sqrt(p*(1-p)/n+az*az/(4*n*n)) / denom
 	lo, hi = center-half, center+half
 	if math.IsNaN(lo) || math.IsNaN(hi) {
 		// z 为 NaN 等异常输入：区间无意义 ⇒ 返回零区间而不是 NaN。
