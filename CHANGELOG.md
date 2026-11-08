@@ -2,6 +2,15 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.40.0] — 2026-11-09
+
+- feat(urlpath): URL path 低基数模板化原语——ID 段折叠控制 metrics 标签基数（#291）
+- fix(stringx): FirstN 空串 n==0 矩阵语义 + JoinWith 文档声明（#299 #300）
+- fix(jsonrepair): ParseLenient 裸解析优先——schema 不再无条件 Normalize（#301）
+- fix(httpjson): Retry-After 仅在 429 失败采信（#302）
+
+关联问题单：pkg#291、pkg#299、pkg#300、pkg#301、pkg#302。
+
 ## [v0.39.0] — 2026-11-09
 
 ### 修复(procx)：树终止语义补全——跨组逃逸清扫 + windows Job Object + 仓规对齐（pkg#284 追平轮）
