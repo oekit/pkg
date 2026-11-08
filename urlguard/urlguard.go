@@ -30,6 +30,13 @@
 // 标准库 net.ParseIP 不认它们，但宽松解析器（cgo resolver 的 inet_aton 语义、
 // 浏览器 URL 解析器）会当地址——写面放行等于把判定推给拨号层，构成回环绕过路径。
 //
+// 非 ASCII host 同理 fail-closed（pkg#266）：判定前先做确定性折叠——WHATWG URL
+// 的域分隔符（。．｡ → .）、全角数字/拉丁字母/连字符（NFKC 兼容映射）；折叠后
+// 仍含非 ASCII 的一律拒绝（IDN/圈号等不做 DNS 解析判定）。浏览器与 node 的
+// URL 解析器会把 `127。0。0。1` / `１２７.0.0.1` 归一成 127.0.0.1 再连接，
+// 纯 ASCII 判定面对它们全部失明——「看不懂的名字一律不允许指向内网判定放行」。
+// 带非 ASCII 域名的合法出站目标请调用方先自行做 IDNA（punycode）转换再传入。
+//
 // IPv6 zone 后缀（http://[::1%25lo]/、http://[fe80::1%25eth0]/）同样按地址部分
 // 判定：net.ParseIP 不认 zone，不剥掉就等于整段跳过 IP 字面量判定——loopback、
 // 链路本地、ULA、IPv4-mapped 全能以 zone 形态绕过。zone 只决定走哪块网卡，
@@ -422,12 +429,24 @@ func (g *Guard) CheckHost(host string) error {
 // checkHostLiteral 是 CheckHost 的字面量判定部分（不含精确白名单维度），
 // 供 CheckURL 复用——CheckURL 已在 authority 级完成白名单判定。
 //
-// 判定顺序（pkg#91）：内置判定在前（IP 字面量 → 私网/约定域阻断），
-// 自定义 host 判定（WithCheckHostFunc）在后。
+// 判定顺序（pkg#91）：内置判定在前（非 ASCII 折叠/fail-closed → IP 字面量 →
+// 私网/约定域阻断），自定义 host 判定（WithCheckHostFunc）在后。
+//
+// 非 ASCII host（pkg#266）：先做确定性折叠（UTS46 映射的判定面子集——WHATWG
+// URL 的四个域分隔符、全角数字/拉丁字母/连字符），折叠后仍含非 ASCII 的一律
+// 拒绝（fail-closed）。此前判定面只覆盖 ASCII：`127。0。0。1`（U+3002）、
+// `127．0．0．1`（U+FF0E）、`１２７.0.0.1`（全角数字）经浏览器/node 的
+// WHATWG URL 规范化都是 127.0.0.1，而 net.ParseIP 与词法判定对它们全部返回
+// nil/false ⇒ 落进「普通域名」分支交给 DNS——「判定放行 + 客户端连回环」。
 func (g *Guard) checkHostLiteral(host string) error {
 	if host == "" {
 		return fmt.Errorf("urlguard: empty host")
 	}
+	folded, ok := foldHostForGuard(host)
+	if !ok {
+		return fmt.Errorf("urlguard: host %q contains non-ASCII characters that cannot be deterministically folded (IDN/全角形式 fail-closed)", host)
+	}
+	host = folded
 	if ip := net.ParseIP(stripIPv6Zone(host)); ip != nil {
 		return g.CheckIP(ip)
 	}
@@ -484,6 +503,57 @@ const (
 	ipv4PartOctal                       // 八进制（前导 0）
 	ipv4PartHex                         // 十六进制（前导 0x）
 )
+
+// foldHostForGuard 对 host 做**确定性**折叠（UTS46 映射的判定面子集，#266），
+// 返回折叠结果与是否可全量映射：
+//
+//   - 域分隔符：U+3002（。）、U+FF0E（．）、U+FF61（｡）→ "."——WHATWG URL
+//     host 解析器认这四个分隔符（含 ASCII "."），浏览器/node 会先归一再连；
+//   - 全角数字 U+FF10–U+FF19 → 0-9（NFKC 兼容映射）；
+//   - 全角拉丁字母 U+FF21–U+FF3A / U+FF41–U+FF5A → 小写 ASCII（canonicalHost
+//     本就把 host 小写化，折叠直接落小写口径）；
+//   - 全角连字符 U+FF0D → "-"。
+//
+// 其余非 ASCII 码点（含 ①②⑦ 这类 NFKC 可解的圈号）一律 ok=false——**拒绝**
+// 而不是猜：圈号数字/带变音的 IDN 等「无法确定性映射」的名字，宽松解析器能
+// 归一成什么不可控，看不懂的名字不允许指向内网判定放行（fail-closed）。纯
+// ASCII 输入零开销直返。
+func foldHostForGuard(host string) (string, bool) {
+	if isASCII(host) {
+		return host, true
+	}
+	var b strings.Builder
+	b.Grow(len(host))
+	for _, r := range host {
+		switch {
+		case r < 0x80:
+			b.WriteRune(r)
+		case r == 0x3002 || r == 0xFF0E || r == 0xFF61:
+			b.WriteByte('.')
+		case r >= 0xFF10 && r <= 0xFF19: // 全角数字 → 0-9
+			b.WriteByte(byte('0' + r - 0xFF10))
+		case r >= 0xFF21 && r <= 0xFF3A: // 全角大写拉丁 → 小写
+			b.WriteByte(byte('a' + r - 0xFF21))
+		case r >= 0xFF41 && r <= 0xFF5A: // 全角小写拉丁
+			b.WriteByte(byte('a' + r - 0xFF41))
+		case r == 0xFF0D: // 全角连字符
+			b.WriteByte('-')
+		default:
+			return "", false
+		}
+	}
+	return b.String(), true
+}
+
+// isASCII 判断 s 是否纯 ASCII。
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
 
 // looksLikeExoticIPv4 判定 host 是否是「宽松解析器会当成 IPv4 地址、但
 // net.ParseIP 不认」的 exotic 字面量形态：

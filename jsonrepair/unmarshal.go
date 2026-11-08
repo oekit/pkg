@@ -164,7 +164,12 @@ func closePartial(s string) (string, bool) {
 	b.Grow(len(s) + len(stack) + 8)
 	if inStr {
 		if esc {
-			s = s[:len(s)-1] // EOF 悬挂 `\`：转义不完整，丢反斜杠（与 Repair 非法转义同口径）
+			// EOF 悬挂 `\`：转义不完整（后续字符根本没收到），丢悬挂的反斜杠、
+			// 值按已收到的部分截尾——「宁可少显示」口径。与 Repair 的非法转义
+			// 处置（反斜杠转义保留字面量，#263）**有意不同**：那是完整输入里
+			// 的非法转义，原文可忠实保留；这里是截断现场，`\` 之后是什么不可知，
+			// 保留一个悬空转义标记只会产出非法 JSON。
+			s = s[:len(s)-1]
 		}
 		b.WriteString(s)
 		b.WriteByte('"')

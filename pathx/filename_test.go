@@ -1,6 +1,7 @@
 package pathx
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -171,5 +172,63 @@ func TestSanitizeFileName_DefaultMaxLength(t *testing.T) {
 	got := SanitizeFileName(long)
 	if len(got) != 255 {
 		t.Errorf("缺省上限应 255 字节, got %d", len(got))
+	}
+}
+
+// TestSanitizeFileName_WindowsReservedDeviceNames 钉住 #267：Windows 保留
+// 设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）加 "_" 前缀改形——此前原样返回，
+// 上传原始文件名落盘时写失败或打开到设备句柄。Windows 判的是去扩展名后的
+// 主名且大小写不敏感，带扩展名与全小写形态都命中。
+func TestSanitizeFileName_WindowsReservedDeviceNames(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"CON", "_CON"},
+		{"con", "_con"},
+		{"Con.txt", "_Con.txt"},
+		{"NUL", "_NUL"},
+		{"COM1", "_COM1"},
+		{"com9.log", "_com9.log"},
+		{"LPT1", "_LPT1"},
+		{"AUX", "_AUX"},
+		{"PRN", "_PRN"},
+		{"con.", "_con"},               // 尾点被剥后恰落成保留名
+		{"CON报告.txt", "CON报告.txt"},     // 主名不是保留名，不改形
+		{"console.log", "console.log"}, // 前缀命中不算（主名须全等）
+		{"_CON", "_CON"},               // 已有下划线前缀的不再叠加
+	}
+	for _, c := range cases {
+		if got := SanitizeFileName(c.in); got != c.want {
+			t.Errorf("SanitizeFileName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// 全前缀族扫一遍：大小写两个方向都必须改形。
+	for _, base := range []string{"CON", "PRN", "AUX", "NUL"} {
+		for _, in := range []string{base, strings.ToLower(base), strings.ToUpper(base)} {
+			if got := SanitizeFileName(in); got == in {
+				t.Errorf("保留设备名 %q 未改形（原样返回）", in)
+			}
+		}
+	}
+	for n := 1; n <= 9; n++ {
+		for _, pfx := range []string{"COM", "LPT"} {
+			in := pfx + strconv.Itoa(n)
+			if got := SanitizeFileName(in); got == in {
+				t.Errorf("保留设备名 %q 未改形（原样返回）", in)
+			}
+		}
+	}
+}
+
+// TestSanitizeFileName_TruncationCreatesReservedName 钉住 #267 的截断交互：
+// 截断把主名削成保留设备名时（原主名以保留名开头且被预算削短），改形同样
+// 生效且不超字节上限。
+func TestSanitizeFileName_TruncationCreatesReservedName(t *testing.T) {
+	// "CONtract_report" 主名按 3 字节预算削成 "CON" → "CON.txt" 命中保留名
+	// → 改形 "_CON.txt" 再按同一上限收口：保扩展名口径不变，削主名（"_CO.txt"）。
+	got := SanitizeFileName("CONtract_report.txt", WithMaxFileNameLength(7))
+	if got != "_CO.txt" {
+		t.Fatalf("SanitizeFileName = %q, want %q", got, "_CO.txt")
+	}
+	if len(got) > 7 {
+		t.Errorf("改形后 %q 超出字节上限 7", got)
 	}
 }

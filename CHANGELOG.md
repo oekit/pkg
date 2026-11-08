@@ -1,3 +1,15 @@
+## [v0.37.6] — 2026-11-08
+
+- fix(jsonrepair): Repair 连续尾逗号一次清空——此前 truncAt 被同段第二个逗号覆盖，`{"a":1,,}` 只删一个、单次输出仍是非法 JSON（`{"a":1,}`），要修两轮以上才收敛；现在连续逗号段合并/整段删除一次到位，值间连续逗号（`{"a":1,,,"b":2}`）同样合并；EOF 悬空逗号（`[1,2,` → `[1,2]`）与尾逗号同判（#262）
+- fix(jsonrepair): Repair 非法转义不再丢反斜杠——`\x41` 曾被改成 `x41`（值被改写成另一个且输出合法 JSON 无人能发现）；现在反斜杠转义为 `\\` 忠实保留「反斜杠 + 后续字符」字面量，残缺 `\u` 形态（`\uZZZZ`）与其它非法转义统一为同口径；EOF 悬挂 `\` 同样保留（closePartial 截断现场的「丢悬挂反斜杠」口径不变并补文档区分两者）（#263）
+- fix(jsonrepair): Repair 缺值分支补 null——`{"a":` / `{"a":}` / `{"a": ,}` 此前只补括号不补值，`{"a":}` 是非法 JSON 的稳定不动点（再修不变）；现在 `:` 后缺值（对象上下文）在 `,`/`}`/`]`/EOF 处补 null，LLM 在 `{"key":` 被 max_tokens 掐断的最常见中点可解析；不变量测试钉住「Repair 输出必须满足 json.Valid」（#268）
+- docs(stringx): LastN godoc 修正——边界口径段仍按 FirstN 修复前（#183 之前）的行为描述「两者有意不同」，而 FirstN 的 n<0 现已全截断，注释解释的差异不存在了；改为「与 FirstN 同口径」，用例把 n<=0 两函数逐字一致钉成回归防线（#264）
+- fix(cli): 表格列宽剥离 ANSI 转义序列再计宽——此前 `\x1b[32m` 的序列内字符被当可见字符（彩色 "ok" 被算 9 列），彩色单元格被判「已超宽」不补空格，后续列整体左移；displayWidth 先剥 CSI（`ESC [` … 0x40–0x7E）与 OSC（`ESC ]` … BEL/ST）再走原 rune 计宽，emoji/ZWJ 逻辑不动（#265）
+- fix(urlguard): 非 ASCII host 判定前先做确定性折叠、折叠不了的一律拒绝（fail-closed）——此前判定面只覆盖 ASCII：`127。0。0。1`（U+3002）/`127．0．0．1`（U+FF0E）/`１２７.0.0.1`（全角数字）经 WHATWG URL 规范化都是 127.0.0.1，net.ParseIP 与 exotic 词法判定对它们全部失明 ⇒ 判定放行、客户端连回环；折叠覆盖 WHATWG 四域分隔符（。．｡→.）与全角数字/拉丁字母/连字符（NFKC 兼容映射），圈号等不可折叠形态直接拒；allowPrivate 语义不回归——折叠成标准点分十进制的形态与等价 ASCII 形态同判，exotic 字面量闸门照旧不受豁免（#266）
+- fix(pathx): SanitizeFileName 处理 Windows 保留设备名——CON/PRN/AUX/NUL/COM1-9/LPT1-9 此前原样返回（上传原始文件名落盘时 ERROR_INVALID_NAME 或打开到设备句柄）；现在按主名（去扩展名）大写比对、命中加 "_" 前缀改形（con.txt → _con.txt，大小写不敏感），截断把主名削成保留名时（CONtract… 卡预算 → CON.txt）截断后再核一次并按同一上限收口（#267）
+
+关联问题单：pkg#262、pkg#263、pkg#264、pkg#265、pkg#266、pkg#267、pkg#268。
+
 ## [v0.37.5] — 2026-11-08
 
 - fix(convert): OptBool 数值/json.Number 分支与 AnyToBool 对齐——anyToBoolOK 此前经 AnyToInt64 中转，|v|<1 的浮点被截断成 0 ⇒ OptBool(0.5) 返回 &false 而 AnyToBool(0.5) 是 true，同一值两个答案且 nil/非 nil 叠加「字段不存在」的第二层降级（#205 的同源漏网）；判定逐字共用 AnyToFloat64 != 0，两入口对任何值不再分叉（#255）

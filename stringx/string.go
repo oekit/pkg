@@ -114,9 +114,9 @@ func FirstN(s string, n int, ellipsis ...string) string {
 // 添加省略号。与 FirstN 互为镜像：FirstN 保头、省略号拼尾；LastN 保尾、
 // 省略号拼头。未发生截断时原样返回（不拼省略号）。
 //
-// 边界口径：n <= 0 一律按「保留 0 个」处理（返回空串+省略号）。与 FirstN
-// 的 n<0 现状（其循环永不命中截断点 ⇒ 原样返回整串）有意不同——那是实现
-// 怪癖不是语义，本函数按 TruncRunes 的「非法上限=全截断」口径走，不 panic。
+// 边界口径：n <= 0 一律按「保留 0 个」处理（返回空串+省略号），与 FirstN
+// 同口径——#183 之后 FirstN 的 n<0 亦全截断（返回空串+省略号），两者不再
+// 存在差异；此前注释声称的「有意不同」描述的是 FirstN 修复前的行为。
 func LastN(s string, n int, ellipsis ...string) string {
 	if n <= 0 {
 		ret := ""

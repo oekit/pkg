@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // ExtractObject 提取文本中第一个平衡的 JSON 对象（字符串字面量感知；
@@ -107,72 +108,166 @@ func ExtractArray(s string) string {
 	return tail
 }
 
-// Repair 轻量 JSON 修复：全角结构标点、非法转义（如 \| → |）、尾逗号、未闭合
-// 括号。只处理语法级损坏；语义归一化由 Normalize / 调用方承担。
+// Repair 轻量 JSON 修复：全角结构标点、非法转义（反斜杠转义保留字面量）、
+// 连续尾逗号、缺值补 null、未闭合括号。只处理语法级损坏；语义归一化由
+// Normalize / 调用方承担。
 //
 // 单遍字符串感知扫描（第六轮审计重构）：此前尾逗号/非法转义走全文正则、不辨
 // 字符串边界——字符串里合法的 `", }"` / `"\x"` 序列会被当损坏静默改写（修复器
-// 的错误成功比失败更贵）。现在三类修复共用一个 inStr/esc 状态机，与
+// 的错误成功比失败更贵）。现在各类修复共用一个 inStr/esc 状态机，与
 // scanOpenBrackets/ExtractObject 同一纪律：字符串外才动结构位，字符串内只修
 // 转义。
+//
+// 输出契约（#262/#263/#268 收敛）：单次调用即收敛到合法 JSON——
+//   - 连续逗号一次清空（此前每遍只删一个，`{"a":1,,}` 要修两轮才合法）；
+//   - 非法转义不再丢反斜杠改写值（`\x41` 曾被改成 `x41`），反斜杠转义为
+//     `\\` 忠实保留「反斜杠 + 后续字符」的字面量，与 `\uXXXX` 残缺形态同口径；
+//   - `:` 后缺值（`{"a":` / `{"a":}` / `{"a": ,}`）补 null——此前只补括号，
+//     `{"a":}` 是非法 JSON 的稳定不动点，修复链路无出路。
 func Repair(s string) string {
 	var b bytes.Buffer
 	b.Grow(len(s))
 	inStr, esc := false, false
-	// truncAt 尾逗号候选段起点（逗号 + 其后空白）：确认紧跟 '}'/']' 才回退删除。
+	// truncAt 尾逗号候选段起点（连续逗号段首个逗号 + 其间空白）：确认紧跟
+	// '}'/']' 才回退删除。commaRun 标记正在扫连续逗号段——段内后续逗号直接
+	// 丢弃（一次清空，#262），truncAt 因此不需要被同段第二个逗号覆盖。
 	truncAt := -1
-	for _, r := range s {
+	commaRun := false
+	// needValue 标记 ':' 之后还没见到值（#268）：遇到 ','/'}'/']'/EOF 时补 null。
+	// 只在对象上下文成立（栈顶 '{'）——数组里的裸 ':' 是纯垃圾，不为其编造 null。
+	needValue := false
+	// stack 是字符串外的开括号栈（needValue 的上下文闸门；闭合补全仍由
+	// closeUnclosed 按全文扫描做，两处口径一致）。
+	var stack []byte
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
 		if inStr {
 			if esc {
 				esc = false
-				if validEscape(r) {
-					b.WriteRune('\\')
+				if r == 'u' {
+					// \uXXXX：4 位十六进制才合法，原样保留；残缺形态把反斜杠
+					// 转义为 `\\`，字面量忠实保留（`\uZZZZ` 输出后仍可读）。
+					if hasHex4(s[i+size:]) {
+						b.WriteString(s[i-1 : i+size+4])
+						i += size + 4
+						continue
+					}
+					b.WriteString(`\\u`)
+					i += size
+					continue
 				}
-				b.WriteRune(r) // 非法转义：丢反斜杠保字符（\| → |）
+				if validEscape(r) {
+					b.WriteByte('\\')
+					b.WriteRune(r)
+					i += size
+					continue
+				}
+				// 非法转义（\x \q 等）：不丢反斜杠——丢掉会把值改写成另一个
+				// （\x41 → x41），且输出合法 JSON 无人能发现（#263）。转义为
+				// `\\` 保留原文语义。
+				b.WriteString(`\\`)
+				b.WriteRune(r)
+				i += size
 				continue
 			}
 			if r == '\\' {
 				esc = true // 反斜杠的写入延到下一 rune 判定合法性
+				i += size
 				continue
 			}
 			if r == '"' {
 				inStr = false
 			}
 			b.WriteRune(r)
+			i += size
 			continue
 		}
 		switch r {
 		case '"':
 			inStr = true
 			truncAt = -1 // 值开始，逗号不再是尾逗号
+			commaRun = false
+			needValue = false
+			b.WriteRune(r)
+		case '{', '[':
+			truncAt = -1
+			commaRun = false
+			needValue = false // 开括号本身是值（"a":{）——缺值标记到此为止
+			stack = append(stack, byte(r))
 			b.WriteRune(r)
 		case '，': // 全角结构标点（字符串外）→ ASCII；逗号语义同 ASCII
-			truncAt = b.Len() // 转出的 , 同样是尾逗号候选（旧正则靠后跑补此环）
-			b.WriteByte(',')
-		case '：':
-			truncAt = -1
-			b.WriteByte(':')
+			fallthrough
 		case ',':
+			if commaRun {
+				i += size
+				continue // 连续逗号段：后续逗号直接丢弃（一次清空）
+			}
+			if needValue { // "a": ,——缺值先补 null，逗号仍是分隔符
+				b.WriteString("null")
+				needValue = false
+			}
 			truncAt = b.Len()
-			b.WriteRune(r)
+			commaRun = true
+			b.WriteByte(',')
+		case '：', ':': // 全角结构标点（字符串外）→ ASCII；冒号语义同 ASCII
+			truncAt = -1
+			commaRun = false
+			needValue = len(stack) > 0 && stack[len(stack)-1] == '{'
+			b.WriteByte(':')
 		case '}', ']':
-			if truncAt >= 0 {
-				b.Truncate(truncAt) // 尾逗号（含其后空白）删除
-				truncAt = -1
+			if commaRun {
+				b.Truncate(truncAt) // 尾逗号段（含其间空白）删除
+				commaRun = false
+			}
+			if needValue { // "a":}——补值再闭合，落点必须是合法 JSON（#268）
+				b.WriteString("null")
+				needValue = false
+			}
+			truncAt = -1
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
 			}
 			b.WriteRune(r)
 		default:
 			switch r {
 			case ' ', '\t', '\n', '\r':
-				// 空白不重置尾逗号候选（", }" 的空格段）
+				// 空白不重置尾逗号候选（", }" 的空格段），也不清缺值标记
+				// （"a": 1 的空格段）
 			default:
 				truncAt = -1
+				commaRun = false
+				needValue = false
 			}
 			b.WriteRune(r)
 		}
+		i += size
+	}
+	if commaRun {
+		b.Truncate(truncAt) // EOF 悬空逗号：与尾逗号同判，删（`[1,2,` → `[1,2]`）
+	}
+	if esc {
+		b.WriteString(`\\`) // EOF 悬挂 `\`：转义不完整，按字面量保留（#263 同口径）
+	}
+	if needValue { // "a":<EOF>——补值再闭合（#268）
+		b.WriteString("null")
 	}
 	repaired := b.String()
 	return closeUnclosed(repaired, scanOpenBrackets(repaired))
+}
+
+// hasHex4 判断 s 的前 4 个字节是否全为十六进制数字（\uXXXX 合法性判定）。
+func hasHex4(s string) bool {
+	if len(s) < 4 {
+		return false
+	}
+	for i := 0; i < 4; i++ {
+		c := s[i]
+		isHex := '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+		if !isHex {
+			return false
+		}
+	}
+	return true
 }
 
 // validEscape JSON 合法转义字符（\" \\ \/ \b \f \n \r \t \uXXXX）。
