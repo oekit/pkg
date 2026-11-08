@@ -286,6 +286,26 @@ func TestFirstN_Negative_FullTruncate(t *testing.T) {
 	}
 }
 
+// TestLastN_DocMatchesFirstN 钉住 #264：LastN 的文档声称「与 FirstN 的 n<0
+// 有意不同」描述的是 FirstN 修复前（#183 之前）的行为——现两者同口径，
+// 文档已修正，本用例把「n<=0 两函数逐字一致」钉成回归防线。
+func TestLastN_DocMatchesFirstN(t *testing.T) {
+	for _, n := range []int{0, -1, -100} {
+		if got, want := FirstN("abcdefghij", n), LastN("abcdefghij", n); got != want {
+			t.Errorf("n=%d: FirstN=%q != LastN=%q（文档口径：两者一致）", n, got, want)
+		}
+		if got, want := FirstN("abcdefghij", n, "..."), LastN("abcdefghij", n, "..."); got != want {
+			t.Errorf("n=%d: FirstN(…)=%q != LastN(…)=%q（文档口径：两者一致）", n, got, want)
+		}
+	}
+	if got := LastN("abcdefghij", 3); got != "hij" {
+		t.Errorf("LastN(abcdefghij,3) = %q, want \"hij\"", got)
+	}
+	if got := LastN("abcdefghij", 3, "..."); got != "...hij" {
+		t.Errorf("LastN(abcdefghij,3,...) = %q, want \"...hij\"", got)
+	}
+}
+
 // TestUnion_OrderStable 钉住 #187：Union 保序（先 first 后 second）——
 // 此前 map 迭代构造，每次调用顺序不同。
 func TestUnion_OrderStable(t *testing.T) {

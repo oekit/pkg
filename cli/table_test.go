@@ -128,3 +128,58 @@ func TestTable_NoHeader(t *testing.T) {
 		t.Errorf("数据行丢失，实际 =\n%s", buf.String())
 	}
 }
+
+// TestTable_ANSIColoredCellAlignment 钉住 #265：ANSI 转义序列不计入列宽——
+// 此前 `\x1b[32m` 的序列内字符被当可见字符（9 列），彩色单元格被判「已超宽」
+// 不补空格，后续列整体左移 7 列。
+func TestTable_ANSIColoredCellAlignment(t *testing.T) {
+	var buf bytes.Buffer
+	tbl := NewTable("状态", "名称")
+	tbl.Append("ok", "a")
+	tbl.Append("\x1b[32mok\x1b[0m", "b")
+	tbl.Render(&buf)
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("渲染了 %d 行，期望 3 行，实际 =\n%q", len(lines), buf.String())
+	}
+	// 三行第二列的显示起点必须一致（彩色行与纯文本行、表头同列）。
+	want := displayWidth("状态") + 2
+	for i, line := range lines {
+		needle := "名称"
+		if i > 0 {
+			needle = string(rune('a' + i - 1)) // "a" / "b"
+		}
+		at := displayWidth(line[:strings.Index(line, needle)])
+		if at != want {
+			t.Errorf("第 %d 行第二列显示起点 = %d，期望 %d，实际 = %q", i, at, want, line)
+		}
+	}
+}
+
+// TestDisplayWidth_ANSI 钉住 #265 的宽度口径：SGR/OSC/两字节转义全部零宽，
+// 未闭合的 CSI（截断的转义）同样不计宽。
+func TestDisplayWidth_ANSI(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want int
+	}{
+		{"纯文本不变", "ok", 2},
+		{"SGR 前景绿", "\x1b[32mok\x1b[0m", 2},
+		{"SGR 组合", "\x1b[1;32;40mok\x1b[0m", 2},
+		{"OSC 标题 BEL 结尾", "\x1b]0;title\x07ok", 2},
+		{"OSC 超链接 ST 结尾", "\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\", 4},
+		{"两字节转义", "\x1bMok", 2},
+		{"未闭合 CSI 截断", "\x1b[32m", 0},
+		{"串尾裸 ESC", "ok\x1b", 2},
+		{"中文加色", "\x1b[31m检查\x1b[0m", 4},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := displayWidth(c.in); got != c.want {
+				t.Errorf("displayWidth(%q) = %d，期望 %d", c.in, got, c.want)
+			}
+		})
+	}
+}

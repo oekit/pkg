@@ -76,7 +76,12 @@ func WithFileNameFallback(s string) FileNameOption {
 //  5. **空名 / 纯符号名回退**：清洗后为空，或通篇没有字母与数字（"***" → "___"）
 //     ⇒ 回退为 fallback（缺省 "file"）。纯符号名落盘无碍但对展示无意义，
 //     直接回退比留一串下划线干净。
-//  6. **超长截断**：按**字节**上限截断，且**保留扩展名**；截断点回落到
+//  6. **Windows 保留设备名改形**（#267）：主名（去扩展名）是 CON / PRN / AUX /
+//     NUL / COM1–COM9 / LPT1–LPT9（大小写不敏感）时加 "_" 前缀——这些名字在
+//     Windows 上是设备而非文件，带扩展名也照样命中（"con.txt" → "_con.txt"）。
+//     截断后再核一次：截断可能把主名削成保留名（"CONtract…txt" 卡预算 →
+//     "CON.txt"），命中同样改形并按同一上限收口。
+//  7. **超长截断**：按**字节**上限截断，且**保留扩展名**；截断点回落到
 //     rune 边界，不会产出半个 UTF-8 字符。
 //
 // 非 ASCII 字符（中日韩等）一律保留——展示名与存储名的核心诉求就是别把
@@ -88,6 +93,7 @@ func WithFileNameFallback(s string) FileNameOption {
 //	pathx.SanitizeFileName(`C:\Users\me\报告.txt`)      // "报告.txt"
 //	pathx.SanitizeFileName("a:b*c?.txt")               // "a_b_c_.txt"
 //	pathx.SanitizeFileName("...")                      // "file"（纯符号名回退）
+//	pathx.SanitizeFileName("CON")                      // "_CON"（设备名改形）
 //	pathx.SanitizeFileName("报告.txt",
 //		pathx.WithMaxFileNameLength(20))                // "报告.txt"（按字节卡）
 func SanitizeFileName(name string, opts ...FileNameOption) string {
@@ -102,10 +108,17 @@ func SanitizeFileName(name string, opts ...FileNameOption) string {
 	if !hasFileNameContent(cleaned) {
 		return cfg.fallback
 	}
+	cleaned = rewriteReservedDeviceName(cleaned)
 
 	limited := trimFileName(limitFileNameLength(cleaned, cfg.maxLength))
 	if !hasFileNameContent(limited) {
 		return cfg.fallback
+	}
+	// 截断会改主名（#267）：截断后主名可能恰好落成保留设备名（原主名以
+	// 保留名开头且被预算削短），再核一次并改形；改形加长按同一上限收口
+	// （保扩展名截断口径不变，前缀 "_" 保证不会再落回保留名）。
+	if isWindowsReservedDeviceName(fileNameStem(limited)) {
+		limited = trimFileName(limitFileNameLength("_"+limited, cfg.maxLength))
 	}
 	return limited
 }
@@ -218,6 +231,35 @@ func fileNameExt(s string) string {
 		return s[i:]
 	}
 	return ""
+}
+
+// fileNameStem 取主名（去扩展名）。
+func fileNameStem(s string) string {
+	return s[:len(s)-len(fileNameExt(s))]
+}
+
+// rewriteReservedDeviceName 把 Windows 保留设备名改形为 "_" 前缀
+// （CON → _CON，con.txt → _con.txt）——Windows 判的是去扩展名后的主名
+// 且大小写不敏感，故按主名大写比对。
+func rewriteReservedDeviceName(name string) string {
+	if isWindowsReservedDeviceName(fileNameStem(name)) {
+		return "_" + name
+	}
+	return name
+}
+
+// isWindowsReservedDeviceName 判断主名（大小写不敏感）是否 Windows 保留
+// 设备名（#267）：CON / PRN / AUX / NUL / COM1–COM9 / LPT1–LPT9。以这些名字
+// 创建文件会失败（ERROR_INVALID_NAME 一类）或打开到设备句柄；Windows 10 之后
+// 的上标数字形态（COM¹ 等）不在本判定内——覆盖主流九前缀 + 三裸名。
+func isWindowsReservedDeviceName(stem string) bool {
+	switch strings.ToUpper(stem) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	}
+	return false
 }
 
 // truncateFileNameBytes 按字节上限截断，且回落到完整 rune 边界。

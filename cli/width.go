@@ -58,7 +58,17 @@ const zwjText = "\u200d"
 // **变体选择符要按序列看**（#162）：U+FE0F（VS16）自身不占列，但它把前一个
 // 基字符从「文本呈现」切成「emoji 呈现」——⚠（U+26A0）单写是 1 列，⚠️
 // （U+26A0 + U+FE0F）是 2 列。只看单字符就会算错 ⇒ emoji 状态符号一列就右移。
+//
+// **ANSI 转义序列不计宽**（#265）：消费方给单元格上色是常态（本包自己不产出
+// 任何转义序列），ESC 自身在 Cc 区间算零宽没有错，但 `[32m` 这些序列内字符会
+// 被当可见字符计宽 ⇒ 彩色单元格被高估、后续列整体左移。先剥 CSI/OSC 再按
+// 可见文本计宽——emoji/ZWJ 逻辑不感知这层，一行不动。
 func displayWidth(s string) int {
+	return visibleWidth(stripANSI(s))
+}
+
+// visibleWidth 是剥离 ANSI 后的可见文本计宽（原 displayWidth 的 rune 循环）。
+func visibleWidth(s string) int {
 	w := 0
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
@@ -361,3 +371,62 @@ var vs16BaseRanges = [...]uint32{
 var regionalIndicatorRanges = [...]uint32{
 	0x1F1E6, 0x1F1FF,
 }
+
+// stripANSI 剥掉 ANSI/ECMA-48 转义序列，返回纯可见文本（#265）。
+//
+// 覆盖终端里实际出现的两类序列：
+//
+//   - CSI（Control Sequence Introducer）：`ESC [` 起、终止字节 0x40–0x7E 止
+//     （SGR 上色 `\x1b[32m`、光标移动 `\x1b[2J` 等全部走这里）；
+//   - OSC（Operating System Command）：`ESC ]` 起、`BEL`（0x07）或
+//     `ST`（`ESC \`）止（终端标题、超链接等）。
+//
+// 其余 ESC 开头的两字节序列（ESC 7、ESC M 等）剥掉 ESC 与其后一个字节；
+// ESC 落在串尾时只剥 ESC 自身。CSI 无终止字节（截断）时整段丢弃——它不渲染
+// 任何可见内容，保它只会把宽度算错。纯 ASCII 无 ESC 的输入走快路径原样返回。
+func stripANSI(s string) string {
+	if !strings.ContainsRune(s, esc) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c != esc {
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		switch {
+		case i+1 < len(s) && s[i+1] == '[': // CSI：ESC [ … 终止字节 0x40–0x7E
+			j := i + 2
+			for j < len(s) && (s[j] < 0x40 || s[j] > 0x7e) {
+				j++
+			}
+			if j < len(s) {
+				j++ // 终止字节一并剥掉
+			}
+			i = j
+		case i+1 < len(s) && s[i+1] == ']': // OSC：ESC ] … BEL / ESC \
+			j := i + 2
+			for j < len(s) {
+				if s[j] == 0x07 {
+					j++
+					break
+				}
+				if s[j] == esc && j+1 < len(s) && s[j+1] == '\\' {
+					j += 2
+					break
+				}
+				j++
+			}
+			i = j
+		default: // 其余两字节转义（ESC 7 / ESC M / ESC ( 的首字节等）：剥 ESC + 1 字节
+			i += 2
+		}
+	}
+	return b.String()
+}
+
+// esc 是 ANSI 转义序列的引导字节（ESC，U+001B）。
+const esc = 0x1b

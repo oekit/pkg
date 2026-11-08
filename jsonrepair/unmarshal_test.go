@@ -133,9 +133,10 @@ func TestUnmarshalLenient_GarbageStaysError(t *testing.T) {
 	}
 }
 
-// TestUnmarshalLenient_PartialObjectAndArray 截断形态矩阵：字符串中段 /
-// 悬空冒号 / 悬空逗号闭合正确。纯括号截断（{"a":{"b":[1）由保守链的
-// Repair 括号闭合抢先修复，partial=false（无内容缺失）。
+// TestUnmarshalLenient_PartialObjectAndArray 截断形态矩阵：字符串中段闭合正确；
+// 悬空冒号/悬空逗号自 #262/#268 起由保守链的 Repair 确定性修复（连续尾逗号一次
+// 清空、EOF 悬空逗号删除、缺值补 null），partial=false——partial=true 保留给
+// Repair 无能为力的形态（字符串中段截断）。
 func TestUnmarshalLenient_PartialObjectAndArray(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -144,9 +145,9 @@ func TestUnmarshalLenient_PartialObjectAndArray(t *testing.T) {
 		wantPar bool
 	}{
 		{"对象截断在字符串", `{"a":"b","c":"tr`, `{"a":"b","c":"tr"}`, true},
-		{"数组尾逗号", `[1,2,`, `[1,2]`, true},
-		{"数组尾空白逗号", "[1,2, \n", "[1,2]", true},
-		{"冒号截断", `{"a":`, `{"a":null}`, true},
+		{"数组尾逗号", `[1,2,`, `[1,2]`, false},
+		{"数组尾空白逗号", "[1,2, \n", "[1,2]", false},
+		{"冒号截断", `{"a":`, `{"a":null}`, false},
 		{"键位截断", `{"a":"b","c"`, `{"a":"b","c":null}`, true},
 		{"纯括号截断", `{"a":{"b":[1`, `{"a":{"b":[1]}}`, false},
 	}
