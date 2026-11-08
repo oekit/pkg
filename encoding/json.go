@@ -69,14 +69,41 @@ func UnmarshalFromStringUseNumber(s string, v any) error {
 }
 
 // UnmarshalFromReader 从 Reader 读取 JSON 并反序列化到 v。
+//
+// 流式解析，不把整个输入攒进内存：错误摘录只需要开头 256 字节，此前用
+// strings.Builder 做 Tee 把**每个流过的字节**都复制下来，成功路径也照攒
+// （Builder 倍增扩容 + 一次 String() 拷贝 ≈ 输入的 6 倍），8 MiB 报文吃掉
+// ~50 MiB 堆（[#260]）。现在只驻留前 maxExcerpt 字节。
+//
+// 与 Unmarshal 语义一致：尾部残留数据视为错误。
 func UnmarshalFromReader(reader io.Reader, v any) error {
-	var buf strings.Builder
-	teeReader := io.TeeReader(reader, &buf)
-	decoder := json.NewDecoder(teeReader)
+	head := &excerptWriter{max: maxExcerpt}
+	decoder := json.NewDecoder(io.TeeReader(reader, head))
 	if err := unmarshalStrict(decoder, v); err != nil {
-		return formatError(buf.String(), err)
+		return formatError(string(head.buf), err)
 	}
 	return nil
+}
+
+// maxExcerpt 错误摘录上限：完整原文会把请求体里的 token/密码等敏感字段
+// 带进错误日志，大 payload 也会撑爆日志。
+const maxExcerpt = 256
+
+// excerptWriter 只保留前 max 字节的 io.Writer——TeeReader 的搭档。
+// 超出 max 后纯计数直通，不再复制任何字节进 buf。
+type excerptWriter struct {
+	buf []byte
+	max int
+}
+
+func (w *excerptWriter) Write(p []byte) (int, error) {
+	if room := w.max - len(w.buf); room > 0 {
+		if len(p) < room {
+			room = len(p)
+		}
+		w.buf = append(w.buf, p[:room]...)
+	}
+	return len(p), nil
 }
 
 func unmarshalUseNumber(decoder *json.Decoder, v any) error {
@@ -103,10 +130,9 @@ func unmarshalStrict(decoder *json.Decoder, v any) error {
 // errTrailingData 尾部残留数据（非单一 JSON 值）。
 var errTrailingData = errors.New("invalid character after top-level value: input must be a single JSON value")
 
-// formatError 构造带输入摘录的错误。摘录截断到 256 字节：完整原文会把
-// 请求体里的 token/密码等敏感字段带进错误日志，大 payload 也会撑爆日志。
+// formatError 构造带输入摘录的错误。摘录截断到 maxExcerpt（256）字节：
+// 理由见该常量。
 func formatError(v string, err error) error {
-	const maxExcerpt = 256
 	excerpt := v
 	if len(excerpt) > maxExcerpt {
 		excerpt = excerpt[:maxExcerpt] + "...(truncated)"

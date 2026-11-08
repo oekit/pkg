@@ -45,9 +45,23 @@ func (q *Queue[T]) Take() (T, bool) {
 }
 
 // TryTake 尝试出队，不阻塞；无元素或已关闭返回零值与 false。
+//
+// 关闭语义（[#258]）：**关闭即不再有数据**——已关闭时即使还有余量也返回
+// false，不再出队。此前实现无条件 popLocked，与本文档相反：调用方按
+// 「关闭即空」写收尾逻辑，会在 Close 后多拿到一条元素（重复处理最后一条，
+// 或 defer Close 之后仍把这条数据当有效值投递出去）。
+//
+// 与 Take 的分工是刻意的：Take 是阻塞消费者的排空语义——关闭后仍会取完
+// 余量才返回 false（见 Close 文档），TestQueue_ConcurrentNoLoss 这类
+// 「先 Close 再让消费者收尾」的用法依赖它；TryTake 是非阻塞轮询语义，
+// 关闭位优先于余量。
 func (q *Queue[T]) TryTake() (T, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.closed {
+		var zero T
+		return zero, false
+	}
 	return q.popLocked()
 }
 
@@ -58,8 +72,12 @@ func (q *Queue[T]) Len() int {
 	return len(q.items) - q.head
 }
 
-// Close 关闭队列：唤醒全部阻塞的 Take（取完余量后返回 false）；
-// 幂等。关闭后 Put 会 panic。
+// Close 关闭队列：唤醒全部阻塞的 Take（取完余量后返回 false）；幂等。
+// 关闭后 Put 会 panic。
+//
+// 关闭后两个取出入口的口径（[#258]）：Take 继续排空余量，取空后返回
+// false；TryTake 一律立即返回 false，不再出队（关闭即不再有数据）。
+// 两份文档此前的表述互相矛盾，这里统一写死。
 func (q *Queue[T]) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()

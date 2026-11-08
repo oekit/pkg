@@ -222,7 +222,9 @@ func float64ToUint64Safe(f float64) uint64 {
 }
 
 // AnyToUint64 任意类型转 uint64，无法转换返回 0。
-// 注意：传入负数会按位重新解释为大正数（uint 语义），调用方应自行确保非负。
+// 注意：传入有符号整数会按位重新解释为大正数（uint 语义），调用方应自行
+// 确保非负；json.Number 与浮点同口径，负数/溢出按「无法转换」返回 0
+// （[#256]），不做按位重解释。
 func AnyToUint64(v any) uint64 {
 	switch val := v.(type) {
 	case nil:
@@ -263,14 +265,19 @@ func AnyToUint64(v any) uint64 {
 		v, _ := strconv.ParseUint(string(val), 10, 64)
 		return v
 	case json.Number:
+		// 与同族 float32/float64 分支同口径（[#256]）：复用
+		// float64ToUint64Safe 统一钳制，NaN/±Inf/负数/越界一律 0。
+		// 此前这里直接 uint64(fv)，1e22（encoding.Unmarshal 的 UseNumber
+		// 主路径）会产出 uint64 饱和最大值——看起来像合法值，`if id > 0`
+		// 之类校验全部通过；而同一个值走 float64 分支是 0。
 		if iv, err := val.Int64(); err == nil && iv > 0 {
 			return uint64(iv)
 		}
 		fv, err := val.Float64()
-		if err != nil || fv <= 0 {
+		if err != nil {
 			return 0
 		}
-		return uint64(fv)
+		return float64ToUint64Safe(fv)
 	}
 	return 0
 }

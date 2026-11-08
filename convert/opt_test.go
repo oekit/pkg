@@ -158,3 +158,71 @@ func TestOptJSONNumber(t *testing.T) {
 		t.Errorf("OptStr(missing) = %v, want nil", *got)
 	}
 }
+
+// TestOptBool_MatchesAnyToBool 回归（[#255]）：OptBool 与 AnyToBool 对同一
+// 值必须给同一结论。此前 anyToBoolOK 的数值/json.Number 分支经 AnyToInt64
+// 中转，|v|<1 的浮点被截断成 0 ⇒ OptBool(0.5) 返回 &false 而
+// AnyToBool(0.5) 是 true——不仅值错了，还把「有一个值」降级成「没有这个
+// 字段」（nil 的第二层语义），两条错误叠加。
+func TestOptBool_MatchesAnyToBool(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      any
+		want    bool // AnyToBool 的答案（OptBool 必须同答案）
+		wantNil bool // OptBool 报「没有这个值」
+	}{
+		// #255 复现样本：(0,1) 恰是概率、比例、阈值字段的典型取值
+		{"float64 0.5", 0.5, true, false},
+		{"float64 -0.9", -0.9, true, false},
+		{"json.Number 0.5", json.Number("0.5"), true, false},
+		{"int 0", 0, false, false},
+		{"float64 0", 0.0, false, false},
+		{"json.Number 0", json.Number("0"), false, false},
+		// 整数侧回归：非零即真 / 零即假不得被带偏
+		{"int 1", 1, true, false},
+		{"int -1", -1, true, false},
+		{"uint64 最大值", uint64(math.MaxUint64), true, false},
+		{"int64 最小值", int64(math.MinInt64), true, false},
+		{"float32 0.25", float32(0.25), true, false},
+		{"json.Number -0.9", json.Number("-0.9"), true, false},
+		{"json.Number 非法", json.Number("abc"), false, false},
+		// 「无法表示为 bool」⇒ nil（不是 &false）
+		{"nil", nil, false, true},
+		{"string abc", "abc", false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := AnyToBool(tt.in); got != tt.want {
+				t.Errorf("AnyToBool(%#v) = %v, want %v", tt.in, got, tt.want)
+			}
+			got := OptBool(tt.in)
+			if tt.wantNil {
+				if got != nil {
+					t.Errorf("OptBool(%#v) = %v, want nil", tt.in, *got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("OptBool(%#v) = nil, want &%v", tt.in, tt.want)
+			}
+			if *got != tt.want {
+				t.Errorf("OptBool(%#v) = %v, want %v（两个入口对同一值必须同答案）", tt.in, *got, tt.want)
+			}
+		})
+	}
+}
+
+// TestOptBool_NotViaIntTruncation 机制断言（同 TestAnyToBool_NotViaIntTruncation
+// 的手法）：只要实现回到「先转整数再比零」，这些输入就翻红——比逐条取值
+// 更直接地钉住根因。
+func TestOptBool_NotViaIntTruncation(t *testing.T) {
+	for _, v := range []any{0.5, -0.9, float32(0.5), json.Number("0.5")} {
+		if AnyToInt64(v) != 0 {
+			t.Fatalf("前提不成立：AnyToInt64(%#v) 应为 0（否则本用例失去判别力）", v)
+		}
+		b := OptBool(v)
+		if b == nil || !*b {
+			t.Errorf("OptBool(%#v) = %v, want &true（整数截断路径复发）", v, b)
+		}
+	}
+}

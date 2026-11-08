@@ -47,6 +47,10 @@ func OptStr(v any) *string {
 // v 为 nil、或无法表示为 bool（如 "abc"）时返回 nil——**不**返回 &false：
 // 「有一个值为 false 的字段」与「没有这个字段」不是一回事，把前者伪装成
 // 后者就是把不可用值当成了可用值。
+//
+// 数值判定与 AnyToBool 共用同一口径（非零为 true，经 float64 比较，
+// [#255]）：OptBool(0.5) 与 AnyToBool(0.5) 都是 true，不会一边 true
+// 一边 &false。
 func OptBool(v any) *bool {
 	b, ok := anyToBoolOK(v)
 	if !ok {
@@ -155,6 +159,12 @@ func anyToInt64OK(v any) (int64, bool) {
 }
 
 // anyToBoolOK 与 AnyToBool 同口径，但**额外报告能否转换**。
+//
+// 数值与 json.Number 分支**不得**经整数中转（[#255]，#205 的同源漏网）：
+// AnyToInt64 会把 |v|<1 的浮点截断成 0，于是 OptBool(0.5) 判成 &false——
+// 与 AnyToBool(0.5)=true 对同一值给出相反结论，而且后果更重：nil/非 nil
+// 还叠加了「字段存不存在」的第二层语义。判定与 AnyToBool 逐字共用
+// （AnyToFloat64 != 0），两个入口对任何值都不可能再分叉。
 func anyToBoolOK(v any) (bool, bool) {
 	switch val := v.(type) {
 	case nil:
@@ -162,13 +172,13 @@ func anyToBoolOK(v any) (bool, bool) {
 	case bool:
 		return val, true
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
-		return AnyToInt64(val) != 0, true
+		return AnyToFloat64(val) != 0, true
 	case string:
 		return strToBoolOK(val)
 	case []byte:
 		return strToBoolOK(string(val))
 	case json.Number:
-		return AnyToInt64(val) != 0, true
+		return AnyToFloat64(val) != 0, true
 	}
 	return false, false
 }
