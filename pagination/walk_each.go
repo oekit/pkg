@@ -71,7 +71,7 @@ var ErrNilYielder = pkgerrors.NewBizError(1, "pagination: yield 不能为 nil")
 //	    },
 //	)
 func WalkEach[T any](ctx context.Context, budget int, fetch func(ctx context.Context, page int) ([]T, error), yield func(T) bool) error {
-	if ctx == nil { //nolint:staticcheck // nil ctx 显式兜底 Background（仓规总则②）
+	if ctx == nil { // nil ctx 显式兜底 Background（仓规总则②）
 		ctx = context.Background()
 	}
 	if fetch == nil {

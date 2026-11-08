@@ -226,7 +226,7 @@ func TestWalkEach_FetchReceivesWalkCtx(t *testing.T) {
 		t.Fatal("fetch 应回收 WalkEach 入参的同一 ctx（ctx 贯穿）")
 	}
 	// nil ctx 兜底（仓规总则②：nil = 显式回退默认值）
-	var nilCtx context.Context = nil //nolint:staticcheck // 契约：nil ctx 兜底 Background
+	var nilCtx context.Context = nil
 	calls := 0
 	err := WalkEach(nilCtx, 1, func(c context.Context, _ int) ([]int, error) {
 		calls++
