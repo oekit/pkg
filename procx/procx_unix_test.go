@@ -5,12 +5,19 @@ package procx
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/oekit/pkg/shellx"
 )
 
 // groupMembers 用 pgrep -g 列出进程组内所有存活成员（树的超集口径）。
@@ -152,5 +159,262 @@ func TestRun_KillsAfterGraceWhenTermIgnored(t *testing.T) {
 	}
 	if elapsed > 8*time.Second {
 		t.Fatalf("收场耗时 %v，超出宽限+传播窗口太多", elapsed)
+	}
+}
+
+// ---- 以下为 pkg#284 验收判据的补强用例：跨组逃逸孙进程、Command 形态、
+// ---- Option 契约与正常退出残留清扫（原 4 判据用例保持不动）----
+
+// pidAlive 用 kill(pid, 0) 判存在性：nil=存在，EPERM=存在但无权限（也算存在），
+// 只有 ESRCH 才是「不存在」。不用外部 pgrep（CI 上多一层子进程噪声）。
+func pidAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("等待 %s 出现超时（5s）", path)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func readPidFile(t *testing.T, path string) int {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读 pidfile %s: %v", path, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid <= 0 {
+		t.Fatalf("pidfile %s 内容非法: %q", path, string(b))
+	}
+	return pid
+}
+
+func waitPidGone(t *testing.T, pid int, d time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for pidAlive(pid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("判据失败：pid %d 在 %v 后仍存活", pid, d)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// readPgid 读一个进程当前所属进程组：linux 走 /proc/<pid>/stat（第 5 字段
+// pgrp），darwin 无 /proc 走 ps(1)。仅供测试断言使用。
+func readPgid(t *testing.T, pid int) int {
+	t.Helper()
+	switch runtime.GOOS {
+	case "linux":
+		b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err != nil {
+			t.Fatalf("读 /proc/%d/stat: %v", pid, err)
+		}
+		i := bytes.LastIndexByte(b, ')')
+		if i < 0 {
+			t.Fatalf("/proc/%d/stat 形状非法", pid)
+		}
+		fields := strings.Fields(string(b[i+1:]))
+		// 括号后：fields[0]=state、fields[1]=ppid、fields[2]=pgrp
+		if len(fields) < 3 {
+			t.Fatalf("/proc/%d/stat 字段不足", pid)
+		}
+		v, err := strconv.Atoi(fields[2])
+		if err != nil {
+			t.Fatalf("解析 pgrp: %v", err)
+		}
+		return v
+	case "darwin":
+		out, err := exec.Command("ps", "-o", "pgid=", "-p", strconv.Itoa(pid)).Output()
+		if err != nil {
+			t.Fatalf("ps 读 pid=%d 的 pgid: %v", pid, err)
+		}
+		v, err := strconv.Atoi(strings.TrimSpace(string(out)))
+		if err != nil {
+			t.Fatalf("解析 ps pgid 输出 %q: %v", string(out), err)
+		}
+		return v
+	default:
+		t.Skipf("readPgid 未适配 %s", runtime.GOOS)
+		return 0
+	}
+}
+
+// waitOwnGroup 等孙进程真正进入自建进程组。perl 在 fork 与 setpgrp 之间有
+// 窗口，过早读 pgid 会读到父 shell 的组，造成误判——轮询到 pgid==pid 为止。
+func waitOwnGroup(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if readPgid(t, pid) == pid {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pid %d 未进入自建进程组（跨组前置自证失败）", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// crossGroupGrandchildScript 生成「真孙进程」脚本：后台 perl setpgrp 换组后
+// exec sleep 300（孙进程跨组逃逸、父 sh 常驻 wait），孙 pid 落 pidfile。
+// macOS 没有 setsid(1)，perl 是两平台（darwin/linux）都自带的最稳换组手段。
+func crossGroupGrandchildScript(t *testing.T) (script, pidfile string) {
+	t.Helper()
+	pidfile = filepath.Join(t.TempDir(), "grandchild.pid")
+	script = fmt.Sprintf(`perl -e 'setpgrp(0,0); exec "sleep", "300"' & echo $! > %s; wait`, shellx.Quote(pidfile))
+	return script, pidfile
+}
+
+// 验收 1（正对照，跨组加强）：孙进程 setpgrp 换出进程组（组击杀够不到），
+// ctx 取消后必须仍然死亡——证明父链清扫真的追到了「逃出组」的守护化进程。
+// 纯 killpg 口径下本用例失败（孙进程残留），这正是它要钉住的行为。
+func TestRun_CancelKillsCrossGroupGrandchild(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	script, pidfile := crossGroupGrandchildScript(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type outcome struct {
+		res *Result
+		err error
+	}
+	ch := make(chan outcome, 1)
+	go func() {
+		res, err := Run(ctx, "/bin/sh", []string{"-c", script})
+		ch <- outcome{res, err}
+	}()
+
+	waitForFile(t, pidfile)
+	gc := readPidFile(t, pidfile)
+	waitOwnGroup(t, gc) // 前置自证：孙进程真的换了组（判据量的是「跨组逃逸」）
+	if !pidAlive(gc) {
+		t.Fatal("前置自证失败：孙进程未存活")
+	}
+	time.Sleep(100 * time.Millisecond) // 让启动稳定后再取消
+
+	cancel()
+	select {
+	case out := <-ch:
+		if out.err == nil || !errors.Is(out.err, context.Canceled) {
+			t.Fatalf("ctx 取消导致的终止应返回 ctx.Err()，got err=%v", out.err)
+		}
+		if out.res == nil {
+			t.Fatal("取消终止也应返回 Result（已缓冲的部分输出）")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Run 在 ctx 取消后 15s 未返回")
+	}
+	waitPidGone(t, gc, 5*time.Second) // 判据：跨组孙进程不存在
+}
+
+// Command 形态 drop-in：echo 逐字可替换。
+func TestCommand_DropInEcho(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := Command(ctx, "/bin/sh", "-c", "echo ok")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("CombinedOutput: %v", err)
+	}
+	if strings.TrimSpace(string(out)) != "ok" {
+		t.Fatalf("期望输出 ok，got %q", string(out))
+	}
+}
+
+// Command 形态的跨组孙进程清树（unix）。
+func TestCommand_CancelKillsCrossGroupGrandchild(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	script, pidfile := crossGroupGrandchildScript(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := Command(ctx, "/bin/sh", "-c", script)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, pidfile)
+	gc := readPidFile(t, pidfile)
+	waitOwnGroup(t, gc)
+	time.Sleep(100 * time.Millisecond)
+
+	cancel()
+	werr := make(chan error, 1)
+	go func() { werr <- cmd.Wait() }()
+	select {
+	case <-werr:
+	case <-time.After(15 * time.Second):
+		t.Fatal("Command 形态 Wait 在 ctx 取消后 15s 未返回")
+	}
+	waitPidGone(t, gc, 5*time.Second)
+}
+
+// Run 正常退出后的组内残留清扫：主进程已退出，组内幸存的孙进程 = 泄漏，
+// 必须被收场（此前口径「不在承诺内」，本用例把承诺收进来）。
+func TestRun_ReapsSameGroupSurvivorsAfterNormalExit(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	pidfile := filepath.Join(t.TempDir(), "survivor.pid")
+	script := fmt.Sprintf(`sleep 300 >/dev/null 2>&1 & echo $! > %s; exit 0`, shellx.Quote(pidfile))
+	res, err := Run(context.Background(), "/bin/sh", []string{"-c", script})
+	if err != nil {
+		t.Fatalf("正常退出应无错误（残留清扫不影响退出语义）: %v", err)
+	}
+	if res == nil || res.ExitCode != 0 {
+		t.Fatalf("ExitCode 应为 0，got %+v err=%v", res, err)
+	}
+	gc := readPidFile(t, pidfile)
+	waitPidGone(t, gc, 5*time.Second)
+}
+
+// 仓规总则①：负宽限期构造期 fail-fast（在选项构造点 panic，不等到应用点）。
+func TestWithGrace_NegativePanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("负宽限期应构造期 panic（仓规总则① fail-fast）")
+		}
+	}()
+	WithGrace(-time.Second)
+}
+
+// 仓规总则②：nil 选项 = 显式回退默认值，不算非法。
+func TestRun_NilOptionFallsBackToDefaults(t *testing.T) {
+	res, err := Run(context.Background(), "/bin/sh", []string{"-c", "echo hi"}, nil)
+	if err != nil {
+		t.Fatalf("nil 选项不应报错: %v", err)
+	}
+	if res == nil || res.ExitCode != 0 || strings.TrimSpace(string(res.Stdout)) != "hi" {
+		t.Fatalf("结果不符: %+v", res)
+	}
+}
+
+// 预取消 ctx：Start 不会发生，返回 (nil, ctx.Err())。
+func TestRun_PreCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res, err := Run(ctx, "/bin/sh", []string{"-c", "echo nope"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("预取消 ctx 的 Run 应返回 context.Canceled，got %v", err)
+	}
+	if res != nil {
+		t.Fatalf("未启动的进程应无 Result，got %+v", res)
 	}
 }
