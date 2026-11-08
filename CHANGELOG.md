@@ -1,3 +1,15 @@
+## [v0.37.7] — 2026-11-08
+
+- fix(ctxscope): With/From 写读对称——接口类型 Key 显式存 nil（`With(ctx, k, nil)`）此前 From 读不回（ok=false）：无类型 nil 断言到接口 T 恒失败，「显式无值」与「从未写入」不可区分，而接口正是本包主用例（SessionScope/角色/追踪 sink）。改内部 `entry[T]` 指针载体（nil 值也有非 nil 载体）：存 nil 读回 (零值, true)、MustFrom 对存 nil 不 panic（nil 是显式合法值）；绕过 With 直写 context.WithValue 的值载体不是 entry，From/IsSet 一律按「不存在」处理；新增 IsSet 存在性糖（含显式 nil）（#245）
+- fix(bloomx): New 的 fpRate 归一闸门补 NaN/±Inf——NaN 与任何值比较均为 false，漏过 `fpRate<=0||fpRate>=1` 后 log(NaN)=NaN ⇒ 两个 clamp 比较同样不命中 ⇒ uint64(NaN)=0 造出 0 位过滤器，Add/Test 的掩码 `(h1+i*h2)&(m-1)` 退化为全 1，首次落位即越界 panic（一次 `New(n, math.NaN())` 造出任何写入都 panic 的过滤器）；归一后的 m 再补有限性兜底（fpRate∈(0,1)、n 有限正 ⇒ 理论不可达，防 uint64(NaN) 渗进位数组长度计算）（#248）
+- fix(strmap): Str2Str.LoadFromSlice 失败原子性——两段式编排（strStore.Load 先换缓冲 → strMap.LoadFromSlice 再校验）第二段失败（重复键）不回滚：strMap 仍持旧 offset，Get 用旧 offset 读**新**缓冲，旧 key 静默取到别的 value（合法但错误的数据，无任何错误信号；失败后一次合法重载即恢复，损坏限于「失败那一刻到下次合法重载之间」）。改为先在临时 strStore 上打包、strMap 建索引成功后才整体提交——失败时两组件都保持旧表原样（StrMap.LoadFromSlice 自身先检测后变更，不受影响）（#249）
+- fix(cache): SingleFlightCache 在「前置 Peek 与内层 load 自检之间有并发写入」时一次读被计成 hit+miss 两次——pkg#90 的修复只抑制了加载路径的未命中计数（countMiss=false），load() 的命中分支仍无条件计 hit：前置 Peek（计 1 miss）与内层自检之间该 key 被并发写入（Set/刷新器/另一后端回填）时，自检发现条目存在且未过期 ⇒ 补计 1 hit，同一次逻辑读计成两次，命中率被系统性抬高（违背 interface.go「一次读恰好计入命中或未命中之一」）。命中分支同受 countMiss 门控；noMissLoader/getOrLoadNoMiss/Stats()/interface.go 的口径注释同步为「未命中与命中都不重计」（#250）
+- fix(mathx): WilsonCI 负 z 归一 |z|——负 z（取单侧下界的常见写法 `z=-1.96`）让 half 带符号，产出 lo>hi 的颠倒区间且不报错（实测 WilsonCI(5,10,-1.96)=(0.763,0.237)）：下游 `lo<=p&&p<=hi` 判据静默全 false，比例/成功率/转化率类告警该报不报。z 按绝对值参与计算（center 只用 z² 本就对称），负 z 与对应正 z 逐位等价、恒有 lo<=hi；NaN/±Inf z 仍返回 (0,0) 零区间（#251）
+- fix(pathx): MatchesPath 非法 pattern 可判定 + SanitizeRel 盘符闸门按输出首段——两处独立修复：①MatchesPath 对语法非法 pattern（未闭合字符类 `[abc`）吞掉 ErrBadPattern 恒按「不匹配」处理，拒绝名单用法（`if MatchesPath(deny, p) { return errDenied }`）下配置写错一个 `[` 整条规则静默失效＝安全面 fail-open 且无日志线索；新增 MatchesPathStrict（错误可 errors.Is(ErrBadPattern) 判定、文本带出问题 pattern）与 ValidatePattern（配置加载期 fail-fast 预检），MatchesPath 保持签名与宽松口径、文档明示该语义（#252）。②SanitizeRel 盘符闸门此前按输入下标 i==0 判，"." 与空段 continue 后真正落为输出首段的段其输入下标已非 0，`./C:/x`、`.//C:/x` 绕过放行成盘符绝对路径（Windows 上落盘/再拼接直接越出目标目录）；判定移到 append 处（len(out)==0 即将落为输出首段），`..` 抵消后盘符重新成为首段的形态（`C:/../x`、`a/../C:/x`）同样被拒；盘符不在输出首段时仍按普通段名放行（`a/C:/x` 口径不变）（#253）
+- fix(stringx): MaskJSONFields 对 JSON null 判空——null 是合法 JSON，Unmarshal 把 nil 写进 map 且 err==nil（解析错误分支拦不住），随后写 map panic（assignment to entry in nil map）；同批输入里数组被正确拒绝、null 却崩。脱敏常在日志/错误处理旁路上调用，panic 会盖掉真正的错误、把可恢复失败变成进程崩溃。null 与 `{}` 同口径：无字段可脱敏，原样返回（#254）
+
+关联问题单：pkg#245、pkg#248、pkg#249、pkg#250、pkg#251、pkg#252、pkg#253、pkg#254。
+
 ## [v0.37.6] — 2026-11-08
 
 - fix(jsonrepair): Repair 连续尾逗号一次清空——此前 truncAt 被同段第二个逗号覆盖，`{"a":1,,}` 只删一个、单次输出仍是非法 JSON（`{"a":1,}`），要修两轮以上才收敛；现在连续逗号段合并/整段删除一次到位，值间连续逗号（`{"a":1,,,"b":2}`）同样合并；EOF 悬空逗号（`[1,2,` → `[1,2]`）与尾逗号同判（#262）

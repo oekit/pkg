@@ -336,3 +336,108 @@ func TestSingleFlightCache_Stats_ConcurrentMissCounted(t *testing.T) {
 		t.Fatalf("%d 次并发未命中应计 %d 次未命中，got %+v", n, n, s)
 	}
 }
+
+// TestSingleFlightCache_Stats_ConcurrentWriteNotDoubleCounted 钉住 #250：
+// 前置 Peek 与内层 load 自检之间有并发写入时，同一次逻辑读不得被计成
+// hit+miss 两次。
+//
+// 缺陷形态（确定性注入）：注入时钟在第 2 次 now()——即 load 路径取时钟、
+// 尚未持锁——写入 key，精确制造「前置 Peek 与内层 load 自检之间有并发
+// 写入者」的窗口。前置 Peek 计 1 次 miss；内层 load 自检发现条目已存在
+// 且未过期，命中分支**无条件**补计 1 次 hit ⇒ 一次读被计成两次（契约
+// interface.go：「一次读恰好计入命中或未命中之一」）。pkg#90 的修复
+// （countMiss=false 不计 miss）只覆盖了未命中侧，命中侧仍漏。
+func TestSingleFlightCache_Stats_ConcurrentWriteNotDoubleCounted(t *testing.T) {
+	ctx := context.Background()
+	base := time.Now()
+	v := "concurrent-write"
+
+	var nowCalls atomic.Int64
+	var injected atomic.Bool
+	var inner *LocalCache[string]
+	inner = NewLocalCache(LocalConfig[string]{
+		TTL: time.Minute,
+		Now: func() time.Time {
+			// 第 1 次 now()：前置 Peek；第 2 次：内层 load 取时钟（尚未持锁）
+			// ⇒ 此刻注入并发写入。Set 内部的 now() 调用由 injected 标记放行。
+			if !injected.Load() && nowCalls.Add(1) == 2 {
+				injected.Store(true)
+				if err := inner.Set(ctx, "k", &v); err != nil {
+					t.Errorf("注入写入: %v", err)
+				}
+			}
+			return base
+		},
+	})
+	t.Cleanup(func() { _ = inner.Close(context.Background()) })
+	sf := NewSingleFlightCache[string](inner)
+
+	got, err := sf.GetOrLoad(ctx, "k")
+	if err != nil {
+		t.Fatalf("GetOrLoad: %v", err)
+	}
+	if got == nil || *got != v {
+		t.Fatalf("并发写入后的加载自检应命中新值，got %v", got)
+	}
+	if !injected.Load() {
+		t.Fatal("注入未生效——测试自身失效")
+	}
+
+	s := inner.Stats()
+	if total := s.Hits + s.Misses; total != 1 {
+		t.Fatalf("契约违规：一次逻辑读应恰好计入命中或未命中之一（#250），实际 hits=%d misses=%d total=%d", s.Hits, s.Misses, total)
+	}
+	if s.Misses != 1 || s.Hits != 0 {
+		t.Fatalf("前置 Peek 已计这次读为未命中，加载路径不得补计命中：got %+v", s)
+	}
+}
+
+// TestSingleFlightCache_Stats_ConcurrentWriteStress 真实并发版 #250：一个
+// goroutine 反复 GetOrLoad 冷 key，另一个并发 Set 同一 key——任何一轮出现
+// 「一次读计入 hit+miss 两次」即契约违规。
+func TestSingleFlightCache_Stats_ConcurrentWriteStress(t *testing.T) {
+	inner := NewLocalCache(LocalConfig[string]{TTL: 0})
+	t.Cleanup(func() { _ = inner.Close(context.Background()) })
+	sf := NewSingleFlightCache[string](inner)
+
+	ctx := context.Background()
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		i := 0
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			i++
+			w := "w"
+			_ = inner.Set(ctx, "k", &w)
+		}
+	}()
+
+	violations := 0
+	for round := 0; round < 400; round++ {
+		_ = inner.Del(ctx, "k")
+		before := inner.Stats()
+		if _, err := sf.GetOrLoadWithSource(ctx, "k", func(context.Context, string) (*string, error) {
+			x := "loaded"
+			return &x, nil
+		}); err != nil {
+			t.Fatalf("GetOrLoadWithSource: %v", err)
+		}
+		after := inner.Stats()
+		if dH, dM := after.Hits-before.Hits, after.Misses-before.Misses; dH+dM != 1 {
+			violations++
+		}
+	}
+	close(stop)
+	wg.Wait()
+
+	if violations > 0 {
+		t.Fatalf("400 轮并发中有 %d 轮出现「一次读计入 hit+miss 两次」（#250）", violations)
+	}
+}

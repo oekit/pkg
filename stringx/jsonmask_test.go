@@ -50,3 +50,50 @@ func TestMaskJSONFieldsRawError(t *testing.T) {
 		t.Fatalf("error must unwrap to *json.SyntaxError, got %T", err)
 	}
 }
+
+// JSON null：合法 JSON、解出 nil map（err==nil，错误分支拦不住）——旧实现
+// 直接写 nil map panic（assignment to entry in nil map）。钉住 #254：null
+// 与 `{}` 同口径（无字段可脱敏，原样返回）；对照组：数组仍按解析失败拒绝。
+func TestMaskJSONFields_NullInput(t *testing.T) {
+	masks := map[string]string{"password": "***"}
+
+	out, err := MaskJSONFields([]byte("null"), masks)
+	if err != nil {
+		t.Fatalf("null 输入不应报错, got %v", err)
+	}
+	if string(out) != "null" {
+		t.Fatalf("null 输入应原样返回, got %s", string(out))
+	}
+
+	// 带空白的 null 同口径（Unmarshal 语义下同样是 nil map）；原样返回 ⇒
+	// 空白也原样保留
+	const wsNull = "  null  "
+	if wsOut, wsErr := MaskJSONFields([]byte(wsNull), masks); wsErr != nil {
+		t.Fatalf("带空白的 null 不应报错, got %v", wsErr)
+	} else if string(wsOut) != wsNull {
+		t.Fatalf("带空白的 null 应原样返回, got %s", string(wsOut))
+	}
+
+	// 对照组（issue 同批输入）：数组是解析失败，返回 json 原始错误
+	if _, arrErr := MaskJSONFields([]byte("[1,2]"), masks); arrErr == nil {
+		t.Fatal("数组输入应报错（顶层必须是对象）")
+	}
+
+	// 对照组：空对象走掩码补字段路径，不触发 nil map
+	out, err = MaskJSONFields([]byte(`{}`), masks)
+	if err != nil {
+		t.Fatalf("空对象不应报错, got %v", err)
+	}
+	if !strings.Contains(string(out), `"password":"***"`) {
+		t.Fatalf("空对象应补上掩码字段, got %s", string(out))
+	}
+
+	// 对照组：正常对象掩码照常
+	out, err = MaskJSONFields([]byte(`{"a":1}`), masks)
+	if err != nil {
+		t.Fatalf("正常对象不应报错, got %v", err)
+	}
+	if !strings.Contains(string(out), `"password":"***"`) {
+		t.Fatalf("正常对象应补上掩码字段, got %s", string(out))
+	}
+}

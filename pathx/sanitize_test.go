@@ -35,6 +35,16 @@ func TestSanitizeRel(t *testing.T) {
 		{"windows drive relative form", "C:foo", "", false},
 		{"lowercase drive", "c:/foo", "", false},
 
+		// 盘符绕过形态（#253）：冗余段把盘符推离输入首下标，输出首段闸门必须仍命中
+		{"drive behind dot prefix", "./C:/x", "", false},
+		{"drive behind empty segment", ".//C:/x", "", false},
+		{"drive behind dotdot cancel", "C:/../x", "", false},
+		{"drive becomes first after cancel", "a/../C:/x", "", false},
+		{"backslash drive behind dot", `.\C:\x`, "", false},
+		// 盘符段不在输出首段时按普通段名放行（issue 复现表同口径）
+		{"drive mid output segment kept", "a/./C:/x", "a/C:/x", true},
+		{"drive mid segment kept", "a/C:/x", "a/C:/x", true},
+
 		// 反斜杠分隔符（跨平台一致口径）
 		{"backslash separator", `a\b.go`, "a/b.go", true},
 		{"backslash traversal", `..\..\etc\passwd`, "", false},
@@ -84,6 +94,7 @@ func TestSanitizeRelStrict(t *testing.T) {
 		{"backslash separator", `a\b.go`, "a/b.go", true},
 		{"absolute rejected", "/etc/passwd", "", false},
 		{"drive rejected", "C:/foo", "", false},
+		{"drive behind dot prefix rejected", "./C:/x", "", false},
 		{"empty rejected", "", "", false},
 		{"dot rejected", ".", "", false},
 		{"double dot inside name kept", "a..b", "a..b", true},
@@ -142,5 +153,37 @@ func TestSanitizeRel_ResultIsInert(t *testing.T) {
 				t.Errorf("SanitizeRel(%q) = %q：结果仍含 %q 段", in, got, seg)
 			}
 		}
+	}
+}
+
+// TestSanitizeRel_DriveGateOnOutputFirstSegment 钉住 #253：盘符闸门按
+// **输出**首段判，不是输入下标——冗余段（"." / 空段）把盘符段推离输入
+// 首下标时（"./C:/x"），旧实现按 i==0 判再也命中不到，静默放行成盘符
+// 绝对路径（issue 复现表逐项钉住）。
+func TestSanitizeRel_DriveGateOnOutputFirstSegment(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+		ok   bool
+	}{
+		// issue 复现表的五项输入
+		{"bare drive rejected", "C:/x", "", false},
+		{"dot prefix bypass", "./C:/x", "", false},
+		{"dot segment bypass", "a/./C:/x", "a/C:/x", true},
+		{"plain mid segment", "a/C:/x", "a/C:/x", true},
+		{"empty segment bypass", ".//C:/x", "", false},
+		// 抵消后盘符重新成为输出首段的形态同样要拒
+		{"dotdot cancel reexposes drive", "C:/../x", "", false},
+		{"cancel then drive", "a/../C:/x", "", false},
+		{"backslash form bypass", `.\C:\x`, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := SanitizeRel(tt.in)
+			if got != tt.want || ok != tt.ok {
+				t.Errorf("SanitizeRel(%q) = (%q, %v), want (%q, %v)", tt.in, got, ok, tt.want, tt.ok)
+			}
+		})
 	}
 }

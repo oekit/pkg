@@ -2,6 +2,7 @@ package bloomx
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 )
@@ -45,6 +46,41 @@ func TestNew_ClampsInvalidInputs(t *testing.T) {
 			}
 			if bf.HashFuncs() != tt.wantHashes {
 				t.Errorf("HashFuncs() = %d, want %d", bf.HashFuncs(), tt.wantHashes)
+			}
+		})
+	}
+}
+
+// TestNew_NaNInfFPRateNormalized 钉住 #248：NaN 绕过旧的 `fpRate<=0 ||
+// fpRate>=1` 归一闸门（NaN 与任何值比较均为 false），经
+// log(NaN)=NaN → uint64(NaN)=0 造出 0 位过滤器，Add/Test 首次落位即
+// 越界 panic（issue 实测 index out of range with length 0）。
+// NaN/±Inf 都不在 (0,1) 开区间 ⇒ 一律归一 DefaultFPRate，过滤器可用。
+func TestNew_NaNInfFPRateNormalized(t *testing.T) {
+	want := New(100, DefaultFPRate)
+	for _, tt := range []struct {
+		name   string
+		fpRate float64
+	}{
+		{"NaN", math.NaN()},
+		{"+Inf", math.Inf(1)},
+		{"-Inf", math.Inf(-1)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bf := New(100, tt.fpRate)
+			if bf.Bits() != want.Bits() {
+				t.Fatalf("非有限 fpRate 应归一 DefaultFPRate, Bits = %d, want %d", bf.Bits(), want.Bits())
+			}
+			if bf.Bits() <= 0 {
+				t.Fatalf("0 位过滤器（#248 缺陷形态）: Bits=%d HashFuncs=%d", bf.Bits(), bf.HashFuncs())
+			}
+			// 缺陷的直接后果是任何写入/查询都 panic——往返各一次钉住可用性
+			bf.Add("x")
+			if !bf.Test("x") {
+				t.Fatal("Add 后 Test 应命中")
+			}
+			if bf.Test("never-added") {
+				t.Fatal("未加入元素不应命中")
 			}
 		})
 	}

@@ -181,6 +181,56 @@ func TestStr2Str_LoadErrors(t *testing.T) {
 	}
 }
 
+// TestStr2Str_FailedReloadKeepsOldTable 钉住 #249 失败态不变性：重载失败
+// （重复键）后旧 key 必须仍读到**旧** value——失败前是什么，失败后还是什么。
+//
+// 缺陷形态：旧实现先换 strStore 缓冲、再校验 strMap，第二段失败不回滚
+// ⇒ Get 用旧 offset 读新缓冲，Get("a") 静默取到新数据里别的 key 的值
+// （合法但错误的数据，无任何错误信号）。
+func TestStr2Str_FailedReloadKeepsOldTable(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		kk   []string
+		vv   []string
+		want error
+	}{
+		{"duplicate keys", []string{"c", "c"}, []string{"x1", "x2"}, ErrDuplicateKey},
+		{"len mismatch", []string{"c"}, []string{"x1", "x2"}, ErrKvLenMismatch},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := NewStr2StrFromSlice([]string{"a", "b"}, []string{"AAA", "BBB"})
+
+			if err := sm.LoadFromSlice(tt.kk, tt.vv); err != tt.want {
+				t.Fatalf("重载应失败 %v, got %v", tt.want, err)
+			}
+
+			// 失败后旧表必须原样可读（issue 复现样本：Get("a") 取到别的 value）
+			for k, want := range map[string]string{"a": "AAA", "b": "BBB"} {
+				if got, ok := sm.Get(k); !ok || got != want {
+					t.Fatalf("失败重载后 Get(%q) = (%q, %v), want (%q, true)——旧值被静默错位", k, got, ok, want)
+				}
+			}
+			if _, ok := sm.Get("c"); ok {
+				t.Fatal("失败重载的新 key 不应可见")
+			}
+			if sm.Len() != 2 {
+				t.Fatalf("失败重载后条目数应不变, got %d", sm.Len())
+			}
+
+			// 对照组（issue 实测）：失败后再做一次合法重载即恢复
+			if err := sm.LoadFromSlice([]string{"c"}, []string{"CCC"}); err != nil {
+				t.Fatalf("合法重载: %v", err)
+			}
+			if got, ok := sm.Get("c"); !ok || got != "CCC" {
+				t.Fatalf("恢复后 Get(c) = (%q, %v), want (\"CCC\", true)", got, ok)
+			}
+			if _, ok := sm.Get("a"); ok {
+				t.Fatal("恢复后旧 key 不应残留")
+			}
+		})
+	}
+}
+
 func TestStr2Str_EmptyValue(t *testing.T) {
 	sm := NewStr2StrFromSlice([]string{"a", "b"}, []string{"", "x"})
 	if v, ok := sm.Get("a"); !ok || v != "" {
