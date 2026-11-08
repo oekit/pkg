@@ -185,11 +185,11 @@ func TestNewPathClassifier_Placeholder(t *testing.T) {
 		t.Errorf("angle style: got %q", got)
 	}
 
-	// 非法占位符 fail-fast
-	if _, err := NewPathClassifier(WithClassifyPlaceholder("")); err == nil {
+	// 非法占位符 fail-fast（errEmpty/errSlash 避免与外层 err 撞名触发 govet shadow）
+	if _, errEmpty := NewPathClassifier(WithClassifyPlaceholder("")); errEmpty == nil {
 		t.Error("empty placeholder must fail at construction")
 	}
-	if _, err := NewPathClassifier(WithClassifyPlaceholder("a/b")); err == nil {
+	if _, errSlash := NewPathClassifier(WithClassifyPlaceholder("a/b")); errSlash == nil {
 		t.Error("placeholder containing '/' must fail at construction")
 	}
 
