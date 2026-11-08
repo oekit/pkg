@@ -7,13 +7,16 @@ import (
 	"testing"
 )
 
-// TestAnyToStr_Unchanged 钉住既有语义不动：AnyToStr(nil) 仍是 "<nil>"。
+// TestAnyToStr_NilSafe 钉住 nil 语义（#295）：AnyToStr(nil) 是空串，不是
+// Go 内部表示 "<nil>"——REST 应答解出的 null 字段（无类型 nil 接口）经它
+// 不得把 "<nil>" 字面写进答复/留痕。
 //
-// 本次补的是**并列**的一档（AnyToStrOr / Opt*），不是改既有函数的语义——
-// 改语义会让所有在用 AnyToStr(nil) 的调用点静默改变行为。
-func TestAnyToStr_Unchanged(t *testing.T) {
-	if got := AnyToStr(nil); got != "<nil>" {
-		t.Fatalf("AnyToStr(nil) = %q, want %q（既有语义必须不变）", got, "<nil>")
+// 历史注记：v0.38.0 及之前 AnyToStr(nil) 返回 "<nil>"（彼时本测试名
+// TestAnyToStr_Unchanged 钉的是旧语义）；#295 依「转字符串的直觉语义就是
+// 没有值 ⇒ 空串」收敛，AnyToStrOr(nil, def) 承接需要非空缺省的调用方。
+func TestAnyToStr_NilSafe(t *testing.T) {
+	if got := AnyToStr(nil); got != "" {
+		t.Fatalf("AnyToStr(nil) = %q, want %q（#295：nil ⇒ 空串）", got, "")
 	}
 }
 

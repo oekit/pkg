@@ -19,6 +19,10 @@ import (
 //
 // 输出: "query user: <原始 err> user_id=42"(kv 用 = 分隔拼接)
 // 解包: errors.Is / errors.As 仍能识别原始 err(走 Unwrap)。
+//
+// kv 还有**结构化出口**（#292）：errors.Kv(err) 取最外层 kv、
+// errors.KvFromChain(err) 沿链全量收集——交给结构化日志时把 kv 升格为
+// 独立字段（检索/聚合/过滤全通），错误文本照旧留在 err 字段。
 func Wrap(err error, msg string, kv ...any) error {
 	if err == nil {
 		return nil
@@ -50,6 +54,12 @@ func (w *wrappedError) Unwrap() error {
 	return w.err
 }
 
+// Kv 返回本层 Wrap 附带的上下文 kv 对（#292 的结构化出口；经 KVCarrier
+// 接口被 errors.Kv / errors.KvFromChain 与 logx 类结构化日志出口消费）。
+func (w *wrappedError) Kv() []any {
+	return w.kv
+}
+
 // formatKV 把 k/v 对格式化成 "k1=v1 k2=v2" 形式。
 // 奇数长度时保留最后一个参数并渲染为 "!BADKEY=<value>"（对齐 log/slog 约定），
 // 不再静默丢弃——漏传 value 的编程错误必须在输出里留下痕迹。
@@ -69,6 +79,74 @@ func formatKV(kv []any) string {
 		sb = append(sb, fmt.Sprintf("%v=%v", kv[i], kv[i+1])...)
 	}
 	return string(sb)
+}
+
+// Kv() []any 是本仓 Wrap 上下文 kv 的**结构化读取口**（#292）。实现本接口
+// 的错误可被 logx 等结构化日志出口升格为独立字段，而不是退化成 error 字符串
+// 里的一段文本。
+type KVCarrier interface {
+	error
+	// Kv 返回本层附带的上下文 kv 对（无 kv 返回 nil）。
+	Kv() []any
+}
+
+// Kv 返回最外层 Wrap 附带的上下文 kv 对（#292）：无 kv 或 err 不携带 kv
+// （非本仓 Wrap 构造、已到链底）返回 nil。
+//
+// 要**全量**收集多层 Wrap 的上下文用 KvFromChain。logx 侧消费形态：
+//
+//	err := errors.Wrap(err, "query user", "user_id", uid)
+//	logger.Error(ctx, "query failed", "err", err)   // err 字段保持文本
+//	// kv 升格为独立字段（检索/聚合/按 user_id 过滤全通）：
+//	logger.Error(ctx, append([]any{"err", err}, errors.Kv(err)...)...)
+func Kv(err error) []any {
+	if c, ok := err.(KVCarrier); ok {
+		return c.Kv()
+	}
+	return nil
+}
+
+// KvFromChain 沿错误链收集**每层** Wrap 附带的 kv 对（#292）：多层 Wrap 时
+// 上下文全量展开，外层在前、内层在后（同名 key 由日志端的后写覆盖语义决定
+// 最终值——与 slog Attrs 的重复 key 行为一致）。链上多层 kv 不做去重：
+// 去重会掩盖「两层都带了 user_id 但值不同」的异常现场。多分支链
+// （Unwrap() []error，如 Errorf 的多 %w 形态）按深度先序遍历。
+// err 为 nil 或整条链都不携带 kv 时返回 nil。
+//
+// 典型消费（logx 侧 ErrAttrs 形态）：
+//
+//	func ErrAttrs(err error) []slog.Attr {
+//	    var attrs []slog.Attr
+//	    for i := 0; i < len(kv); i += 2 { attrs = append(attrs, ...) }
+//	}
+func KvFromChain(err error) []any {
+	var out []any
+	var walk func(e error)
+	walk = func(e error) {
+		for e != nil {
+			if c, ok := e.(KVCarrier); ok {
+				if kv := c.Kv(); len(kv) > 0 {
+					out = append(out, kv...)
+				}
+			}
+			// 多分支链（Unwrap() []error，如 Errorf 的多 %w 形态）深度先序；
+			// stderrors.Unwrap 只认 Unwrap() error，多错误形态对它返回 nil，
+			// 必须先走类型断言分支。
+			if m, ok := e.(interface{ Unwrap() []error }); ok {
+				for _, sub := range m.Unwrap() {
+					walk(sub)
+				}
+				return
+			}
+			u := stderrors.Unwrap(e)
+			if u == nil {
+				return
+			}
+			e = u
+		}
+	}
+	walk(err)
+	return out
 }
 
 // Cause 是 errors.Cause 的便捷版:返回 wrap 链最底层的 error。

@@ -133,8 +133,18 @@ func Bool2Str(b bool) string {
 // Any 系列用于安全转换动态类型，典型场景是 json.Unmarshal 到 map[string]any 后
 // 取出的值（数字默认为 float64）。无法转换时返回零值，不会 panic。
 
-// AnyToStr 任意类型转字符串。
+// AnyToStr 任意类型转字符串；v 为 nil（REST 应答解出的 null 字段就是无类型
+// nil 接口）返回**空串**（#295）——「转字符串」的直觉语义就是「没有值 ⇒
+// 空串」。此前 nil 走 fmt.Sprintf("%v") 渲染成 Go 内部表示 "<nil>"：过得了
+// schema 校验、会被当成真实内容写进答复/留痕（集成方曾把平台名显示成字面
+// <nil>）。
+//
+// 需要区分「没有值」与「空串」、或给 nil 一个非空缺省的调用方用
+// AnyToStrOr(v, def)（opt.go，nil ⇒ def）。
 func AnyToStr(v any) string {
+	if v == nil {
+		return ""
+	}
 	return fmt.Sprintf("%v", v)
 }
 
