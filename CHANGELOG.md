@@ -1,3 +1,10 @@
+## [v0.39.0] — 2026-11-08
+
+- **BREAKING** fix(pagination): WalkEach 签名加 ctx 贯穿（pkg#286）——`WalkEach(budget, fetch func(page int) ([]T, error), yield)` 改为 `WalkEach(ctx, budget, fetch func(ctx context.Context, page int) ([]T, error), yield)`：流式变体恰是数千页长行走的首选形态（不缓冲全量），此前 fetch 无 ctx 贯穿、循环体无 ctx.Err() 检查——调用方拿到取消信号后只能等 fetch 内部自己失败或预算耗尽，yield 侧想传播取消也没有 ctx 可用（同包 Walk 早已是 ctx 完整形态，包内不一致）。现在逐页把 ctx 传给 fetch（闭包继续透传给下游 SDK 即获得页内取消）并在页间做 ctx.Err() 检查（取消/超时中止带页码上下文包装，errors.Is 链路保持），与 Walk 及下游 go-git-platform `provider/pageiter.go` EachBounded 的 `PageFetch` 形态对齐；nil ctx 显式兜底 Background（仓规总则②，与 Handle/syncx 口径一致）。迁移两步：调用点首参补 ctx、fetch 闭包加 ctx 形参（org 内 grep 无其它消费方，下游 EachBounded 本就是 ctx 形态）
+- fix(pagination): WalkEach/Walk 伪翻页（无进展）检测（pkg#285）——「忽略 page 参数」的服务器（Forgejo 15.0.1 的 issue 评论列表现场实证：每页返回同一批全量数据，同长、非空、同内容）此前永不命中终止判定（WalkEach 只有短页/空页、Walk 只有短页），行走空转到预算耗尽（WalkEach → `ErrBudgetExceeded`）或 `MaxWalkPages`（Walk → `ErrTooManyPages`）后整体报错，调用方**丢弃全部已收集数据**；而这类服务器恰恰首页即全量（这正是它无法分页的原因）。现在第 2 页起与上一页逐值相同（`reflect.DeepEqual`）即视为列表已到末尾——按末尾收手，返回/流出已收集数据（返回部分数据优于整体报错丢全部；「忽略 page 但遵守 limit」的形态会截断到首页，godoc 显式声明取舍），对齐下游 go-git-platform EachBounded v0.99.10 的实现。细节口径：无进展判定在 yield/拼接之前——重复页不再流出，消费方不会收到两份数据；上一页快照逐值拷贝，fetch 原地复用底层缓冲（pooled buffer）的别名恒等形态不误判（用例钉住）；正常等长页序列（内容页页不同）不误判——等长满页序列与伪翻页的区分信号正是逐值内容（等长不同内容用例 + 恒返整页撞预算用例双向钉住）；无进展收手是自然的末尾语义、不报哨兵，`ErrBudgetExceeded`/`ErrTooManyPages` 只留给真正的失控防护（内容随页变化的整页序列照旧撞上限，`TestWalk_TooManyPages` 口径同步，`TestWalk_ExactPages` 的两页同内容夹具改页号区分）
+
+关联问题单：pkg#285、pkg#286。
+
 ## [v0.38.0] — 2026-11-08
 
 - feat(httpjson): 条件请求面——限流预算敏感消费方的通用形态（#269）：`WithETag(store, key)` RequestOption 为 DoJSON/DoJSONWithRetry（变参注入，零选项调用面与旧签名一致）注入 If-None-Match/304 重放——命中缓存注入条件头，服务端 304 时把缓存体经与 200 **同一条解码线重放为 200 形响应**（out/err 与 200 完全同形，调用方无感）；ETag 头在场回写存储、缺席不写；**304×驱逐竞态回查存储、条目被驱逐则降级为无条件重发一次而非硬失败**（现场 v0.100.2 教训）；只对 GET/HEAD 注入（写方法的 304 语义不同）；`ETagStore` 存储接口与客户端分离（可插 Redis 等跨进程后端）+ `NewMemETagStore` 进程内实现；store 为 nil/key 空串构造期 panic（仓规总则①）；来源标记（X-From-Cache 类）刻意未做并 doc 声明
