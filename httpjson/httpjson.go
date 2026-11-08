@@ -319,7 +319,9 @@ type RetryConfig struct {
 // 刷新签名头）；reqFn 自身报错视为调用方参数问题，立即返回不重试。
 // 重试间指数退避 + Jitter 抖动；ctx 取消/超时立即返回 ctx.Err()。
 // 配合 WithRetryAfterSink + RetryAfterTransport 可让 429 的服务端建议
-// 参与退避取舍（调用方在 wait 前经 SelectRetryDelay(RetryAfterFrom(ctx)) 采信）。
+// 参与退避取舍——仅当**本次失败**确为限流（StatusError.Code==429）才采信
+// （#302 门控）：sink 不随尝试清除，一次 429 的建议不得套到后续 5xx/网络
+// 超时的重试上。
 //
 // out 的语义与 DoJSON 完全一致：out==nil 时跳过响应体解码，2xx 即成功返回
 // （fire-and-forget）；非 2xx 仍按可重试判定退避并最终返回 StatusError（#158）。
@@ -358,8 +360,16 @@ func DoJSONWithRetry(ctx context.Context, client *http.Client, reqFn func() (Req
 			break
 		}
 		delay := exponentialDelay(base, attempt, maxDelay)
-		if hint := RetryAfterFrom(ctx); hint > 0 {
-			delay = SelectRetryDelay(delay, hint)
+		// Retry-After 采信门控（#302）：仅当**本次失败**确为限流（429）才采信
+		// sink 里的服务端建议——sink 不随尝试清除，陈旧建议若套到后续 5xx/网络
+		// 超时的重试上，会把本地指数曲线顶到分钟级（RetryAfterFrom 文档自述
+		// 纪律：「陈旧建议不得套用到非限流错误上」；本重试环即该纪律的参考实现，
+		// 不得自违）。
+		var se *StatusError
+		if errors.As(lastErr, &se) && se.Code == http.StatusTooManyRequests {
+			if hint := RetryAfterFrom(ctx); hint > 0 {
+				delay = SelectRetryDelay(delay, hint)
+			}
 		}
 		if jitter > 0 {
 			delay = addJitter(delay, int64(jitter))
