@@ -9,20 +9,24 @@ import (
 	"github.com/oekit/pkg/internal/singleflight"
 )
 
-// noMissLoader 是包内能力接口：回源加载且**不计入未命中计数**（pkg#90）。
+// noMissLoader 是包内能力接口：回源加载且**不计入读计数**（pkg#90、#250）。
 //
-// 存在的理由：装饰器的前置检查（Peek）已经计过一次未命中，内层加载路径
-// 再计一次 ⇒ 一次未命中被计成两次 ⇒ 命中率指标失真（pkg#90 实测 90% 的
-// 真实命中率被报成 81.8%）。
+// 存在的理由：装饰器的前置检查（Peek）已经把这次逻辑读计入内层计数
+// （未命中计一次 miss），内层加载路径再计任何一侧都会把一次读计成两次：
+//   - pkg#90：加载路径再计一次 miss ⇒ 未命中双计（实测 90% 的真实命中率
+//     被报成 81.8%）；
+//   - #250：前置检查与内层自检之间该 key 被并发写入时，加载路径的自检
+//     分支命中并补计一次 hit ⇒ 同一次读 miss+hit 双计，命中率被系统性
+//     抬高。
 //
-// 口径：只抑制未命中计数，命中计数照常（stale 兜底等读命中仍计入——
-// 与内层直连口径一致）。内层不实现该能力时，装饰器退回内层原有口径
-// （能力缺失是内层的事实），计数偏差按内层语义解释。
+// 口径：未命中与命中计数都由前置检查负责，加载路径一律不重复计。内层
+// 不实现该能力时，装饰器退回内层原有口径（能力缺失是内层的事实），
+// 计数偏差按内层语义解释。
 //
 // 不进公共 API：这是「内层实现方与本包装饰器」之间的包内约定，
 // 外部后端无从实现（也无需实现——只有本包的 LocalCache 暴露计数面）。
 type noMissLoader[T any] interface {
-	// getOrLoadNoMiss 按 spec 回源加载，不计入未命中计数。
+	// getOrLoadNoMiss 按 spec 回源加载，不计入读计数（命中与未命中都不计）。
 	getOrLoadNoMiss(ctx context.Context, key string, spec loadSpec[T]) (*T, error)
 }
 
@@ -247,8 +251,9 @@ func (sf *SingleFlightCache[T]) GetOrLoadWithSourceTTL(ctx context.Context, key 
 // 装饰器不得丢能力：内层实现 cache.StatsProvider 时原样委托；否则返回零值
 // 快照——能力缺失是内层的事实（同 MGet/Peek 的退化口径）。
 //
-// 计数口径（pkg#90）：装饰器的前置检查计入内层计数，回源加载路径不再重复
-// 计未命中 ⇒ 一次读恰好计入命中或未命中之一（与内层直连一致）。
+// 计数口径（pkg#90 + #250）：装饰器的前置检查计入内层计数，回源加载路径
+// 不再重复计任何一侧（未命中与命中都不计）⇒ 一次读恰好计入命中或未命中
+// 之一（与内层直连一致）。
 func (sf *SingleFlightCache[T]) Stats() Stats {
 	if sp, ok := sf.inner.(StatsProvider); ok {
 		return sp.Stats()

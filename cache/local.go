@@ -442,16 +442,19 @@ func (c *LocalCache[T]) getOrLoad(ctx context.Context, key string, spec loadSpec
 	return c.load(ctx, key, spec, true)
 }
 
-// getOrLoadNoMiss 与 getOrLoad 同流程，但**不计入未命中计数**（pkg#90）。
+// getOrLoadNoMiss 与 getOrLoad 同流程，但**不计入读计数**——未命中与命中
+// 都不计（pkg#90、#250）。
 //
-// 用途：装饰器（SingleFlightCache）的前置探测已计过同一次未命中，加载路径
-// 再计一次会把一次未命中计成两次——命中率指标失真（实测 90% 真实命中率被
-// 报成 81.8%）。本方法让「前置探测计一次、加载路径不再计」成立，一次读
-// 恰好计入命中或未命中之一。
+// 用途：装饰器（SingleFlightCache）的前置探测已把同一次逻辑读计入内层
+// 计数（未命中计一次 miss），加载路径再计任何一侧都会把一次读计成两次：
+//   - pkg#90：加载路径再计一次 miss ⇒ 未命中双计（实测 90% 真实命中率被
+//     报成 81.8%）；
+//   - #250：前置探测与内层自检之间该 key 被并发写入（Set/刷新/回填）时，
+//     加载路径的自检分支命中并补计一次 hit ⇒ 同一次读 miss+hit 双计，
+//     命中率被系统性抬高。
 //
-// **命中计数不受影响**：stale 兜底等读命中仍照常计入——但 stale 兜底**本身**
-// 不计读命中（它拿到的是已过期的真值，Stats 口径里属于「已过期」⇒ 未命中），
-// 一次 stale 读取恰好计入一次未命中。
+// 本方法让「前置探测计一次、加载路径不再计」成立——无论加载路径自检的
+// 结论是命中还是未命中，一次读恰好计入命中或未命中之一。
 //
 // 只供包内装饰器使用（能力随实现走，不进公共 API）：内层实现方不认这个
 // 能力时，装饰器退回内层原有口径（能力缺失是内层的事实）。
@@ -459,8 +462,8 @@ func (c *LocalCache[T]) getOrLoadNoMiss(ctx context.Context, key string, spec lo
 	return c.load(ctx, key, spec, false)
 }
 
-// load 是 getOrLoad 的实现：countMiss=false 时不计入未命中计数（pkg#90，
-// 见 getOrLoadNoMiss），其余行为与计数口径完全一致。
+// load 是 getOrLoad 的实现：countMiss=false 时不计入读计数（未命中与命中
+// 都不计，pkg#90 + #250，见 getOrLoadNoMiss），其余行为与计数口径完全一致。
 func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], countMiss bool) (*T, error) {
 	// 1. 非删除式查看：未过期直接返回（null marker 命中 → (nil, nil) 防穿透）。
 	//    过期条目保留在表内——StaleIfError 需要过期真值在回源失败时仍可读
@@ -478,9 +481,13 @@ func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], 
 				}
 				return nil, nil
 			}
-			// 读命中：LRU 提升顺序 + 按 CloneOnRead 决定返回副本还是共享引用
+			// 读命中：LRU 提升顺序 + 按 CloneOnRead 决定返回副本还是共享引用。
+			// countMiss=false（装饰器前置探测已计过这次读）时命中同样不计
+			// （#250）——否则前置探测（miss）与本分支（hit）把一次读计成两次。
 			c.promoteOne(key, entry)
-			c.hits.Add(1)
+			if countMiss {
+				c.hits.Add(1)
+			}
 			return c.cloneOnRead(entry.value), nil
 		}
 	}
