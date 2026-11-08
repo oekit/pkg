@@ -20,11 +20,7 @@ func groupMembers(t *testing.T, pgid int) []string {
 	if err != nil {
 		return nil // 组空（pgrep 无命中退出非零）
 	}
-	var pids []string
-	for _, f := range strings.Fields(string(out)) {
-		pids = append(pids, f)
-	}
-	return pids
+	return strings.Fields(string(out))
 }
 
 // waitGroupEmpty 等进程组清空（给 TERM/KILL 传播留窗口）。
