@@ -24,7 +24,10 @@
 // 64:ff9b::7f00:1 即 127.0.0.1 的 IPv6 写法）、64:ff9b:1::/48（NAT64 local-use）、
 // 100::/64（discard-only）、2001::/32（Teredo）、2001:2::/48（benchmarking）、
 // 2001:10::/28（ORCHID）、2001:20::/28（ORCHIDv2）、2001:db8::/32（文档段）、
-// 2002::/16（6to4——可内嵌任意 IPv4，含私网/回环）。
+// 2002::/16（6to4——可内嵌任意 IPv4，含私网/回环）、3fff::/20（RFC 9637 文档段，
+// IPv6 侧 TEST-NET）、5f00::/16（RFC 9602 SRv6 SID）、100:0:0:1::/64（RFC 9780
+// dummy prefix）——后三条是 IANA 注册表在 #75 收口之后新登记的条目（#297），
+// 与同生态 oekit/core/network 的 ipv6SpecialCIDRs 对账维护。
 //
 // exotic IPv4 字面量形态（0x7f000001 / 0177.0.0.1 / 127.1 / 2130706433）一律拒绝：
 // 标准库 net.ParseIP 不认它们，但宽松解析器（cgo resolver 的 inet_aton 语义、
@@ -42,7 +45,8 @@
 // 链路本地、ULA、IPv4-mapped 全能以 zone 形态绕过。zone 只决定走哪块网卡，
 // 不改变连的是哪个地址。
 //
-// 构造态豁免：WithAllowPrivate / WithAllowCIDRs / WithAllowDomains。
+// 构造态豁免：WithAllowPrivate / WithAllowCIDRs / WithAllowDomains（豁免
+// 命中域的约定域后缀与内置私网/保留段判定，写面与拨号面同源，#296）。
 // **精确 host 白名单**：WithExactHosts —— "host 必须完全等于管理员配的那个 host"
 // 这类判据在放行型模型下没有对应表达（后缀豁免只能放宽域及其全部子域，无法钉死
 // 到具体 host），它与豁免维度独立可叠加，且命中后仍走 scheme 与私网判定。
@@ -121,6 +125,9 @@ var blockedCIDRs = mustParseCIDRs(
 	"2001:20::/28",    // ORCHIDv2（非全球可达）
 	"2001:db8::/32",   // 文档段（不该出现在出站目标）
 	"2002::/16",       // 6to4（可内嵌任意 IPv4，含私网/回环）
+	"3fff::/20",       // 文档段（RFC 9637，IPv6 侧 TEST-NET；IANA 2024 新登记，#297）
+	"5f00::/16",       // SRv6 SID（RFC 9602，非全球可达；IANA 2024 新登记，#297）
+	"100:0:0:1::/64",  // dummy prefix（RFC 9780；IANA 2025 新登记，#297）
 )
 
 // blockedDomainSuffixes 是缺省阻断域名后缀（小写；host 等于后缀或以其为点分后缀均命中）。
@@ -191,6 +198,24 @@ func WithAllowCIDRs(cidrs ...string) Option {
 
 // WithAllowDomains 按域名豁免（小写化后保存；命中语义 = 等于或点分后缀，
 // "example.com" 同时放行 "api.example.com"；不支持通配符前缀，写根域即可）。
+//
+// 豁免是**两半**（#296 收口），且写面（CheckURL/CheckHost）与拨号面
+// （DialFunc）同源生效：
+//   - ① 约定域后缀阻断（.internal/.local/localhost 等）——host 面短路；
+//   - ② 内置私网/保留段阻断——命中域解析出的 IP（以及 host 为 IP 字面量的
+//     路径）不再因落在 blockedCIDRs 被拒。
+//
+// ②是文档承诺过的那半（"放宽某些域的私网/约定域阻断"），此前只有 ① 生效：
+// 自建内网服务（解析到 10/8 的自建 GitLab/webhook 是该选项的主要用例）写面
+// 放行、拨号面拒绝——同一 Guard 两个面结论相反，调用方被迫改用更宽的
+// WithAllowCIDRs("10.0.0.0/8")（把整个网段对所有 host 放开，破坏最小权限）。
+//
+// 边界（与 allowPrivate 豁免同口径，pkg#236/#91）：
+//   - 只豁免**内置**判定——自定义钩子（WithCheckIPFunc/WithCheckHostFunc）
+//     照常执行，豁免不跳过消费方策略；
+//   - exotic IPv4 字面量闸门无条件先跑，不随本豁免放开；
+//   - 公开的 CheckIP 无 host 上下文，**不**享受本豁免（豁免是 host 维度的，
+//     CheckIP 只拿得到 IP）——豁免通道在 CheckURL/CheckHost/DialFunc。
 func WithAllowDomains(domains ...string) Option {
 	return func(g *Guard) {
 		if g.allowDomains == nil {
@@ -373,7 +398,39 @@ func SafeDialFunc(next DialFunc) DialFunc {
 // 阻断是兜底（fail-closed），自定义判定（WithCheckIPFunc）在其之后叠加。
 // 构造态豁免（WithAllowPrivate / WithAllowCIDRs）只豁免内置判定，不再跳过
 // 自定义判定。
+//
+// 本方法**无 host 上下文**（#296）：WithAllowDomains 的私网豁免在此不生效
+// ——豁免是 host 维度的，CheckIP 只拿得到 IP；域名维度的豁免通道在
+// CheckURL / CheckHost / DialFunc（内部经 checkIPForHost 携带 host）。
 func (g *Guard) CheckIP(ip net.IP) error {
+	return g.checkIPForHost("", ip)
+}
+
+// inAllowDomains 判定 host 是否命中 allowDomains（等于或点分后缀），
+// 与 checkHostLiteral 的豁免分支同口径。host 为空串恒不命中（allowDomains
+// 的 key 经 canonicalHost 归一，空串不入表）。
+func (g *Guard) inAllowDomains(host string) bool {
+	if _, ok := g.allowDomains[host]; ok {
+		return true
+	}
+	for d := range g.allowDomains {
+		if strings.HasSuffix(host, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkIPForHost 是 CheckIP 的 host 上下文变体（#296）：host 命中
+// allowDomains 时豁免内置网段判定——allowDomains 承诺「放宽某些域的私网/
+// 约定域阻断」，此前只有约定域那半在 host 面生效，IP 面仍把写面放行的
+// 内网解析结果拒掉（写面/拨号面结论相反）。host 为空串即公开 CheckIP 的
+// 无上下文形态（不豁免）。
+//
+// 豁免口径：与 allowPrivate 一致（pkg#236/#91）——只豁免**内置**网段
+// （CIDR）判定；exotic 字面量闸门在 host 面无条件先跑（不进本函数），
+// 自定义 checkIPFunc 在其后照常执行。
+func (g *Guard) checkIPForHost(host string, ip net.IP) error {
 	if ip == nil {
 		return fmt.Errorf("urlguard: nil ip")
 	}
@@ -381,7 +438,7 @@ func (g *Guard) CheckIP(ip net.IP) error {
 		ip = v4 // ::ffff:a.b.c.d 归一化，防 mapped 绕过
 	}
 	// 1. 内置判定：缺省阻断网段（构造态豁免只作用在这一层）
-	if !g.allowPrivate && !g.inAllowCIDRs(ip) {
+	if !g.allowPrivate && !g.inAllowCIDRs(ip) && !g.inAllowDomains(host) {
 		for _, n := range blockedCIDRs {
 			if n.Contains(ip) {
 				return fmt.Errorf("urlguard: %s is in blocked range %s", ip, n)
@@ -448,7 +505,9 @@ func (g *Guard) checkHostLiteral(host string) error {
 	}
 	host = folded
 	if ip := net.ParseIP(stripIPv6Zone(host)); ip != nil {
-		return g.CheckIP(ip)
+		// IP 字面量带 host 上下文判定（#296）：host 命中 allowDomains 时
+		// 豁免内置网段判定——CheckURL/CheckHost 的字面量分支与拨号面同源。
+		return g.checkIPForHost(host, ip)
 	}
 	// exotic IPv4 字面量：标准库解析器不认，但宽松解析器（cgo resolver 的
 	// inet_aton 语义、浏览器 URL 解析器）会当地址——字面量层直接拒，
@@ -467,13 +526,10 @@ func (g *Guard) checkHostLiteral(host string) error {
 	if g.allowPrivate {
 		return g.checkHostPolicy(host)
 	}
-	if _, ok := g.allowDomains[host]; ok {
+	// allowDomains 命中（等于或点分后缀）：短路约定域后缀阻断（豁免的
+	// ①半）；私网那半（②）由 IP 判定点的 checkIPForHost 同口径豁免。
+	if g.inAllowDomains(host) {
 		return g.checkHostPolicy(host)
-	}
-	for d := range g.allowDomains {
-		if strings.HasSuffix(host, "."+d) {
-			return g.checkHostPolicy(host)
-		}
 	}
 	for _, suffix := range blockedDomainSuffixes {
 		if host == suffix || strings.HasSuffix(host, "."+suffix) {
@@ -657,6 +713,7 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 		if err != nil {
 			return nil, fmt.Errorf("urlguard: split %q: %w", addr, err)
 		}
+		canon := canonicalHost(host)
 		// host 字面量判定（pkg#91 / pkg#204）：拨号层也走与 CheckHost 同源的
 		// checkHostLiteral，而不是只跑消费方钩子。消费方可能只挂 DialFunc
 		// （不挂 CheckURL），此时内置约定域判定不能缺席——否则只要
@@ -666,15 +723,17 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 		// 复用而非重写是有意的：内置后缀判定、exotic IPv4 字面量判定、
 		// allowDomains 优先与 allowPrivate 短路，四条规则各写一份必然漂移，
 		// 而漂移的形态是「写面拒绝、拨号面放行」这种最难发现的不一致。
-		if herr := g.checkHostLiteral(canonicalHost(host)); herr != nil {
+		if herr := g.checkHostLiteral(canon); herr != nil {
 			return nil, fmt.Errorf("urlguard: dial %q blocked: %w", addr, herr)
 		}
 		ips, err := g.resolve(ctx, host)
 		if err != nil {
 			return nil, err
 		}
+		// IP 预检带 host 上下文（#296）：allowDomains 命中域解析到私网段时
+		// 豁免内置网段判定——写面放行的目标，拨号面结论必须一致。
 		for _, ip := range ips {
-			if cerr := g.CheckIP(ip); cerr != nil {
+			if cerr := g.checkIPForHost(canon, ip); cerr != nil {
 				return nil, fmt.Errorf("urlguard: dial %q blocked: %v", addr, cerr)
 			}
 		}
@@ -686,9 +745,11 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 		// 以真实 RemoteAddr 为准；不合规立即关闭连接。
 		// TCP / UDP / IP 三种连接都要复核——此前只认 *net.TCPAddr，UDP 连接
 		// 的端点复核被整段跳过（TOCTOU 窗口对 UDP 完全敞开）。
+		// 端点复核同样带 host 上下文（#296）：豁免按 host 维度闭合，两处
+		// IP 判定点口径一致。
 		if ra := conn.RemoteAddr(); ra != nil {
 			if ip := addrIP(ra); ip != nil {
-				if err := g.CheckIP(ip); err != nil {
+				if err := g.checkIPForHost(canon, ip); err != nil {
 					_ = conn.Close()
 					return nil, fmt.Errorf("urlguard: dial %q blocked: connected endpoint %s violates guard: %v", addr, ip, err)
 				}
