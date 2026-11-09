@@ -418,3 +418,42 @@ func TestRun_PreCancelledContext(t *testing.T) {
 		t.Fatalf("未启动的进程应无 Result，got %+v", res)
 	}
 }
+
+// TestRun_StdioGrandchildExitZeroIsSuccess 钉住 #320：子进程正常退出而 stdio
+// 管道被后台孙进程持有（`sleep 30 & exit 0` 形态）——WaitDelay 到期强关收口
+// 后，退出码 0 必须回 nil err 与已收到的输出。此前 exec.ErrWaitDelay 原样作
+// err，成功被报成错误、退出码 0 的信息被弃。WithGrace(0) 把 WaitDelay 压到
+// 1s，测试不必按缺省空等 6s。
+func TestRun_StdioGrandchildExitZeroIsSuccess(t *testing.T) {
+	start := time.Now()
+	res, err := Run(context.Background(), "/bin/sh", []string{"-c", "echo done; sleep 30 & exit 0"}, WithGrace(0))
+	if err != nil {
+		t.Fatalf("退出码 0 的成功不得被 WaitDelay 报成错误: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0", res.ExitCode)
+	}
+	if string(res.Stdout) != "done\n" {
+		t.Fatalf("Stdout = %q, want %q", res.Stdout, "done\n")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("WithGrace(0) 下 WaitDelay 收口应 ~1s, took %v", elapsed)
+	}
+}
+
+// TestRun_StdioGrandchildExitCodePreserved 钉住 #320 的另一半：失败命令
+// （非零退出 + 残留孙进程）的错误语义不变——exec 优先返回 *ExitError，
+// 退出码保留。
+func TestRun_StdioGrandchildExitCodePreserved(t *testing.T) {
+	res, err := Run(context.Background(), "/bin/sh", []string{"-c", "sleep 30 & exit 3"}, WithGrace(0))
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("非零退出应仍返回 *exec.ExitError: %v", err)
+	}
+	if ee.ExitCode() != 3 {
+		t.Fatalf("ExitCode = %d, want 3", ee.ExitCode())
+	}
+	if res.ExitCode != 3 {
+		t.Fatalf("res.ExitCode = %d, want 3", res.ExitCode)
+	}
+}
