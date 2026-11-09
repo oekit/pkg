@@ -1,7 +1,11 @@
-// Package procx 子进程治理原语：进程**树**终止。stdlib-only（pkg 零第三方
-// 依赖红线），原语下沉自 oagentkit/runtime procx 同款纪律（pkg#284：下游
-// pigeonbox/core 直接依赖 oagentkit 会新增跨 org 依赖边，决策记录
-// pigeonbox/core#71）。
+// Package procx 子进程治理三件套：进程**树**终止、子进程**最小环境**、输出
+// **封顶**。stdlib-only（pkg 零第三方依赖红线），原语下沉自 oagentkit/runtime
+// procx 同款纪律（pkg#284：下游 pigeonbox/core 直接依赖 oagentkit 会新增跨
+// org 依赖边，决策记录 pigeonbox/core#71）。三件套对应 pkg#294 的承诺：
+// 树终止先行落地（v0.38.2/v0.39.0），最小环境与输出封顶由 pkg#314 补齐——
+// 下游预览子系统的匿名访客可控输入喂 ffmpeg/ffprobe，三面缺口都撞在同一处：
+// 损坏媒体狂刷 stderr 打爆内存、宿主凭证经全量环境泄漏进子进程、僵死进程树
+// 收不了场。
 //
 // # 为什么需要它
 //
@@ -11,8 +15,10 @@
 //
 //   - **Run**：全治理形态——收集 stdout/stderr 返回 [Result]（退出码与
 //     stdlib 同口径，被信号终止 = -1），ctx 取消导致的终止返回 ctx.Err()；
+//     输出可选限容（[WithOutputLimit]，截断可判定）、环境可选白名单化
+//     （[WithEnv]，默认拒绝）；
 //   - **Command**：drop-in 形态——存量 `exec.CommandContext` 调用点逐字
-//     替换，I/O 配置完全由调用方自理。
+//     替换，I/O 与 Env 配置完全由调用方自理（最小环境用 [ChildEnv]）。
 //
 // # 收场语义（unix）
 //
@@ -62,6 +68,29 @@
 //   - 若子进程已属于别的 Job（windows），AssignProcessToJobObject 失败：
 //     退化为只杀直接子进程。
 //
+// # 最小环境（pkg#294/#314 承诺的第二半）
+//
+// [WithEnv] 让 Run 用白名单环境起子进程：环境集 = [ChildEnv] 白名单 ∪ extra
+// 显式放行，白名单之外的一切变量——包括未来新出现的敏感变量——一律不进
+// 子进程环境。刻意 allowlist 而非 denylist：denylist 只能列已知凭据名，新
+// 凭据永远漏；allowlist 的漏只表现为「少了一个无害变量」，错了也错在安全侧。
+// 代理变量默认放行（内网部署下子进程靠它拿出口）。
+//
+// 缺省（不传 WithEnv）继承父进程全量环境——存量语义不动：子进程是用户主动
+// 发起的可信 CLI 替身（git/ssh/docker 包装）时，父进程环境就是用户的信任
+// 上下文，砍掉它才不对。两种威胁模型在调用点字面可见，不做成一个开关。
+// Command 形态调用方自理：cmd.Env = procx.ChildEnv(...)。
+//
+// # 输出封顶（pkg#294/#314 承诺的第三半）
+//
+// [WithOutputLimit] 让 Run 对 stdout/stderr 各自限容：**边读边截 + 继续排空**
+// ——超限部分照常从管道读走并丢弃（writer 恒报全量消费成功），子进程不会卡
+// 在 write 上不退出。最常见错误实现是「读满 cap 就停读」：管道停止排空，
+// 子进程阻塞在 write 上永不退出，Run 挂死——这正是 pkg#294 原单警告过的
+// 形态，有负对照测试钉住该分辨力。截断在 Result.StdoutTruncated /
+// Result.StderrTruncated 里如实标记：「被截断」与「本来就这么短」必须可
+// 区分（正好等于上限不算截断）。缺省（不传）无上限——存量调用不受影响。
+//
 // # 与仓内其他包的分工
 //
 // shellx 是「字符串怎么写进命令行」（转义/分词，纯函数）；本包是「命令怎么
@@ -72,5 +101,7 @@
 //
 //	cmd := procx.Command(ctx, "ffmpeg", "-i", in, out) // unix 整树语义
 //	res, err := procx.Run(ctx, "ffmpeg", args,          // 全治理形态：
-//	    procx.WithGrace(2*time.Second))                 //   宽限可调
+//	    procx.WithGrace(2*time.Second),                 //   宽限可调
+//	    procx.WithOutputLimit(64<<10),                  //   输出各限 64KB，截断可判定
+//	    procx.WithEnv(nil))                             //   白名单环境（默认拒绝）
 package procx
