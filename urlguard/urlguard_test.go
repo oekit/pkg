@@ -263,3 +263,37 @@ func TestCheckURL_ReservedRanges(t *testing.T) {
 		}
 	}
 }
+
+// TestWithAllowDomains_LeadingDotStripped 钉住 #322：前导点条目（nginx 风格
+// ".localhost"/".internal"）此前原样保存，inAllowDomains 的后缀匹配拼成
+// "..localhost" 永不命中——豁免构造期不报错、运行期静默失效（操作者以为已
+// 放行内网域，拨号面依旧拒绝）。命中语义（等于或点分后缀）本就与 nginx 的
+// ".example.com" 同义，构造期剥掉前导点入库。
+func TestWithAllowDomains_LeadingDotStripped(t *testing.T) {
+	g, err := New(WithAllowDomains(".localhost", ".internal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 子域与裸域都要命中（与不带前导点的既有语义一致）
+	if err := g.CheckURL("http://foo.localhost/"); err != nil {
+		t.Fatalf("'.localhost' 应与 'localhost' 同义（含子域）: %v", err)
+	}
+	if err := g.CheckURL("http://localhost/"); err != nil {
+		t.Fatalf("本域命中: %v", err)
+	}
+	if err := g.CheckURL("http://svc.internal/"); err != nil {
+		t.Fatalf("'.internal' 应与 'internal' 同义: %v", err)
+	}
+	// 剥前导点只影响豁免条目的入库形态，不放宽其它判定面
+	if err := g.CheckURL("ftp://foo.localhost/"); err == nil {
+		t.Fatal("scheme 白名单不应被豁免越过")
+	}
+	// 裸域条目（不带前导点）行为不变
+	g2, err := New(WithAllowDomains("localhost"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g2.CheckURL("http://foo.localhost/"); err != nil {
+		t.Fatalf("裸域条目既有语义不变: %v", err)
+	}
+}
