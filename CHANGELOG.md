@@ -2,6 +2,18 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.41.1] — 2026-11-10
+
+- - fix(mathx): Round/Floor/DivisionN 溢出防护补查 x*times 乘积中间量，不再静默产出 +Inf（#317）
+- - fix(pagination): 快照改按引用结构深拷贝，指针元素缓冲复用不再误判伪翻页丢页（#318）
+- - fix(httpjson): 304 重放不再把空缓存体当驱逐，204 与 HEAD 端点不再每轮双请求（#319）
+- - fix(procx): Run 对残留 stdio 孙进程不再空等 6 秒并把成功报成错误（ErrWaitDelay 收口边界入文档）（#320）
+- - fix(jsonrepair): 错配闭合符改写为栈顶期待符号+无主闭合符丢弃，Repair 收敛（#321）
+- - fix(urlguard): allowDomains 前导点条目按域名语义剥点生效，豁免配置不再静默落空（#322）
+- - fix(jsonrepair): UnmarshalLenient 的 partial 标记挂 EOF 截断迹象，截断被修复形态如实为 true（#323）
+
+关联问题单：pkg#317、pkg#318、pkg#319、pkg#320、pkg#321、pkg#322、pkg#323。
+
 ## [v0.41.0] — 2026-11-09
 
 - feat(procx): ChildEnv 最小环境清洗 + WithOutputLimit 输出封顶——#294 三件套收口（#314）
