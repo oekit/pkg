@@ -1,6 +1,7 @@
 package mathx
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -240,6 +241,62 @@ func TestClamp_InvertedBoundsPanic(t *testing.T) {
 				}
 			}()
 			c.invoke()
+		})
+	}
+}
+
+// TestRoundFloorDivisionN_ProductOverflowGuard 钉住 #317：溢出防护必须检查
+// **乘积**（x*times / (dividend/divisor)*m），而不是只查 math.Pow10(n)——
+// 中间量溢出成 ±Inf 后 math.Round(+Inf)=+Inf，而 ParseFloat("+Inf") 竟解析
+// 成功（err=nil），±Inf 被当成合法结果原样放行：原值被静默丢弃替换成 +Inf。
+// 触发面不限于天文数字：n=300 时阈值降到 ~1.8e308/10^n，1e9 即可中招。
+func TestRoundFloorDivisionN_ProductOverflowGuard(t *testing.T) {
+	cases := []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"Round(1e300, 15)", Round(1e300, 15), 1e300},
+		{"Round(1e294, 15)", Round(1e294, 15), 1e294},
+		{"Round(1e9, 300)", Round(1e9, 300), 1e9},
+		{"Round(1e10, 300)", Round(1e10, 300), 1e10},
+		{"Floor(1e300, 15)", Floor(1e300, 15), 1e300},
+		{"Floor(1e294, 15)", Floor(1e294, 15), 1e294},
+		{"Floor(1e9, 300)", Floor(1e9, 300), 1e9},
+		{"DivisionN(1e300, 1, 15)", DivisionN(1e300, 1, 15), 1e300},
+		{"DivisionN(1e9, 1, 300)", DivisionN(1e9, 1, 300), 1e9},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if math.IsInf(c.got, 0) || math.IsNaN(c.got) {
+				t.Fatalf("%v = %v：中间量溢出不得放行（want 原值 %v）", c.name, c.got, c.want)
+			}
+			if c.got != c.want {
+				t.Errorf("%v = %v, want %v（溢出时原值返回）", c.name, c.got, c.want)
+			}
+		})
+	}
+	// 未溢出边界不误伤：乘积仍在 float64 表示范围内的输入走正常路径，
+	// 结果与原值相等或仅差舍入误差。
+	sanity := []struct {
+		name  string
+		got   float64
+		exact float64 // 期望值；相对误差 1e-12 内视为通过
+	}{
+		{"Round(1e293, 15)", Round(1e293, 15), 1e293}, // 1e293×1e15 < MaxFloat64
+		{"Round(1e8, 300)", Round(1e8, 300), 1e8},     // 1e8×1e300 < MaxFloat64
+		{"Floor(1e293, 15)", Floor(1e293, 15), 1e293},
+		{"DivisionN(1e293, 1, 15)", DivisionN(1e293, 1, 15), 1e293},
+		{"Round(3.456, 2)", Round(3.456, 2), 3.46},
+	}
+	for _, c := range sanity {
+		t.Run(c.name, func(t *testing.T) {
+			if math.IsInf(c.got, 0) || math.IsNaN(c.got) {
+				t.Fatalf("%v = %v：未溢出输入不得被误判", c.name, c.got)
+			}
+			if math.Abs(c.got/c.exact-1) > 1e-12 {
+				t.Errorf("%v = %v, want ~%v", c.name, c.got, c.exact)
+			}
 		})
 	}
 }
