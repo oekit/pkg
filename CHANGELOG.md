@@ -2,6 +2,12 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.41.0] — 2026-11-09
+
+- feat(procx): ChildEnv 最小环境清洗 + WithOutputLimit 输出封顶——#294 三件套收口（#314）
+
+关联问题单：pkg#314。
+
 ## [v0.40.0] — 2026-11-09
 
 - feat(urlpath): URL path 低基数模板化原语——ID 段折叠控制 metrics 标签基数（#291）
