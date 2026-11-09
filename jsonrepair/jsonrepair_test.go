@@ -139,9 +139,12 @@ func TestRepairOutputValidJSONInvariant(t *testing.T) {
 		`{"a":`, `{"a":1,"b":`, `{"a":}`, `{"a": ,"b":2}`, `{"a":,}`, `{"a":[1,{"b":`,
 		// 非法转义（#263）
 		`{"a":"\x41"}`, `{"a":"\q"}`, `{"a":"\uZZZZ"}`,
-		// 其它语法级损坏（注：字符串未闭合 / 字面量截断（tru）/ 错配括号 /
-		// 值位后的多余冒号不在 Repair 能力内——closePartial 文档记录的能力
-		// 边界，不入本清单）
+		// 括号种类错配 / 无主闭合符（#321）：错配闭合符改写为栈顶期待的
+		// 那个、无主闭合符丢弃
+		`{"a":1]`, `[{"a":1}`, `[1,2}`, `{"a":1}]`, `{"a":1]]`, `[1]}`,
+		// 其它语法级损坏（注：字符串未闭合 / 字面量截断（tru）/
+		// 值位后的多余冒号不在 Repair 能力内——closePartial 文档记录的
+		// 能力边界，不入本清单）
 		`{"a":1`, `{"a"：1，}`, `[1,2,`, `[`, `{`, `{"a":{"b":1`,
 		`[{"a":1},]`,
 	}
@@ -264,5 +267,43 @@ func TestParseLenient_SchemaExactBeforeNormalize(t *testing.T) {
 	}
 	if coerced.Count != "42" {
 		t.Fatalf("Count = %q, want \"42\"（归一兜底不得失效）", coerced.Count)
+	}
+}
+
+// TestRepairMismatchedCloserConverges 钉住 #321：括号种类错配（'{' 被 ']'
+// 闭合）此前让扫描栈被错误出栈清空、closeUnclosed 判「已平衡」不补全，
+// 非法 JSON 原样返回——镜像形态 `[{"a":1}` 却能收敛，同一根因两个方向
+// 一修一不修。口径：错配闭合符改写为栈顶期待的那个，无主闭合符（栈空）
+// 丢弃；Repair 与 scanOpenBrackets 两处扫描同步按种类核对。
+func TestRepairMismatchedCloserConverges(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`{"a":1]`, `{"a":1}`},    // '{' 被 ']' 闭合 → 改写为 '}'
+		{`{"a":]`, `{"a":null}`},  // 错配 + 缺值：先补值再改写
+		{`[1,2}`, `[1,2]`},        // '[' 被 '}' 闭合 → 改写为 ']'
+		{`[{"a":1}`, `[{"a":1}]`}, // 镜像形态（既有能力）继续成立
+		{`{"a":1}]`, `{"a":1}`},   // 收尾后的无主闭合符丢弃
+		{`{"a":1]]`, `{"a":1}`},   // 错配改写 + 多余闭合符丢弃
+		{`[1]}`, `[1]`},           // 无主闭合符丢弃
+	}
+	for _, c := range cases {
+		got := Repair(c.in)
+		if got != c.want {
+			t.Errorf("Repair(%q) = %q, want %q", c.in, got, c.want)
+		}
+		if !json.Valid([]byte(got)) {
+			t.Errorf("Repair(%q) = %q 仍非法 JSON（#268 契约：单次输出即合法）", c.in, got)
+		}
+		if again := Repair(got); again != got {
+			t.Errorf("Repair(%q) 不收敛：%q → %q", c.in, got, again)
+		}
+	}
+	// ParseLenient 全线（此前对该形态全线放弃：repaired != candidate 不成立，
+	// 连 Repair 重试都跳过）
+	var v map[string]any
+	if err := ParseLenient(`{"a":1]`, &v, nil); err != nil {
+		t.Fatalf("ParseLenient({\"a\":1]): %v", err)
+	}
+	if v["a"] != float64(1) {
+		t.Fatalf("v = %v, want a=1", v)
 	}
 }
