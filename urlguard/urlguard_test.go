@@ -275,17 +275,13 @@ func TestWithAllowDomains_LeadingDotStripped(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 子域与裸域都要命中（与不带前导点的既有语义一致）
-	if err := g.CheckURL("http://foo.localhost/"); err != nil {
-		t.Fatalf("'.localhost' 应与 'localhost' 同义（含子域）: %v", err)
-	}
-	if err := g.CheckURL("http://localhost/"); err != nil {
-		t.Fatalf("本域命中: %v", err)
-	}
-	if err := g.CheckURL("http://svc.internal/"); err != nil {
-		t.Fatalf("'.internal' 应与 'internal' 同义: %v", err)
+	for _, url := range []string{"http://foo.localhost/", "http://localhost/", "http://svc.internal/"} {
+		if got := g.CheckURL(url); got != nil {
+			t.Fatalf("豁免条目 %q 应命中放行: %v", url, got)
+		}
 	}
 	// 剥前导点只影响豁免条目的入库形态，不放宽其它判定面
-	if err := g.CheckURL("ftp://foo.localhost/"); err == nil {
+	if got := g.CheckURL("ftp://foo.localhost/"); got == nil {
 		t.Fatal("scheme 白名单不应被豁免越过")
 	}
 	// 裸域条目（不带前导点）行为不变
@@ -293,7 +289,7 @@ func TestWithAllowDomains_LeadingDotStripped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := g2.CheckURL("http://foo.localhost/"); err != nil {
-		t.Fatalf("裸域条目既有语义不变: %v", err)
+	if got := g2.CheckURL("http://foo.localhost/"); got != nil {
+		t.Fatalf("裸域条目既有语义不变: %v", got)
 	}
 }
