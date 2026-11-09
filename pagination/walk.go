@@ -33,8 +33,10 @@ var (
 //     正常等长页序列不可区分，唯一可靠信号是逐值相同。此时视为列表已到
 //     末尾，返回已收集数据（首页即全量，部分数据优于空转到 MaxWalkPages
 //     报错丢全部）；「忽略 page 但遵守 limit」的形态会截断到首页，doc
-//     显式声明该取舍。上一页快照为逐值拷贝，fetch 复用底层缓冲不会造成
-//     别名误判；正常等长页序列（内容页页不同）不误判。
+//     显式声明该取舍。上一页快照与已收集条目均按引用结构深拷贝（#285
+//     逐值拷贝、#318 补齐指针元素形态），fetch 复用底层缓冲原地覆写不会
+//     造成别名误判、也不会把已收集数据覆写成下一页的内容；正常等长页
+//     序列（内容页页不同）不误判。
 //
 // 契约（fetch 一侧）：
 //   - page 从 1 计数，fetch 自行把页码与页长翻译成具体 API 的查询参数；
@@ -76,13 +78,16 @@ func Walk[T any](ctx context.Context, pageSize int, fetch func(ctx context.Conte
 		if page > 1 && reflect.DeepEqual(items, prev) {
 			return all, nil
 		}
+		// 快照（#285/#318）：与 fetch 缓冲脱钩——聚合条目与上一页基准都必须
+		// 独立于 fetch 的切片，池化 fetch 原地覆写时浅拷贝会让「已收集数据」
+		// 变成下一页的内容（页 1 槽位、页 2 内容）。
+		snap := pageSnapshot(items)
 		if len(items) > 0 {
-			all = append(all, items...)
+			all = append(all, snap...)
 		}
 		if len(items) < pageSize {
 			return all, nil
 		}
-		// 上一页快照逐值拷贝：fetch 原地复用底层缓冲时别名比较会恒等误判
-		prev = append(prev[:0], items...)
+		prev = append(prev[:0], snap...)
 	}
 }

@@ -317,3 +317,77 @@ func TestWalkEach_BufferReuseFetchNoMisfire(t *testing.T) {
 		t.Fatalf("应流出全部 7 条, got=%v", got)
 	}
 }
+
+// ---- 指针元素池化 fetch（#318）----
+
+// pooledRelease 模池化上游返回的结构体（带未导出字段：整体 memcpy 路径——
+// reflect 逐字段 Set 对未导出字段会 panic，#318 顺带钉住不 panic）。
+type pooledRelease struct {
+	ID    int
+	title string
+}
+
+// 指针元素 + 原地覆写：页 1 [1,2] → 页 2 [3,4]（同一批槽位覆写）。快照若只
+// 浅拷贝指针，页 2 items 与 prev 持有同一批指针 ⇒ DeepEqual 恒真 ⇒ 被误判成
+// 伪翻页在第 2 页收尾，页 2 起的真实数据静默丢弃（err=nil）。
+func TestWalkEach_PooledPointerFetchKeepsYielding(t *testing.T) {
+	slots := make([]pooledRelease, 2)
+	next := 0
+	fetch := func(_ context.Context, page int) ([]*pooledRelease, error) {
+		n := 2
+		if page > 2 {
+			n = 1 // 短页收尾
+		}
+		out := make([]*pooledRelease, n)
+		for i := 0; i < n; i++ {
+			next++
+			slots[i] = pooledRelease{ID: next, title: fmt.Sprintf("r%d", next)}
+			out[i] = &slots[i]
+		}
+		return out, nil
+	}
+	var ids []int
+	err := WalkEach(context.Background(), 10, fetch, func(r *pooledRelease) bool {
+		ids = append(ids, r.ID)
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(ids) != "[1 2 3 4 5]" {
+		t.Fatalf("页 2 起不得被别名误判丢弃, ids=%v", ids)
+	}
+}
+
+// 指针元素的无进展检测不被深拷贝破坏：池化 fetch 每页覆写同一批槽位但
+// **值**相同（「忽略 page 参数」的服务器形态，#285 的指针版）——按值比较
+// 仍判伪翻页，第 2 页收尾。
+func TestWalkEach_PooledPointerNoProgressStillDetected(t *testing.T) {
+	slots := make([]pooledRelease, 2)
+	calls := 0
+	fetch := func(_ context.Context, page int) ([]*pooledRelease, error) {
+		calls++
+		for i := range slots {
+			slots[i] = pooledRelease{ID: 1} // 每页同值覆写
+		}
+		out := make([]*pooledRelease, len(slots))
+		for i := range slots {
+			out[i] = &slots[i]
+		}
+		return out, nil
+	}
+	count := 0
+	err := WalkEach(context.Background(), 10, fetch, func(*pooledRelease) bool {
+		count++
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("逐值相同的指针页应判伪翻页收尾, calls=%d", calls)
+	}
+	if count != 2 {
+		t.Fatalf("重复页不应再流出, yielded=%d", count)
+	}
+}
