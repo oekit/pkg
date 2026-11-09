@@ -8,7 +8,7 @@
 ## 安装
 
 ```bash
-go get github.com/oekit/pkg@v0.38.0
+go get github.com/oekit/pkg@v0.41.0
 ```
 
 ## 这个仓库做什么
