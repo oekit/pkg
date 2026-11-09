@@ -118,12 +118,16 @@ func ExtractArray(s string) string {
 // scanOpenBrackets/ExtractObject 同一纪律：字符串外才动结构位，字符串内只修
 // 转义。
 //
-// 输出契约（#262/#263/#268 收敛）：单次调用即收敛到合法 JSON——
+// 输出契约（#262/#263/#268/#321 收敛）：单次调用即收敛到合法 JSON——
 //   - 连续逗号一次清空（此前每遍只删一个，`{"a":1,,}` 要修两轮才合法）；
 //   - 非法转义不再丢反斜杠改写值（`\x41` 曾被改成 `x41`），反斜杠转义为
 //     `\\` 忠实保留「反斜杠 + 后续字符」的字面量，与 `\uXXXX` 残缺形态同口径；
 //   - `:` 后缺值（`{"a":` / `{"a":}` / `{"a": ,}`）补 null——此前只补括号，
-//     `{"a":}` 是非法 JSON 的稳定不动点，修复链路无出路。
+//     `{"a":}` 是非法 JSON 的稳定不动点，修复链路无出路；
+//   - 括号种类错配改写为栈顶期待的那个（`{"a":1]` → `{"a":1}`），无主
+//     闭合符（栈空）丢弃——此前闭合符出栈不看种类，`{"a":1]` 的扫描栈被
+//     错误清空、closeUnclosed 判已平衡不补全，非法 JSON 原样返回（镜像
+//     形态 `[{"a":1}` 却能收敛，#321）。
 func Repair(s string) string {
 	var b bytes.Buffer
 	b.Grow(len(s))
@@ -224,10 +228,18 @@ func Repair(s string) string {
 				needValue = false
 			}
 			truncAt = -1
-			if len(stack) > 0 {
-				stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				// 无主闭合符（栈空，#321）：丢弃——收敛契约（#268）要求单次
+				// 输出即合法 JSON，残留闭合符写回去就是稳定不动点；无主闭合符
+				// 没有任何「保留后合法」的可能性，丢弃是唯一收敛解。
+				break
 			}
-			b.WriteRune(r)
+			// 栈顶种类核对（#321）：'{' 等 '}'、'[' 等 ']'——错配闭合符改写
+			// 为栈顶期待的那个（`{"a":1]` → `{"a":1}`）。不核对会让扫描栈被
+			// 错误出栈清空、closeUnclosed 判已平衡不补全，非法 JSON 原样返回。
+			want := closerFor(stack[len(stack)-1])
+			stack = stack[:len(stack)-1]
+			b.WriteByte(want)
 		default:
 			switch r {
 			case ' ', '\t', '\n', '\r':
@@ -279,7 +291,20 @@ func validEscape(r rune) bool {
 	return false
 }
 
+// closerFor 返回开括号期待的闭合符（'{' → '}'，'[' → ']'）。#321：括号
+// 种类错配（'{' 被 ']' 闭合）此前让扫描栈被错误出栈清空、closeUnclosed 判
+// 「已平衡」不补全，非法 JSON 原样返回——Repair 主扫描（错配改写/无主丢弃）
+// 与 scanOpenBrackets（错配不出栈）两处扫描同步按种类核对。
+func closerFor(open byte) byte {
+	if open == '{' {
+		return '}'
+	}
+	return ']'
+}
+
 // scanOpenBrackets 括号栈扫描（字符串字面量感知），返回未闭合的开括号序列。
+// 错配闭合符不出栈（#321）：'{' 等 '}'、'[' 等 ']'，乱入的另一种闭合符不是
+// 任何开括号的收尾——与 Repair 主扫描的改写口径一致，两处扫描不得各判各的。
 func scanOpenBrackets(s string) []byte {
 	var stack []byte
 	inStr, esc := false, false
@@ -294,7 +319,7 @@ func scanOpenBrackets(s string) []byte {
 		case !inStr && (c == '{' || c == '['):
 			stack = append(stack, byte(c))
 		case !inStr && (c == '}' || c == ']'):
-			if len(stack) > 0 {
+			if len(stack) > 0 && byte(c) == closerFor(stack[len(stack)-1]) {
 				stack = stack[:len(stack)-1]
 			}
 		}

@@ -331,3 +331,90 @@ func TestWithETag_WithRetry(t *testing.T) {
 		t.Fatalf("第二轮应注入 If-None-Match, got %q", got)
 	}
 }
+
+// TestWithETag_EmptyBodyEntryReplayedOn304 钉住 #319：空体条目（204、HEAD 的
+// 2xx 没有响应体）是合法缓存——304 重放的驱逐判定必须看 ok 而非体是否为空。
+// 此前 `cached != ""` 把「体为空」当「已驱逐」：空体条目永远走降级无条件重发、
+// 重发成功又把空体存回去，条件请求对这类端点永不生效、每轮限流预算翻倍。
+func TestWithETag_EmptyBodyEntryReplayedOn304(t *testing.T) {
+	t.Run("204 GET 空体入库", func(t *testing.T) {
+		var mu sync.Mutex
+		rounds := 0
+		var lastINM string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			rounds++
+			lastINM = r.Header.Get("If-None-Match")
+			mu.Unlock()
+			if r.Header.Get("If-None-Match") == `"v1"` {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			w.Header().Set("ETag", `"v1"`)
+			w.WriteHeader(http.StatusNoContent) // 204：无体，ETag 照带
+		}))
+		t.Cleanup(srv.Close)
+		store := NewMemETagStore()
+		key := "GET " + srv.URL
+		req := Request{URL: srv.URL}
+		count := func() int { mu.Lock(); defer mu.Unlock(); return rounds }
+
+		// poll 1：无条件取，204 空体 + ETag 入库
+		if err := DoJSON(context.Background(), srv.Client(), req, nil, WithETag(store, key)); err != nil {
+			t.Fatalf("DoJSON#1: %v", err)
+		}
+		if _, body, ok := store.Get(key); !ok || body != "" {
+			t.Fatalf("204 空体条目应入库 (ok=%v body=%q)", ok, body)
+		}
+		// poll 2/3：条件请求 304 → 空体条目照常重放（每轮单请求）
+		for i := 2; i <= 3; i++ {
+			before := count()
+			if err := DoJSON(context.Background(), srv.Client(), req, nil, WithETag(store, key)); err != nil {
+				t.Fatalf("DoJSON#%d: %v", i, err)
+			}
+			if got := count() - before; got != 1 {
+				t.Fatalf("poll %d 空体条目应重放（不是驱逐，不应双请求）, round-trips=%d", i, got)
+			}
+		}
+		if got := lastINM; got != `"v1"` {
+			t.Fatalf("重放前的请求注入的应是 If-None-Match, got %q", got)
+		}
+	})
+
+	t.Run("HEAD 200 空体入库", func(t *testing.T) {
+		var mu sync.Mutex
+		rounds := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			rounds++
+			mu.Unlock()
+			if r.Header.Get("If-None-Match") == `"v1"` {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			w.Header().Set("ETag", `"v1"`)
+			// HEAD：不写体（http.Server 会丢弃 HEAD 响应的写入），2xx + ETag
+		}))
+		t.Cleanup(srv.Close)
+		store := NewMemETagStore()
+		key := "HEAD " + srv.URL
+		req := Request{URL: srv.URL, Method: http.MethodHead}
+		count := func() int { mu.Lock(); defer mu.Unlock(); return rounds }
+
+		if err := DoJSON(context.Background(), srv.Client(), req, nil, WithETag(store, key)); err != nil {
+			t.Fatalf("DoJSON#1: %v", err)
+		}
+		if _, body, ok := store.Get(key); !ok || body != "" {
+			t.Fatalf("HEAD 空体条目应入库 (ok=%v body=%q)", ok, body)
+		}
+		for i := 2; i <= 3; i++ {
+			before := count()
+			if err := DoJSON(context.Background(), srv.Client(), req, nil, WithETag(store, key)); err != nil {
+				t.Fatalf("DoJSON#%d: %v", i, err)
+			}
+			if got := count() - before; got != 1 {
+				t.Fatalf("HEAD poll %d 空体条目应重放, round-trips=%d", i, got)
+			}
+		}
+	})
+}

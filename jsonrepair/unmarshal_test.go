@@ -54,11 +54,12 @@ func TestUnmarshalLenient_IssueScenarios(t *testing.T) {
 			wantPartial: true, wantHosts: 1, wantFirst: "",
 		},
 		{
-			// 尾逗号被保守链（ExtractObject+Repair 括号闭合）抢先修好，
-			// 且无内容缺失 → partial=false。
-			name:      "截断在悬空逗号",
-			in:        `{"list":[{"HostName":"a"},`,
-			wantHosts: 1, wantFirst: "a",
+			// 尾逗号在 EOF 处悬空 = 截断迹象（逗号后可能有被切掉的元素）：
+			// 修复链（ExtractObject+Repair 括号闭合）救活也必须 partial=true
+			// （#323：partial 挂在原文是否截断上，与由哪条链救活无关）。
+			name:        "截断在悬空逗号",
+			in:          `{"list":[{"HostName":"a"},`,
+			wantPartial: true, wantHosts: 1, wantFirst: "a",
 		},
 		{
 			name:        "截断在悬挂转义",
@@ -135,8 +136,9 @@ func TestUnmarshalLenient_GarbageStaysError(t *testing.T) {
 
 // TestUnmarshalLenient_PartialObjectAndArray 截断形态矩阵：字符串中段闭合正确；
 // 悬空冒号/悬空逗号自 #262/#268 起由保守链的 Repair 确定性修复（连续尾逗号一次
-// 清空、EOF 悬空逗号删除、缺值补 null），partial=false——partial=true 保留给
-// Repair 无能为力的形态（字符串中段截断）。
+// 清空、EOF 悬空逗号删除、缺值补 null）。#323 起 partial 口径统一为「原文在
+// EOF 处不完整」：修复链救活的截断形态同样是 partial=true——调用方要区分
+// 「完整 JSON」与「截断后被修复的 JSON」，与结果由哪条链救活无关。
 func TestUnmarshalLenient_PartialObjectAndArray(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -145,11 +147,11 @@ func TestUnmarshalLenient_PartialObjectAndArray(t *testing.T) {
 		wantPar bool
 	}{
 		{"对象截断在字符串", `{"a":"b","c":"tr`, `{"a":"b","c":"tr"}`, true},
-		{"数组尾逗号", `[1,2,`, `[1,2]`, false},
-		{"数组尾空白逗号", "[1,2, \n", "[1,2]", false},
-		{"冒号截断", `{"a":`, `{"a":null}`, false},
+		{"数组尾逗号", `[1,2,`, `[1,2]`, true},
+		{"数组尾空白逗号", "[1,2, \n", "[1,2]", true},
+		{"冒号截断", `{"a":`, `{"a":null}`, true},
 		{"键位截断", `{"a":"b","c"`, `{"a":"b","c":null}`, true},
-		{"纯括号截断", `{"a":{"b":[1`, `{"a":{"b":[1]}}`, false},
+		{"纯括号截断", `{"a":{"b":[1`, `{"a":{"b":[1]}}`, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -192,5 +194,49 @@ func TestUnmarshalLenient_BareStringRejected(t *testing.T) {
 	var s string
 	if _, err := UnmarshalLenient(`"unterminated`, &s); err == nil {
 		t.Fatal("bare unterminated string must stay an error")
+	}
+}
+
+// TestUnmarshalLenient_PartialSurvivesRepairChain 钉住 #323：partial 判定挂在
+// 「原文是否在 EOF 截断」上，与「修复链是否失败」解耦——Unmarshal 三级链自己
+// 就会把截断 JSON 修成合法 JSON，此前「修复链救活 ⇒ return false」让 partial
+// 在最常见的截断形态上恒为 false：调用方无法区分「完整 JSON」与「截断后被
+// 修复的 JSON」（截断数组被闭合为合法单元素数组时元素数量被静默改变）。
+// 对照组：完整内容（围栏/散文包裹/完整文本中的尾逗号）不算截断——内容无
+// 缺失，partial=false 的「数据完整」信号必须留给它们。
+func TestUnmarshalLenient_PartialSurvivesRepairChain(t *testing.T) {
+	truncated := []string{
+		`{"id":1,"name":"a","tags":["x"`,     // 数组未闭合
+		`{"id":1,"name":"a","tags":["x","y"`, // 数组未闭合（多元素）
+		`{"id":1,"name":"a"`,                 // 对象未闭合
+		`{"id":1,"name":"a",`,                // 尾部逗号
+		`{"id":1,"name":"a","tags":[`,        // 空数组截断
+		`{"id":1,"name":`,                    // 悬空冒号（值缺失）
+	}
+	for _, in := range truncated {
+		var v any
+		partial, err := UnmarshalLenient(in, &v)
+		if err != nil {
+			t.Fatalf("UnmarshalLenient(%q): %v", in, err)
+		}
+		if !partial {
+			t.Errorf("截断输入 %q 被修复链救活后 partial = false, want true", in)
+		}
+	}
+	complete := []string{
+		`{"id":1,"name":"a","tags":["x"]}`, // 完整 JSON
+		"```json\n{\"id\":1}\n```",         // 围栏包裹（语法噪声，内容完整）
+		`说明 {"id":1} 结束`,                   // 散文包裹
+		`{"id":1,}`,                        // 完整文本中的尾逗号
+	}
+	for _, in := range complete {
+		var v any
+		partial, err := UnmarshalLenient(in, &v)
+		if err != nil {
+			t.Fatalf("UnmarshalLenient(%q): %v", in, err)
+		}
+		if partial {
+			t.Errorf("完整输入 %q partial = true, want false（数据完整信号不得误报）", in)
+		}
 	}
 }

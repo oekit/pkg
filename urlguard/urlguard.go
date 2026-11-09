@@ -198,6 +198,9 @@ func WithAllowCIDRs(cidrs ...string) Option {
 
 // WithAllowDomains 按域名豁免（小写化后保存；命中语义 = 等于或点分后缀，
 // "example.com" 同时放行 "api.example.com"；不支持通配符前缀，写根域即可）。
+// 前导点条目（nginx 风格 ".example.com"）与命中语义同义——「域及其子域」
+// ——构造期剥掉前导点入库（#322：此前原样保存，运行期后缀匹配拼成
+// "..example.com" 永不命中普通域名，豁免配置静默落空）。
 //
 // 豁免是**两半**（#296 收口），且写面（CheckURL/CheckHost）与拨号面
 // （DialFunc）同源生效：
@@ -222,7 +225,10 @@ func WithAllowDomains(domains ...string) Option {
 			g.allowDomains = map[string]struct{}{}
 		}
 		for _, d := range domains {
-			d = canonicalHost(d)
+			// 前导点剥掉（#322）：".localhost" 与 "localhost" 命中语义同义
+			// （等于或点分后缀），原样保存会让 inAllowDomains 的后缀匹配
+			// 拼成 "..localhost" 永不命中——豁免写了等于没写。
+			d = strings.TrimLeft(canonicalHost(d), ".")
 			if d != "" {
 				g.allowDomains[d] = struct{}{}
 			}

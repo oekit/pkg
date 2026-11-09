@@ -90,6 +90,13 @@ type Result struct {
 // Run 起子进程并保证 ctx 到期/取消时整棵进程树收场（收集 stdout/stderr）。
 // 退出码与 stdlib 同口径；ctx 取消导致的终止返回 ctx.Err()。
 //
+// 子进程正常退出后，若有继承 stdio 管道的后台孙进程仍存活（`server &`、
+// `tool &` 是常见形态），exec 的 I/O 拷贝 goroutine 不结束，Wait 按 WaitDelay
+// （宽限+1s，见 newCmd）等到期强关管道才返回。此刻进程自身已收场：返回值按
+// 实际退出码口径——退出码 0 回 nil err（#320：此前 exec.ErrWaitDelay 原样作
+// err，成功被报成错误）；非零退出 exec 优先返回 *ExitError，不受影响。强关
+// 管道意味着孙进程在其后的输出不再收集，该边界见包文档。
+//
 // 进程退出后（无论正常还是被终止）顺手做一次残留清扫：unix 清掉组内幸存者、
 // windows 关闭 Job 句柄触发 KILL_ON_JOB_CLOSE——守护化残留的孙进程不因主
 // 进程退出而泄漏（Command 形态没有这个挂点，见包文档）。
@@ -123,12 +130,22 @@ func Run(ctx context.Context, name string, args []string, opts ...RunOption) (*R
 	werr := cmd.Wait()
 	st.release()
 	st.reap(cmd)
-	// cmd.Wait 返回时输出拷贝 goroutine 已全部收束（os/exec 契约），读缓冲无竞争。
+	// cmd.Wait 返回时输出拷贝 goroutine 已全部收束（os/exec 契约；WaitDelay
+	// 到期强关管道的收口同样等 goroutine 退出后才返回），读缓冲无竞争。
 	res := &Result{
 		Stdout:          stdout.buf,
 		Stderr:          stderr.buf,
 		StdoutTruncated: stdout.truncated,
 		StderrTruncated: stderr.truncated,
+	}
+	// WaitDelay 收口后的错误映射（#320）：进程已退出而 stdio 拷贝 goroutine
+	// 因继承管道的残留孙进程迟迟不结束时，WaitDelay 到期强关管道、exec 以
+	// ErrWaitDelay 作 err——退出码 0 的成功被报成错误（「echo done; sleep 30 &
+	// exit 0」固定多等宽限+1s 且 err≠nil，退出码信息被弃）。此刻进程自身已
+	// 收场（非零退出 exec 优先返回 *ExitError，走不到这里），按退出码口径回
+	// nil err；强关管道意味着孙进程在其后的输出不再收集，边界见 Run/包文档。
+	if errors.Is(werr, exec.ErrWaitDelay) {
+		werr = nil
 	}
 	var ee *exec.ExitError
 	if errors.As(werr, &ee) {

@@ -24,8 +24,12 @@ func WithAllowPartialArray() UnmarshalOption {
 }
 
 // UnmarshalLenient 宽容解析：在 ParseLenient 同款修复链之外，尽力闭合截断
-// 的数组/对象。partial=true 表示原文不完整、结果来自闭合后的截断前缀
-// （内容可能缺失，如闭合的半截字符串/补位的 null）；false 表示完整解析。
+// 的数组/对象。partial=true 表示**原文在 EOF 处不完整（截断迹象）**——字符串
+// 未闭合/悬挂转义/悬空逗号/悬空冒号/括号未闭合，无论结果来自宽松闭合还是
+// 修复链救活（#323：截断输入被修复链修成合法 JSON 也必须返回 true，否则
+// 调用方无法区分「完整 JSON」与「截断后被修复的 JSON」——截断数组被闭合为
+// 合法的单元素数组时元素数量被静默改变，partial 是唯一信号）；false 表示
+// 原文完整（含围栏/散文包裹等完整内容形态——语法噪声不算截断，内容无缺失）。
 // 纯垃圾（登录过期提示、HTML 错误页等）仍返回 err。
 //
 // 与 ParseLenient 的分工：需要 Schema 归一走 ParseLenient；需要感知截断
@@ -52,10 +56,17 @@ func UnmarshalWithOpts(text string, v any, opts ...UnmarshalOption) error {
 // 错误信息同源：严格/宽容双路包装）；allowPartial 时对截断候选追加
 // closePartial 收尾。schema 归一面走 ParseLenient（Normalize 与截断
 // 闭合正交，此处不重复承载）。
+//
+// partial 口径（#323）：判定挂在「原文是否在 EOF 截断」上，与「修复链能否
+// 救活」解耦——Unmarshal 三级链自己就会把截断 JSON 修成合法 JSON，此前
+// 「修复链救活 ⇒ return false」把截断信号整个吞掉，partial 在最常见的截断
+// 形态上恒为 false。判定复用 closePartial 的 EOF 截断扫描（本包内已有的
+// 「原文不完整」判定），完整但带语法噪声的文本不算截断。
 func unmarshal(text string, v any, o unmarshalOpts) (bool, error) {
 	err := Unmarshal(text, v)
 	if err == nil {
-		return false, nil
+		_, truncation := closePartial(text)
+		return truncation, nil
 	}
 	if !o.allowPartial {
 		return false, err
@@ -94,7 +105,9 @@ func unmarshal(text string, v any, o unmarshalOpts) (bool, error) {
 
 // closePartial 尽力闭合截断的 JSON 前缀。partial=true 表示原文在 EOF 处
 // 不完整（字符串未闭合 / 悬挂转义 / 悬空逗号 / 悬空冒号 / 括号未闭合），
-// 返回值是闭合后的文本；闭合后仍非法由调用方决定去留。
+// 返回值是闭合后的文本；闭合后仍非法由调用方决定去留。该扫描同时是
+// UnmarshalLenient 的 partial 判定口径（#323：partial = 原文在 EOF 处
+// 不完整，与「修复链能否救活」解耦）。
 //
 // 与 Repair 的差异：Repair 的 closeUnclosed 只补括号，且对「引号未闭合」
 // 场景会把闭括号写进字符串里产出非法 JSON——截断在中途字符串时

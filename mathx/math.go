@@ -38,6 +38,11 @@ func RandIntn(maxInt int) int {
 // （Go 规范未定义该情形，amd64/arm64 实测得到 -9223372036854775808）⇒
 // DivisionN(1e18, 1, 6) 实得 9.22e12（期望 1e18）。math.Trunc 同样向零截断，
 // 但没有范围限制。
+//
+// 溢出防护（#182/#317）查两处而非只查 10^n：m = math.Pow10(n) 溢出（n>308）
+// 直接返回商；商×m 这个**乘积**溢出（n=300 时 1e9 即可触发——阈值随 n 降到
+// ~1.8e308/10^n）同样返回商。乘积溢出成 ±Inf 后 math.Trunc(+Inf)=+Inf、
+// +Inf/m=+Inf，此前被原样放行（#317）。
 func DivisionN(dividend, divisor float64, n int) float64 {
 	if dividend == 0 || divisor == 0 {
 		return 0
@@ -47,30 +52,48 @@ func DivisionN(dividend, divisor float64, n int) float64 {
 		// n 太大（>308）⇒ 10^n 溢出，这个精度已无从谈起 ⇒ 直接返回商。
 		return dividend / divisor
 	}
-	return math.Trunc((dividend/divisor)*m) / m
+	prod := (dividend / divisor) * m
+	if math.IsInf(prod, 0) || math.IsNaN(prod) {
+		// 商×m 中间量溢出（#317）：返回商（与 10^n 溢出同处置），不把 ±Inf
+		// 当合法结果放行。
+		return dividend / divisor
+	}
+	return math.Trunc(prod) / m
 }
 
 // Round 对 float64 进行四舍五入，保留 n 位小数。
-// n 过大（>308，math.Pow10 溢出为 +Inf）时返回原值——对齐 DivisionN 的
-// IsInf 防护（#182）：此前 x*Inf=±Inf（x=0 时 NaN），NaN 进 ParseFloat 竟
-// 成功 ⇒ 静默返回 NaN，指标/金额进库不报错。
+//
+// 溢出防护（#182/#317）查两处而非只查 10^n：times = math.Pow10(n) 溢出
+// （n>308）返回原值；x*times 这个**乘积**溢出（n=300 时 1e9 即可触发——
+// 阈值随 n 降到 ~1.8e308/10^n）同样返回原值。乘积溢出成 ±Inf 后
+// math.Round(+Inf)=+Inf、+Inf/times=+Inf，而 ParseFloat("+Inf") 竟解析成功
+// （err=nil），±Inf 此前被当成合法浮点值原样返回——原值被静默丢弃替换成
+// ±Inf，金额/指标进库不报错（#317）。
 func Round(x float64, n int) float64 {
 	times := math.Pow10(n)
 	if math.IsInf(times, 0) {
 		return x
 	}
-	x = math.Round(x * times)
+	prod := x * times
+	if math.IsInf(prod, 0) || math.IsNaN(prod) {
+		return x // 中间量溢出 ⇒ 原值返回（与 10^n 溢出同处置，#317）
+	}
+	x = math.Round(prod)
 	return toFixed(x/times, n)
 }
 
 // Floor 对 float64 向下取整，保留 n 位小数。
-// n 过大（>308）时返回原值（同 Round 的溢出防护，#182）。
+// 溢出防护与 Round 同形（#182/#317）：10^n 溢出或 x*times 乘积溢出都返回原值。
 func Floor(x float64, n int) float64 {
 	times := math.Pow10(n)
 	if math.IsInf(times, 0) {
 		return x
 	}
-	x = math.Floor(x * times)
+	prod := x * times
+	if math.IsInf(prod, 0) || math.IsNaN(prod) {
+		return x // 中间量溢出 ⇒ 原值返回（与 10^n 溢出同处置，#317）
+	}
+	x = math.Floor(prod)
 	return toFixed(x/times, n)
 }
 
@@ -204,6 +227,12 @@ func toFixed(num float64, precise int) float64 {
 	if err != nil {
 		// precise >= 0 时 fmt 的输出必是合法浮点字面量，走到这里说明有意外——
 		// 不吞错，退回原值而不是静默返回 0。
+		return num
+	}
+	// 防御闸（#317）：ParseFloat 接受 "Inf"/"NaN" 字面量（err=nil），若有限
+	// 输入经格式化竟产出 ±Inf/NaN（正常不可能——fmt 对有限值必产出有限
+	// 字面量），不能把它当合法结果放行，退回原值。
+	if math.IsInf(fnum, 0) || math.IsNaN(fnum) {
 		return num
 	}
 	return fnum

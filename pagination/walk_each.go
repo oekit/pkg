@@ -41,9 +41,10 @@ var ErrNilYielder = pkgerrors.NewBizError(1, "pagination: yield 不能为 nil")
 //     （reflect.DeepEqual）即视为列表已到末尾（「忽略 page 参数」的服务器
 //     形态，如 Forgejo 15.0.1 的 issue 评论列表——首页即全量，这正是它
 //     无法分页的原因）——按末尾收手、返回/流出已收集数据，优于空转到
-//     预算耗尽后整体报错丢全部；上一页快照为逐值拷贝，fetch 复用底层
-//     缓冲（pooled buffer 原地覆写）不会造成别名误判；正常等长页序列
-//     （内容页页不同）不误判，无进展收手不算自然结束、不报预算哨兵；
+//     预算耗尽后整体报错丢全部；上一页快照按引用结构深拷贝（#285 逐值
+//     拷贝、#318 补齐指针元素形态），fetch 复用底层缓冲（pooled buffer
+//     原地覆写）不会造成别名误判；正常等长页序列（内容页页不同）不误判，
+//     无进展收手不算自然结束、不报预算哨兵；
 //   - budget 是页数上限（防失控护栏）：fetch 页数达到 budget 仍未走到
 //     短页/无进展时返回 ErrBudgetExceeded。budget <= 0 表示无预算（不
 //     建议——对照 Walk 的 MaxWalkPages 硬防呆）；
@@ -110,9 +111,10 @@ func WalkEach[T any](ctx context.Context, budget int, fetch func(ctx context.Con
 			return nil
 		}
 		prevLen = len(items)
-		// 上一页快照逐值拷贝：fetch 若原地复用底层缓冲（pooled buffer），
-		// 别名比较会恒等误判成伪翻页（#285 用例钉住）
-		prev = append(prev[:0], items...)
+		// 上一页快照（#285/#318）：pageSnapshot 对含引用成员的元素类型按引用
+		// 结构深拷贝——浅拷贝对指针元素只复制指针，fetch 原地覆写池化缓冲后
+		// 快照与当页同指针，DeepEqual 恒真 ⇒ 伪翻页误判、真实页静默丢失。
+		prev = pageSnapshot(items)
 	}
 	return pkgerrors.Wrap(ErrBudgetExceeded, "pagination.WalkEach", "budget", budget)
 }

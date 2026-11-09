@@ -205,3 +205,49 @@ func TestWalk_OrderPreserved(t *testing.T) {
 		t.Fatal("unreachable")
 	}
 }
+
+// Walk + 指针元素池化 fetch（#318）：已收集条目必须与 fetch 缓冲脱钩——
+// 浅拷贝时页 2 覆写页 1 槽位，返回值变成「页 1 槽位、页 2 内容」，页 1
+// 数据丢失（实测 Walk collected=2 ids=[3 4]）。
+func TestWalk_PooledPointerFetchCollectsAllPages(t *testing.T) {
+	slots := make([]pooledRelease, 2)
+	next := 0
+	calls := 0
+	fetch := func(_ context.Context, page int) ([]*pooledRelease, error) {
+		calls++
+		n := 2
+		if page > 2 {
+			n = 1 // 短页收尾
+		}
+		out := make([]*pooledRelease, n)
+		for i := 0; i < n; i++ {
+			next++
+			slots[i] = pooledRelease{ID: next, title: fmt.Sprintf("r%d", next)}
+			out[i] = &slots[i]
+		}
+		return out, nil
+	}
+	got, err := Walk(context.Background(), 2, fetch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 {
+		t.Fatalf("应走到短页收尾, calls=%d", calls)
+	}
+	if len(got) != 5 {
+		t.Fatalf("应聚合全部 5 条（不被别名误判丢页）, len=%d ids=%v", len(got), releaseIDs(got))
+	}
+	for i, r := range got {
+		if r.ID != i+1 {
+			t.Fatalf("条目 %d 的 ID = %d, want %d（聚合内容不得被后续页覆写）", i, r.ID, i+1)
+		}
+	}
+}
+
+func releaseIDs(rs []*pooledRelease) []int {
+	out := make([]int, len(rs))
+	for i, r := range rs {
+		out[i] = r.ID
+	}
+	return out
+}
