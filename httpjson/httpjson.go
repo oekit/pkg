@@ -108,7 +108,11 @@ func DoJSON(ctx context.Context, client *http.Client, req Request, out any, opts
 			// 304×驱逐竞态纪律（v0.100.2 教训，#31）：**回查存储**而非复用
 			// 发请求前的旧值——条目已被并发驱逐（LRU/清理）时降级为无条件
 			// 重发，绝不硬失败；条目还在则重放缓存体为 200 形响应。
-			if _, cached, ok := req.etagStore.Get(req.etagKey); ok && cached != "" {
+			// 驱逐判定看 ok 而非体是否为空（#319）：空体条目是合法缓存
+			// （204/HEAD 的 2xx 没有体、照常入库）——按 `cached != ""` 判驱逐
+			// 会让空体条目永远走降级无条件重发、重发成功又把空体存回去，
+			// 条件请求对这类端点永不生效、限流预算每轮翻倍。
+			if _, cached, ok := req.etagStore.Get(req.etagKey); ok {
 				return decodeOK([]byte(cached), out)
 			}
 			if attempt == 0 {
