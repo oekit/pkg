@@ -73,3 +73,31 @@ func TestTruncEllipsis_NIsRuneBudgetNotTotal(t *testing.T) {
 		})
 	}
 }
+
+// TestTruncNeverInvalidUTF8 #327 证据收口：issue 现场是下游按**字节**切 CJK
+// 响应体（`body[:n]`），落点进多字节字符中间即产出非法 UTF-8（日志 JSON 编码
+// 报错/终端乱码）。本包原语自 ekit 拆分起就已存在（TruncRunes/TruncBytes/
+// TruncEllipsis，httpjson StatusError 已消费），此处穷举全部预算档位，
+// 钉住「任何预算下都不产出非法 UTF-8」的现状——含 2/3/4 字节混合 rune。
+func TestTruncNeverInvalidUTF8(t *testing.T) {
+	mixed := "中文响应体body🎉被按字节切断ABC就会产出非法UTF-8" // 1/2/3/4 字节 rune 混排
+	for budget := 0; budget <= len(mixed)+2; budget++ {
+		for _, tc := range []struct {
+			name string
+			out  string
+		}{
+			{"TruncBytes", mustStr(func() (string, bool) { return TruncBytes(mixed, budget) })},
+			{"TruncRunes", mustStr(func() (string, bool) { return TruncRunes(mixed, budget) })},
+			{"TruncEllipsis", TruncEllipsis(mixed, budget)},
+		} {
+			if !utf8.ValidString(tc.out) {
+				t.Fatalf("%s 预算 %d 产出非法 UTF-8: %q", tc.name, budget, tc.out)
+			}
+		}
+	}
+}
+
+func mustStr(f func() (string, bool)) string {
+	s, _ := f()
+	return s
+}
