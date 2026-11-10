@@ -6,6 +6,10 @@
 
 关联问题单：oekit/pkg#358。
 
+- feat(procx): WithMemoryLimit 子进程内存上限（linux cgroup v2 memory.max + memory.swap.max 钉 0）+ MemoryLimitCapable 问询面——建不出组/写不进 memory.max 即拒绝执行（fail closed），cgroup v1 与非 linux 如实降级声明，不再静默不限
+
+关联问题单：oekit/pkg#359。
+
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
 ## [v0.43.0] — 2026-11-11

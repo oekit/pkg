@@ -1,5 +1,5 @@
-// Package procx 子进程治理三件套：进程**树**终止、子进程**最小环境**、输出
-// **封顶**。stdlib-only（pkg 零第三方依赖红线），原语下沉自 oagentkit/runtime
+// Package procx 子进程治理四件套：进程**树**终止、子进程**最小环境**、输出
+// **封顶**、内存**上限**（pkg#359）。stdlib-only（pkg 零第三方依赖红线），原语下沉自 oagentkit/runtime
 // procx 同款纪律（pkg#284：下游 pigeonbox/core 直接依赖 oagentkit 会新增跨
 // org 依赖边，决策记录 pigeonbox/core#71）。三件套对应 pkg#294 的承诺：
 // 树终止先行落地（v0.38.2/v0.39.0），最小环境与输出封顶由 pkg#314 补齐——
@@ -98,6 +98,27 @@
 // Result.StderrTruncated 里如实标记：「被截断」与「本来就这么短」必须可
 // 区分（正好等于上限不算截断）。缺省（不传）无上限——存量调用不受影响。
 //
+// # 内存上限（pkg#359：唯一要动内核接口的一件）
+//
+// [WithMemoryLimit] 给 Run 的子进程设**物理内存**上限：linux 走 cgroup v2
+// memory.max（RSS + page cache），swap 同步钉 0（memory.swap.max——否则有
+// swap 的机器上超限是「狂换页继续跑」而非「超限被杀」，OOM 语义落空，
+// Docker VM 实测）。Go runtime 的虚拟 arena 预留不落地、不占
+// 配额，runtime 起得来——RLIMIT_AS/RLIMIT_DATA 限的是**虚拟地址空间**，
+// 帽小了 runtime 自己起不来（fatal error: runtime: out of memory）、帽大了
+// 兜不住，是错的工具（下游 ptc 实测）。超限由内核 OOM-killer SIGKILL ⇒
+// Result.ExitCode = -1（被信号杀），与「自己非零退出（启动失败）」可辨——
+// 退出状态不归一。
+//
+// 兑现纪律 **fail closed**（与 sandbox.Capable「建不出即拒绝」同口径）：
+// 建不出组 / 写不进 memory.max（无权限、cgroup v1、非 linux）→ Run 报错
+// **拒绝执行**，不静默降级成不限——「上限没生效但调用看起来成功」比不实现
+// 更坏。兑现与否先问 [MemoryLimitCapable]（真实建组+写 memory.max+回收
+// 探测，不猜权限）。组回收：Run 结束/取消都清 cgroup（空组才删得掉），
+// 不留残组。边界：子进程 Start 与挂入组之间有微秒级窗口，窗口内已落地的
+// 分配不受帽；非 linux 如实声明不支持（[ErrMemoryLimitUnsupported]），
+// 不假装。
+//
 // # 与仓内其他包的分工
 //
 // shellx 是「字符串怎么写进命令行」（转义/分词，纯函数）；本包是「命令怎么
@@ -110,5 +131,6 @@
 //	res, err := procx.Run(ctx, "ffmpeg", args,          // 全治理形态：
 //	    procx.WithGrace(2*time.Second),                 //   宽限可调
 //	    procx.WithOutputLimit(64<<10),                  //   输出各限 64KB，截断可判定
-//	    procx.WithEnv(nil))                             //   白名单环境（默认拒绝）
+//	    procx.WithEnv(nil),                             //   白名单环境（默认拒绝）
+//	    procx.WithMemoryLimit(256<<20))                 //   物理内存帽（cgroup v2；兑现不了即拒绝执行）
 package procx

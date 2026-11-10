@@ -18,6 +18,8 @@ type config struct {
 	envExtra    []string
 	outputLimit int
 	limitSet    bool
+	memLimit    int64
+	memLimitSet bool
 }
 
 // RunOption 定制 Run 形态的治理行为
@@ -108,6 +110,16 @@ func Run(ctx context.Context, name string, args []string, opts ...RunOption) (*R
 			o(&c)
 		}
 	}
+	// 内存上限（pkg#359）：组与 memory.max 在 Start **之前**就位——兑现不了
+	// 就拒绝执行（fail closed），子进程根本不会被执行，不静默降级成不限。
+	var mg memGroup
+	if c.memLimitSet {
+		var err error
+		mg, err = setupMemoryLimit(c.memLimit)
+		if err != nil {
+			return nil, err
+		}
+	}
 	cmd, st := newCmd(ctx, name, args, c.grace)
 	if c.minimalEnv {
 		cmd.Env = ChildEnv(c.envExtra)
@@ -121,15 +133,33 @@ func Run(ctx context.Context, name string, args []string, opts ...RunOption) (*R
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		st.release()
+		if mg != nil {
+			_ = mg.destroy()
+		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err() // exec.Start 对已取消 ctx 返回 ctx.Err()
 		}
 		return nil, err
 	}
 	st.arm(cmd)
+	if mg != nil {
+		if err := mg.attach(cmd.Process.Pid); err != nil {
+			// 上限挂不进组还照跑 = 静默不限：收掉刚启动的子进程树，如实报错。
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			st.release()
+			st.reap(cmd)
+			_ = mg.destroy()
+			return nil, fmt.Errorf("procx: WithMemoryLimit: %w", err)
+		}
+	}
 	werr := cmd.Wait()
 	st.release()
 	st.reap(cmd)
+	var derr error
+	if mg != nil {
+		derr = mg.destroy()
+	}
 	// cmd.Wait 返回时输出拷贝 goroutine 已全部收束（os/exec 契约；WaitDelay
 	// 到期强关管道的收口同样等 goroutine 退出后才返回），读缓冲无竞争。
 	res := &Result{
@@ -153,8 +183,14 @@ func Run(ctx context.Context, name string, args []string, opts ...RunOption) (*R
 	} else if werr == nil {
 		res.ExitCode = 0
 	}
+	if derr != nil {
+		werr = errors.Join(werr, fmt.Errorf("procx: WithMemoryLimit: %w", derr))
+	}
 	if ctx.Err() != nil {
-		return res, ctx.Err()
+		if derr == nil {
+			return res, ctx.Err()
+		}
+		return res, errors.Join(ctx.Err(), werr)
 	}
 	return res, werr
 }
