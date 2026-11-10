@@ -50,7 +50,9 @@ func WithRetryAfterSink(ctx context.Context) context.Context {
 	return context.WithValue(ctx, retryAfterKey{}, &retryAfterHolder{})
 }
 
-// RetryAfterFrom 读取最近一次 429 的服务端建议（0 = 无）。重试环在计算退避时调用。
+// RetryAfterFrom 读取最近一次 429 的服务端建议（0 = 无可表示的建议——未捕获/
+// 解析失败/数值荒谬；超可信上限的建议原样返回，采信与否由 SelectRetryDelay 判定，
+// #363）。重试环在计算退避时调用。
 // sink 不随尝试清除：仅对本次失败确为限流的场景采信（陈旧建议不得套用到
 // 非限流错误上），门控归调用方的重试策略。
 func RetryAfterFrom(ctx context.Context) time.Duration {
@@ -95,22 +97,32 @@ func (t RetryAfterTransport) RoundTrip(req *http.Request) (*http.Response, error
 }
 
 // parseRetryAfter 解析 Retry-After：延迟秒数（整数）或 HTTP-date。无法解析
-// 或超出可信上限返回 0。
+// 或数值荒谬（乘进 time.Duration 必然溢出）返回 0。
 //
-// 秒数形态在乘进 time.Duration 之前先判上界：secs 来自 Atoi 无上界，直接
-// 乘 time.Second 会让 int64 纳秒回绕——超大建议可能溢出成毫秒级小正值，
+// 秒数形态在乘进 time.Duration 之前先封死溢出入口：secs 来自 Atoi 无上界，
+// 直接乘 time.Second 会让 int64 纳秒回绕——超大建议可能溢出成毫秒级小正值，
 // 恰好穿透 SelectRetryDelay 的「≤5min 才采信」闸（#343：建议「等 5.8 亿年」
-// 被算成「等 0.29 秒」反被采信）。超上限与「无法解析」同口径处理为 0：
-// 不采信，退避交回本地曲线/上层 failover。
+// 被算成「等 0.29 秒」反被采信）。
+//
+// 但**可信上界的判定不在这里**（#363）：MaxServerRetryAfter 的声明是「超过
+// 5 分钟的建议不直接采信」、SelectRetryDelay 的规则是「≤5min 或 < 本地曲线
+// 才采信，否则本地曲线」——两者的前提都是「超钳制的建议值存在、在取舍层
+// 被降级」。parse 层若把超钳制值折叠成 0，秒数形态的超钳制建议永远到不了
+// 取舍层（SelectRetryDelay 超钳制分支不可达），且下游无法区分「无建议」与
+// 「建议超钳制」（oagentkit/agentrun 的 Retry-After 门控实测被此盲掉）。
+// 故这里只拦「无法表示的荒谬值」，可表示的值一律原样捕获，采信与否交回
+// SelectRetryDelay（捕获不改写、取舍才钳制）。
+const maxSafeParseSecs = 9223372036 // int64 纳秒上界 9223372036854775807 ÷ 1e9 向下取整；更大的秒数必然回绕
+
 func parseRetryAfter(v string) time.Duration {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return 0
 	}
 	if secs, err := strconv.Atoi(v); err == nil {
-		// 上界与 MaxServerRetryAfter 同口径（300s）；同时封死 int64 溢出
-		// 的入口——超过上限的秒数永远到不了乘法这一步。
-		if secs <= 0 || secs > int(MaxServerRetryAfter/time.Second) {
+		// 溢出防护（#343）：只拦乘 time.Second 必回绕的荒谬值；
+		// 可信上界（MaxServerRetryAfter）由 SelectRetryDelay 在取舍层执行。
+		if secs <= 0 || secs > maxSafeParseSecs {
 			return 0
 		}
 		return time.Duration(secs) * time.Second
