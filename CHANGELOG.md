@@ -310,7 +310,7 @@ Refs matrix-tools#237
 
 - 04ad929
 
-- 文档：溯源注释的旧 org 前缀改为「上游 zentao-*」——消除 audit 残留引用误报（yi-nology 字样触发旧引用门禁）
+- 文档：溯源注释的旧 org 前缀改为「上游 zentao-*」——消除 audit 残留引用误报（旧 org 字样触发残留引用门禁）
 - 文档：版本引用对齐最新 tag（refresh_versions）
 
 ## [v0.37.1] — 2026-11-07
@@ -380,7 +380,7 @@ Refs matrix-tools#237
 
 ### 新增：SecureString/SecureBytes + pagination.Walk + httpjson.NormalizeBaseURL——zentao-mini/max 同源 helper 下沉单源
 
-yi-nology/zentao-mini#22（common 已归档，按 README 接档路线落本仓）：
+上游 zentao-mini#22（原 org 的 common 仓已归档，按 README 接档路线落本仓）：
 - secretx: 内存态敏感凭证持有原语（XOR 混淆+双向零化+副本隔离+常量时间比较）
 - pagination: Walk 翻页聚合单源（短页即末页+逐页 ctx 检查+MaxWalkPages 防呆）
 - httpjson: NormalizeBaseURL（补 scheme/去尾斜杠/去空白/空串原样）
