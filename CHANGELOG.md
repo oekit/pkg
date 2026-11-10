@@ -2,6 +2,12 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.44.0] — 2026-11-11
+
+- 三件套新原语：shellx.Analyze 词法事实面（重定向/命令替换/普通参数可辨，#358）；procx cgroup v2 memory.max 内存限额（fail-closed + OOM 信号可辨 + swap 封死，#359）；resumable 分片上传/断点续传会话面（CAS 进度 + 断点双源对账 + 孤儿清扫，#361）
+
+关联问题单：pkg#358、pkg#359、pkg#361。
+
 ## [v0.43.0] — 2026-11-11
 
 - 五单审计收口：Checker 构造期 fail-fast + 刷新 WithoutCancel 不传染（#356 #352）；SingleFlightCache 注入路径不合并、Refresh 分键（#353）；Ring 逻辑序归基防 32 位回绕（#354）；cache/pack/urlguard 裸 Option 改名 CheckerOption/WriterOption/GuardOption（#355）
