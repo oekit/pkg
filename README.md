@@ -1,6 +1,6 @@
 # pkg
 
-> 微工具集 28 合 1（零第三方依赖，仅标准库）——bloomx/bufiox/cache/cli/container/contextx/convert/ctxscope/encoding/enumx/errors/httpjson/jsonrepair/mathx/pack/pagination/pathx/procx/ptrx/secretx/shellx/singleflighttest/slicex/stringx/strmap/timex/urlguard/webhook
+> 微工具集 29 合 1（零第三方依赖，仅标准库）——bloomx/bufiox/cache/cli/container/contextx/convert/ctxscope/encoding/enumx/errors/httpjson/jsonrepair/mathx/pack/pagination/pathx/procx/ptrx/secretx/shellx/singleflighttest/slicex/stringx/strmap/tarx/timex/urlguard/webhook
 
 > 🌐 项目主页：**https://oekit.github.io/** · 名称由来：**O**pen **E**asy **Kit**（开源 · 易用 · 工具集合）
 > 🤖 AI Agent：本仓规范与硬规则见 [AGENTS.md](AGENTS.md)；机器可读索引见 [llms.txt](https://oekit.github.io/llms.txt)（接口签名以源码为准）。
