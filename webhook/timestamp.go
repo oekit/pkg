@@ -34,8 +34,7 @@ type TimestampHMACValidator struct {
 	tsName  string // 时间戳来源（header 名或 query 参数名，随 source）
 	sigName string // 签名来源（header 名或 query 参数名）
 	source  sourceKind
-	sep     string                                     // message 组装分隔符
-	msg     func(timestamp string, body []byte) []byte // message 组装钩子（nil = sep 缺省形态）
+	msg     func(timestamp string, body []byte) []byte // message 组装钩子（nil = Gitee 官方缺省形态）
 	drift   time.Duration
 	now     func() time.Time // 时钟注入（假时钟确定性测试；nil = time.Now）
 	urlEnc  bool             // 签名值经 URL 编码（Java URLEncoder 形态：先解一层再比对）
@@ -122,7 +121,6 @@ func NewTimestampHMACValidator(secret []byte, algo crypto.Hash, tsName, sigName 
 		algo:    algo,
 		tsName:  tsName,
 		sigName: sigName,
-		sep:     "\n",
 		drift:   DefaultMaxDrift,
 	}
 	for _, opt := range opts {
@@ -175,14 +173,17 @@ func (v *TimestampHMACValidator) message(timestamp string, body []byte) []byte {
 	if v.msg != nil {
 		return v.msg(timestamp, body)
 	}
-	// Gitee 官方口径：timestamp + "\n" + secret
-	return []byte(timestamp + v.sep + string(v.secret))
+	return giteeMessage(timestamp, v.secret)
+}
+
+// giteeMessage 缺省 message 组装单源：Gitee 官方口径 timestamp + "\n" +
+// secret——验证器与发端签名器（#325/#328）共用同一份，杜绝双源漂移。
+func giteeMessage(timestamp string, secret []byte) []byte {
+	return []byte(timestamp + "\n" + string(secret))
 }
 
 func (v *TimestampHMACValidator) sum(message []byte) []byte {
-	mac := hmac.New(v.algo.New, v.secret)
-	mac.Write(message)
-	return mac.Sum(nil)
+	return hmacSum(v.algo, v.secret, message)
 }
 
 func (v *TimestampHMACValidator) timestamp(r *http.Request) (string, bool) {

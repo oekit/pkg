@@ -115,9 +115,24 @@ func (v *HMACValidator) Validate(r *http.Request, body []byte) error {
 }
 
 func (v *HMACValidator) sum(body []byte) []byte {
-	mac := hmac.New(v.algo.New, v.secret)
-	mac.Write(body)
+	return hmacSum(v.algo, v.secret, body)
+}
+
+// hmacSum HMAC 摘要单源实现：验证器家族与签名器家族（发端对偶 #325/#328）
+// 共用同一份——message 怎么进 hash、哪个算法、哪个密钥，库内只有这一处。
+func hmacSum(algo crypto.Hash, secret, message []byte) []byte {
+	mac := hmac.New(algo.New, secret)
+	mac.Write(message)
 	return mac.Sum(nil)
+}
+
+// encodeSignature 签名值统一编码：前缀 + hex/base64——与 decodeSignature
+// 互为镜像，前缀/编码约定由同一组选项驱动（验证器怎么读、签名器就怎么写）。
+func encodeSignature(sum []byte, prefix string, useBase64 bool) string {
+	if useBase64 {
+		return prefix + base64.StdEncoding.EncodeToString(sum)
+	}
+	return prefix + hex.EncodeToString(sum)
 }
 
 // decodeSignature 签名值统一解码：trim → 前缀剥离（大小写不敏感、匹配才
