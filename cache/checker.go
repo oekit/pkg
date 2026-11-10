@@ -140,7 +140,7 @@ func (c *Checker) Check(ctx context.Context) error {
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			// 瞬态取消不缓存：不坐 failTTL，下次 Check 立即重试
-			//（DeadlineExceeded 是真实失败——超时多数是慢依赖，照常短缓存）。
+			// （DeadlineExceeded 是真实失败——超时多数是慢依赖，照常短缓存）。
 			c.validUntil = time.Time{}
 		} else {
 			c.validUntil = c.now().Add(c.failTTL)
