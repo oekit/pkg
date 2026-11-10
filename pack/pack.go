@@ -45,15 +45,15 @@ type Writer struct {
 	manifest *Manifest
 }
 
-// Option Writer 可选项。
-type Option func(*Writer)
+// WriterOption Writer 可选项（pkg#355：禁裸 Option——多包 co-import 冲突）。
+type WriterOption func(*Writer)
 
 // WithClock 注入清单 created_at 的时刻来源（缺省 time.Now）。
 //
 // 清单里的 created_at 落在包里（下游拿它判断「何时导出」「两个包哪个新」），
 // 写死时刻会让导出逻辑没法做确定性单测、同一份数据反复导出不可复现——
 // 注入固定时钟即可得到逐字节可复现的清单。
-func WithClock(now func() time.Time) Option {
+func WithClock(now func() time.Time) WriterOption {
 	return func(w *Writer) { w.now = now }
 }
 
@@ -63,7 +63,7 @@ func WithClock(now func() time.Time) Option {
 // 读取方据此判断能否识别该包。
 //
 // 可选项 WithClock 注入清单 created_at 的时刻来源（缺省 time.Now）。
-func NewWriter(w io.Writer, formatVersion int, opts ...Option) *Writer {
+func NewWriter(w io.Writer, formatVersion int, opts ...WriterOption) *Writer {
 	wr := &Writer{
 		zw:      zip.NewWriter(w),
 		version: formatVersion,

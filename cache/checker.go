@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // refreshCall 一次进行中的刷新：err 先写后 close(done)——等待者经 <-done 的
@@ -34,16 +36,28 @@ type Checker struct {
 	inflight   *refreshCall
 }
 
-// Option Checker 可选项。
-type Option func(*Checker)
+// CheckerOption Checker 可选项（pkg#355：禁裸 Option——多包 co-import 冲突）。
+type CheckerOption func(*Checker)
 
-// WithClock 注入时钟（测试用；缺省 time.Now）。
-func WithClock(now func() time.Time) Option {
-	return func(c *Checker) { c.now = now }
+// WithClock 注入时钟（测试用；缺省 time.Now）。nil 按仓规总则②显式回退默认值，
+// 不把 nil 存进实例——nil 一路存到 Check 的 c.now() 调用点是构造期之外的
+// 远端 SIGSEGV（pkg#356，与同包 LocalConfig.Now「nil 视为缺省」口径对齐）。
+func WithClock(now func() time.Time) CheckerOption {
+	return func(c *Checker) {
+		if now == nil {
+			return
+		}
+		c.now = now
+	}
 }
 
-// NewChecker 构造；failTTL<=0 时与 ttl 同值。
-func NewChecker(refresh func(ctx context.Context) error, ttl, failTTL time.Duration, opts ...Option) *Checker {
+// NewChecker 构造；failTTL<=0 时与 ttl 同值。refresh 是必需回调、无默认可回退，
+// nil 属构造期非法值，按仓规总则① fail-fast（pkg#356）——推迟到 Check 的调用点
+// 才炸（且炸在 defer recover 注册之前）违反「构造期发现」纪律。
+func NewChecker(refresh func(ctx context.Context) error, ttl, failTTL time.Duration, opts ...CheckerOption) *Checker {
+	if refresh == nil {
+		panic("cache: NewChecker: refresh is nil")
+	}
 	if failTTL <= 0 {
 		failTTL = ttl
 	}
@@ -60,7 +74,17 @@ func NewChecker(refresh func(ctx context.Context) error, ttl, failTTL time.Durat
 }
 
 // Check 返回缓存有效期内的结果；过期则触发一次刷新（并发调用合并为一次）。
+//
+// 刷新语义（pkg#352）：刷新是一次**共享的**缓存回填，执行在
+// context.WithoutCancel(ctx) 上——单个观察者断开/超时不中止刷新本身，也
+// 不把它的取消缓存成失败结果传染所有等待者。ctx 携带的取值（鉴权等）原样
+// 保留，只剥离取消信号。已取消的调用方在入口直接返回，不触发共享刷新。
+// 刷新自身返回 context.Canceled（回调内部取消）视为瞬态：如实分发给本次
+// 全体调用方，但不写入缓存（不发 failTTL），下次 Check 立即重试。
 func (c *Checker) Check(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	now := c.now()
 	if now.Before(c.validUntil) {
@@ -107,12 +131,20 @@ func (c *Checker) Check(ctx context.Context) error {
 		}
 	}()
 
-	err := c.refresh(ctx)
+	// pkg#352：刷新跑在 WithoutCancel 上——leader 断开不再把共享刷新整个
+	// 拖死；ctx 取值保留，仅剥离取消/超时信号。
+	err := c.refresh(context.WithoutCancel(ctx))
 
 	c.mu.Lock()
 	c.cachedErr = err
 	if err != nil {
-		c.validUntil = c.now().Add(c.failTTL)
+		if errors.Is(err, context.Canceled) {
+			// 瞬态取消不缓存：不坐 failTTL，下次 Check 立即重试
+			// （DeadlineExceeded 是真实失败——超时多数是慢依赖，照常短缓存）。
+			c.validUntil = time.Time{}
+		} else {
+			c.validUntil = c.now().Add(c.failTTL)
+		}
 	} else {
 		c.validUntil = c.now().Add(c.ttl)
 	}

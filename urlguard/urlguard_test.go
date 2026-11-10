@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func mustGuard(t *testing.T, opts ...Option) *Guard {
+func mustGuard(t *testing.T, opts ...GuardOption) *Guard {
 	t.Helper()
 	g, err := New(opts...)
 	if err != nil {

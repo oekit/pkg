@@ -110,6 +110,47 @@ func (sf *SingleFlightCache[T]) Exists(ctx context.Context, key string) (bool, e
 	return sf.inner.Exists(ctx, key)
 }
 
+// sfPath 区分三条加载路径的 SourceInjector 转发形态（pkg#353 重构）：
+// 三条路径对内层的委托口径各不相同（构造期形态不走注入面），必须如实分派。
+type sfPath int
+
+const (
+	sfDefault       sfPath = iota // GetOrLoad：构造期 Source + 默认 TTL
+	sfWithSource                  // GetOrLoadWithSource：按调用注入 source
+	sfWithSourceTTL               // GetOrLoadWithSourceTTL：按调用注入 source + ttl
+)
+
+// loadOnce 一次「直接回源」执行体（与原 flight 闭包的内层分发口径逐分支一致）：
+// 内层支持「加载不计读数」时走 noMiss 口径（pkg#90——前置检查已计过同一次读），
+// 其次按路径形态转发 SourceInjector（pkg#77），内层两样都不支持时退回内层
+// GetOrLoad。GetOrLoad 经 flight 包它；按调用注入的路径不经 flight 直呼
+// （pkg#353——source/函数不可比较，合并会让等待者拿走先到者的回源结果，
+// 自身注入的 source/TTL 被静默丢弃）。
+func (sf *SingleFlightCache[T]) loadOnce(ctx context.Context, key string, path sfPath, source SourceFunc[T], sourceTTL SourceFuncWithTTL[T], ttl time.Duration) (*T, error) {
+	if nl, ok := sf.inner.(noMissLoader[T]); ok {
+		var spec loadSpec[T]
+		switch path {
+		case sfWithSource:
+			spec.source = source
+		case sfWithSourceTTL:
+			spec.sourceTTL = sourceTTL
+			spec.ttl = ttl
+		}
+		return nl.getOrLoadNoMiss(ctx, key, spec)
+	}
+	switch path {
+	case sfWithSource:
+		if si, ok := sf.inner.(SourceInjector[T]); ok {
+			return si.GetOrLoadWithSource(ctx, key, source)
+		}
+	case sfWithSourceTTL:
+		if si, ok := sf.inner.(SourceInjector[T]); ok {
+			return si.GetOrLoadWithSourceTTL(ctx, key, sourceTTL, ttl)
+		}
+	}
+	return sf.inner.GetOrLoad(ctx, key)
+}
+
 // GetOrLoad 获取缓存，带 singleflight 保护。
 // 同一个 key 的并发请求只会有一个实际调用 Source。
 //
@@ -128,6 +169,9 @@ func (sf *SingleFlightCache[T]) Exists(ctx context.Context, key string) (bool, e
 // hit && value != nil，nil 值命中会落入 flight.Do → 加载路径，而加载路径的
 // 命中分支会**再计一次 hit** ⇒ 一次读被计成两次命中，命中率被系统性抬高
 // （违背 pkg#90「一次读恰好计入命中或未命中之一」）。
+//
+// 合并语义（pkg#353）：本方法全体调用方语义同一（构造期 Source + 默认 TTL），
+// 按 key 合并安全。
 func (sf *SingleFlightCache[T]) GetOrLoad(ctx context.Context, key string) (*T, error) {
 	// 1. 先查缓存（命中即返——含值为 nil 的真值命中，#203）
 	value, hit, err := sf.peek(ctx, key)
@@ -142,10 +186,7 @@ func (sf *SingleFlightCache[T]) GetOrLoad(ctx context.Context, key string) (*T, 
 	//    （pkg#90：内层支持「加载不计未命中」时走该路径——前置检查已计过同一次
 	//    未命中，加载路径再计一次会把一次未命中计成两次，命中率指标失真）
 	val, err := sf.flight.Do(ctx, key, func(ctx context.Context) (*T, error) {
-		if nl, ok := sf.inner.(noMissLoader[T]); ok {
-			return nl.getOrLoadNoMiss(ctx, key, loadSpec[T]{})
-		}
-		return sf.inner.GetOrLoad(ctx, key)
+		return sf.loadOnce(ctx, key, sfDefault, nil, nil, 0)
 	})
 	if err != nil {
 		return nil, err
@@ -173,11 +214,16 @@ func (sf *SingleFlightCache[T]) peek(ctx context.Context, key string) (*T, bool,
 	return v, v != nil, nil
 }
 
-// GetOrLoadWithSource 按调用注入的 source 回源（pkg#77，带 singleflight 保护）。
+// GetOrLoadWithSource 按调用注入的 source 回源（pkg#77）。
 //
-// 与 GetOrLoad 的差别只有一处：回源函数由**调用方在调用点**给出，而不是
-// 构造期固定——面向「回源依赖 key / 依赖调用上下文」的形态（token / 凭据 /
-// 租户级缓存）。单飞语义不变：同一 key 的并发请求只会有一个实际调用 source。
+// 与 GetOrLoad 的差别：回源函数由**调用方在调用点**给出，而不是构造期固定
+// ——面向「回源依赖 key / 依赖调用上下文」的形态（token / 凭据 / 租户级缓存）。
+//
+// ⚠️ 合并语义（pkg#353）：**本路径不进 singleflight**。source 函数不可比较，
+// 按 key 合并会让等待者共享先到者的回源结果——自身注入的 source 被静默丢弃
+// （同 key 不同调用方注入不同回源时，可能拿到别的调用方凭据取回的值）。
+// 并发未命中会各自回源（雷群防护只在构造期 Source 的 GetOrLoad 与 Refresh 上）；
+// 需要对同 key 去重时用构造期 Source 的 GetOrLoad。
 //
 // 内层不支持按调用注入（未实现 cache.SourceInjector）时退回内层的构造期
 // Source——能力缺失是内层的事实，不是装饰器引入的偏差。
@@ -192,29 +238,18 @@ func (sf *SingleFlightCache[T]) GetOrLoadWithSource(ctx context.Context, key str
 		return value, nil
 	}
 
-	// 2. singleflight 去重，按调用注入的 source 回源
-	//    （pkg#90：内层支持「加载不计未命中」时走该路径）
-	val, err := sf.flight.Do(ctx, key, func(ctx context.Context) (*T, error) {
-		if nl, ok := sf.inner.(noMissLoader[T]); ok {
-			return nl.getOrLoadNoMiss(ctx, key, loadSpec[T]{source: source})
-		}
-		if si, ok := sf.inner.(SourceInjector[T]); ok {
-			return si.GetOrLoadWithSource(ctx, key, source)
-		}
-		return sf.inner.GetOrLoad(ctx, key)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return val, nil
+	// 2. 直接回源，不经 flight（pkg#353：合并会串味）
+	return sf.loadOnce(ctx, key, sfWithSource, source, nil, 0)
 }
 
-// GetOrLoadWithSourceTTL 按调用注入的 source 回源并按 ttl 回填（pkg#77，
-// 带 singleflight 保护）。
+// GetOrLoadWithSourceTTL 按调用注入的 source 回源并按 ttl 回填（pkg#77）。
 //
 // 与 GetOrLoadWithSource 的差别：回源函数可携带动态 TTL（SourceFuncWithTTL），
 // 且 ttl > 0 时覆盖回源给出的 TTL（ttl <= 0 时按回源给出的 TTL，仍无则
 // 退回构造期默认 TTL）。
+//
+// ⚠️ 合并语义（pkg#353）：同 GetOrLoadWithSource——**本路径不进 singleflight**，
+// 并发未命中各自回源；注入的 source 与 TTL 不被并发合并吞掉。
 //
 // 内层不支持按调用注入（未实现 cache.SourceInjector）时退回内层的构造期
 // 回源；此时 ttl > 0 仍生效（覆盖构造期回源给出的 TTL）。
@@ -229,21 +264,8 @@ func (sf *SingleFlightCache[T]) GetOrLoadWithSourceTTL(ctx context.Context, key 
 		return value, nil
 	}
 
-	// 2. singleflight 去重，按调用注入的 source 回源
-	//    （pkg#90：内层支持「加载不计未命中」时走该路径）
-	val, err := sf.flight.Do(ctx, key, func(ctx context.Context) (*T, error) {
-		if nl, ok := sf.inner.(noMissLoader[T]); ok {
-			return nl.getOrLoadNoMiss(ctx, key, loadSpec[T]{sourceTTL: source, ttl: ttl})
-		}
-		if si, ok := sf.inner.(SourceInjector[T]); ok {
-			return si.GetOrLoadWithSourceTTL(ctx, key, source, ttl)
-		}
-		return sf.inner.GetOrLoad(ctx, key)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return val, nil
+	// 2. 直接回源，不经 flight（pkg#353：合并会串味/丢 TTL）
+	return sf.loadOnce(ctx, key, sfWithSourceTTL, nil, source, ttl)
 }
 
 // Stats 返回内层缓存的观测计数快照（pkg#76）。
@@ -280,9 +302,19 @@ func (sf *SingleFlightCache[T]) MGet(ctx context.Context, keys ...string) (map[s
 	return out, nil
 }
 
+// refreshFlightKeyPrefix Refresh 路径的 flight 键命名空间前缀（pkg#353）：
+// 与 load 路径分键——「强刷」是删除重建，与进行中的普通加载合并会把强刷
+// 退化成「加入当前加载」，等待者可能拿回刷新请求之前的旧加载结果。
+const refreshFlightKeyPrefix = "\x00refresh:"
+
 // Refresh 刷新缓存（带 singleflight 保护）。
+//
+// 合并语义（pkg#353）：Refresh 只与同 key 的其他 Refresh 合并（语义同一：
+// 都是删除重建）；与进行中的 GetOrLoad 不合并——否则强刷退化为加入当前
+// 加载，返回旧值。Refresh 只对构造期 Source 的形态有意义（与
+// GetOrLoadWithSource 不同，这里无逐调用参数，按 key 合并安全）。
 func (sf *SingleFlightCache[T]) Refresh(ctx context.Context, key string) (*T, error) {
-	val, err := sf.flight.Do(ctx, key, func(ctx context.Context) (*T, error) {
+	val, err := sf.flight.Do(ctx, refreshFlightKeyPrefix+key, func(ctx context.Context) (*T, error) {
 		return sf.inner.Refresh(ctx, key)
 	})
 	if err != nil {
