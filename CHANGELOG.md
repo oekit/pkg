@@ -1,5 +1,11 @@
 # pkg CHANGELOG
 
+## [Unreleased]
+
+- feat(shellx): 词法事实面 Analyze——重定向运算符/目标与普通词分离（HasRedirect/重定向列表）、命令替换/进程替换/变量展开标 dynamic（单引号内一切字面不算）、按分隔符切段，前缀规则判据不再被「git status > /etc/passwd」整类绕过
+
+关联问题单：oekit/pkg#358。
+
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
 ## [v0.43.0] — 2026-11-11
