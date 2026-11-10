@@ -2,6 +2,16 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.42.0] — 2026-11-10
+
+- - fix(httpjson): parseRetryAfter 乘法前判上界——超大 Retry-After 溢出成毫秒级穿透 5 分钟可信闸的口子堵死（#343）
+- - feat(config): 静态配置加载管线——yaml(自研子集 parser,零三方依赖)→env 覆盖→缺省→MultiError 汇总校验 + Redact 路径脱敏 fail-loud（#329）
+- - feat(tarx): 防御式解包三件套——Scan/Write 奇偶同口径、Extract 穿越/设备类拒收、WithManifest sha256 清单+VerifyManifest 指名篡改（#326）
+- - feat(webhook): 发端签名 helper 族——SignHMAC/SignTimestampHMAC 与验签器同 HMACOption 单源（#325）；HMACSigner/事件信封/NewEventID 幂等 ID 与五平台发↔收配对表（#328）
+- - test(stringx): TruncRunes/TruncBytes 永不产出非法 UTF-8 的穷举证据（#327 证据收口——能力自 v0.34.0 已在）
+
+关联问题单：pkg#343、pkg#329、pkg#326、pkg#325、pkg#328、pkg#327。
+
 ## [v0.41.1] — 2026-11-10
 
 - - fix(mathx): Round/Floor/DivisionN 溢出防护补查 x*times 乘积中间量，不再静默产出 +Inf（#317）
