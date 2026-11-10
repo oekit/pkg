@@ -18,6 +18,8 @@ type config struct {
 	envExtra    []string
 	outputLimit int
 	limitSet    bool
+	memLimit    int64
+	memLimitSet bool
 }
 
 // RunOption 定制 Run 形态的治理行为
@@ -119,17 +121,51 @@ func Run(ctx context.Context, name string, args []string, opts ...RunOption) (*R
 	}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// 内存上限：先建组再执行——建不出/写不进一律拒绝执行（fail closed，
+	// pkg#359：静默不限比不实现更坏）。
+	var memg *MemGroup
+	if c.memLimitSet {
+		var err error
+		memg, err = NewMemGroup(c.memLimit)
+		if err != nil {
+			st.release()
+			return nil, fmt.Errorf("procx: 兑现子进程内存上限失败，拒绝执行（fail closed）: %w", err)
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		st.release()
-		if ctx.Err() != nil {
-			return nil, ctx.Err() // exec.Start 对已取消 ctx 返回 ctx.Err()
+		var closeErr error
+		if memg != nil {
+			closeErr = memg.Close(context.WithoutCancel(ctx))
 		}
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, errors.Join(ctx.Err(), closeErr) // exec.Start 对已取消 ctx 返回 ctx.Err()
+		}
+		return nil, errors.Join(err, closeErr)
+	}
+	if memg != nil {
+		if err := memg.Attach(cmd.Process.Pid); err != nil {
+			// 兜底没生效就绝不让子进程继续跑（那正是「静默不限」的形态）：
+			// 杀掉、收场、报错。
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			st.release()
+			st.reap(cmd)
+			return nil, errors.Join(
+				fmt.Errorf("procx: 子进程未进内存限额组，已终止（fail closed）: %w", err),
+				memg.Close(context.WithoutCancel(ctx)))
+		}
 	}
 	st.arm(cmd)
 	werr := cmd.Wait()
 	st.release()
 	st.reap(cmd)
+	// 组回收挂在 Wait/清扫之后：残余进程先被收场，空组才删得掉；回收失败
+	// 并入返回 error（errors.Join），不留无信号的残组。
+	var memCloseErr error
+	if memg != nil {
+		memCloseErr = memg.Close(context.WithoutCancel(ctx))
+	}
 	// cmd.Wait 返回时输出拷贝 goroutine 已全部收束（os/exec 契约；WaitDelay
 	// 到期强关管道的收口同样等 goroutine 退出后才返回），读缓冲无竞争。
 	res := &Result{
@@ -154,7 +190,13 @@ func Run(ctx context.Context, name string, args []string, opts ...RunOption) (*R
 		res.ExitCode = 0
 	}
 	if ctx.Err() != nil {
+		if memCloseErr != nil {
+			return res, errors.Join(ctx.Err(), memCloseErr)
+		}
 		return res, ctx.Err()
+	}
+	if memCloseErr != nil {
+		return res, errors.Join(werr, memCloseErr)
 	}
 	return res, werr
 }
