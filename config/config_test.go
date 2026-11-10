@@ -75,8 +75,8 @@ db:
 	// tag 缺省仅当字段为零值时生效；预置值不被缺省覆盖。
 	cfg2 := &testConfig{DB: testDB{MaxConns: 7}}
 	t.Setenv("APP_DB_DSN", "d")
-	if err := Load(cfg2); err != nil {
-		t.Fatal(err)
+	if err2 := Load(cfg2); err2 != nil {
+		t.Fatal(err2)
 	}
 	if cfg2.DB.MaxConns != 7 {
 		t.Errorf("缺省不得覆盖预置值: %d", cfg2.DB.MaxConns)
@@ -195,8 +195,8 @@ func TestLoad_RequiredSources(t *testing.T) {
 
 	// 预置值满足 required
 	v2 := &c{B: "preset"}
-	if err := Load(v2, WithRequired("B")); err != nil {
-		t.Fatalf("预置值满足 required: %v", err)
+	if err2 := Load(v2, WithRequired("B")); err2 != nil {
+		t.Fatalf("预置值满足 required: %v", err2)
 	}
 
 	// 声明了不存在的路径 → fail-fast
@@ -221,8 +221,6 @@ func TestLoad_NonemptyValidate(t *testing.T) {
 	type c struct {
 		Token string `validate:"nonempty"`
 	}
-	t.Setenv("CFG_TOKEN_V", "")
-	_ = t.Setenv
 
 	v := &c{Token: ""}
 	err := Load(v)
@@ -230,17 +228,16 @@ func TestLoad_NonemptyValidate(t *testing.T) {
 		t.Fatalf("空串应触发 nonempty: %v", err)
 	}
 	// 装配后有值 → 通过
-	t.Setenv("APP_LOG_LEVEL", "x")
 	v2 := &c{Token: "abc"}
-	if err := Load(v2); err != nil {
-		t.Fatalf("非空应通过: %v", err)
+	if err2 := Load(v2); err2 != nil {
+		t.Fatalf("非空应通过: %v", err2)
 	}
 
 	type bad struct {
 		N int `validate:"unknown_rule"`
 	}
-	if err := Load(&bad{}); err == nil || !strings.Contains(err.Error(), "unknown_rule") {
-		t.Fatalf("未知 validate 规则应报错: %v", err)
+	if err3 := Load(&bad{}); err3 == nil || !strings.Contains(err3.Error(), "unknown_rule") {
+		t.Fatalf("未知 validate 规则应报错: %v", err3)
 	}
 }
 

@@ -356,8 +356,7 @@ func inferScalar(text string) any {
 	case "false", "False", "FALSE":
 		return false
 	}
-	switch c := text[0]; {
-	case c == '+' || c == '-' || c == '.' || (c >= '0' && c <= '9'):
+	if c := text[0]; c == '+' || c == '-' || c == '.' || (c >= '0' && c <= '9') {
 		if strings.Contains(text, "_") {
 			// ParseFloat 按 Go 字面量规则会吃掉下划线，但 YAML 1.2 core schema
 			// 不认 1_000——按文档边界保持字符串，不做 Go 特有扩展。
