@@ -96,9 +96,9 @@ func TestExtract_MaliciousArchive(t *testing.T) {
 		t.Fatalf("合法条目应落地 Files=2 Dirs=1, got %+v", st)
 	}
 	for _, rel := range []string{"ok.txt", "okdir/nested.txt"} {
-		b, err := os.ReadFile(filepath.Join(root, rel))
-		if err != nil || string(b) == "pwned" {
-			t.Fatalf("合法条目 %s 应原样落地, got %q err=%v", rel, b, err)
+		b, rerr := os.ReadFile(filepath.Join(root, rel))
+		if rerr != nil || string(b) == "pwned" {
+			t.Fatalf("合法条目 %s 应原样落地, got %q err=%v", rel, b, rerr)
 		}
 	}
 	// root 外零写入：parent（root 的上一层）只应有 extract 一个目录

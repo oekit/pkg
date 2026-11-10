@@ -136,20 +136,20 @@ func TestWriteExtractRoundTrip(t *testing.T) {
 // requireSameTree 两棵树内容逐字节一致（文件集合与内容全等）。
 func requireSameTree(t *testing.T, src, dst string) {
 	t.Helper()
-	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
 		}
 		rel, _ := filepath.Rel(src, p)
 		q := filepath.Join(dst, rel)
-		fi, err := d.Info()
-		if err != nil {
-			return err
+		fi, ierr := d.Info()
+		if ierr != nil {
+			return ierr
 		}
 		if fi.IsDir() {
-			got, err := os.Stat(q)
-			if err != nil {
-				return err
+			got, serr := os.Stat(q)
+			if serr != nil {
+				return serr
 			}
 			if !got.IsDir() {
 				t.Fatalf("%s 应是目录", rel)
@@ -159,13 +159,13 @@ func requireSameTree(t *testing.T, src, dst string) {
 		if !d.Type().IsRegular() {
 			return nil // 非常规条目本就不传输
 		}
-		srcData, err := os.ReadFile(p)
-		if err != nil {
-			return err
+		srcData, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return rerr
 		}
-		dstData, err := os.ReadFile(q)
-		if err != nil {
-			t.Fatalf("落地树缺 %s: %v", rel, err)
+		dstData, derr := os.ReadFile(q)
+		if derr != nil {
+			t.Fatalf("落地树缺 %s: %v", rel, derr)
 		}
 		if !bytes.Equal(srcData, dstData) {
 			t.Fatalf("%s 内容不一致", rel)

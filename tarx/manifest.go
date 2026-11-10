@@ -60,7 +60,13 @@ func VerifyManifest(root string) error {
 		if !ok {
 			return fmt.Errorf("%w: %s 第 %d 行格式非法: %q", ErrMismatch, ManifestName, i+1, line)
 		}
-		f, err := os.Open(filepath.Join(root, filepath.FromSlash(name)))
+		target, ok := safeJoin(root, name)
+		if !ok {
+			// 清单被改出穿越条目：与解包同口径判死——绝不按清单指名走出
+			// root（落点约束先行，os.Open 的名字不再是自由污点）
+			return fmt.Errorf("%w: %s: 条目名越界 %q", ErrMismatch, ManifestName, name)
+		}
+		f, err := os.Open(target)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				return fmt.Errorf("%w: %s: 清单列出的文件缺失", ErrMismatch, name)

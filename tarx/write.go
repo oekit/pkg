@@ -55,10 +55,7 @@ func Write(w io.Writer, root string, opts ...WriteOption) (Stats, error) {
 	tw := tar.NewWriter(w)
 
 	err := walkRel(root, func(rel, path string, d fs.DirEntry) error {
-		regular, isDir, err := countEntry(&st, rel, d)
-		if err != nil {
-			return err
-		}
+		regular, isDir := countEntry(&st, rel, d)
 		if isDir {
 			return writeDirEntry(tw, rel, d)
 		}

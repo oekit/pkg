@@ -74,8 +74,8 @@ func TestManifest_TamperByte(t *testing.T) {
 		t.Fatal(err)
 	}
 	data[0] ^= 0x01 // 翻转一个字节
-	if err := os.WriteFile(target, data, 0o644); err != nil {
-		t.Fatal(err)
+	if werr := os.WriteFile(target, data, 0o644); werr != nil {
+		t.Fatal(werr)
 	}
 
 	err = VerifyManifest(out)
@@ -134,6 +134,25 @@ func TestManifest_NoManifest(t *testing.T) {
 	}
 	if errors.Is(err, ErrMismatch) {
 		t.Fatal("ErrNoManifest 不应同时是 ErrMismatch（两类不可混报）")
+	}
+}
+
+// TestManifest_TraversalLine 清单被改出穿越条目 → ErrMismatch（与解包同
+// 口径判死，绝不按清单指名走出 root）。
+func TestManifest_TraversalLine(t *testing.T) {
+	out, _ := manifestTree(t)
+	mp := filepath.Join(out, ManifestName)
+	zero := strings.Repeat("0", 64)
+	if err := os.WriteFile(mp, []byte(zero+"  ../../outside.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := VerifyManifest(out)
+	if !errors.Is(err, ErrMismatch) {
+		t.Fatalf("穿越清单行应 ErrMismatch, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "越界") {
+		t.Fatalf("错误消息应点名越界条目, got %q", err.Error())
 	}
 }
 

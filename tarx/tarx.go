@@ -62,18 +62,18 @@ func walkRel(root string, fn func(rel, path string, d fs.DirEntry) error) error 
 // countEntry 预扫/写出共用的计数分支：按分类口径累计 Stats，返回条目
 // 形态（常规文件/目录；其余为跳过）。regular 需要 size 时由调用方取
 // d.Info()（Scan 累 Bytes、Write 写 header）。
-func countEntry(s *Stats, rel string, d fs.DirEntry) (regular, isDir bool, err error) {
+func countEntry(s *Stats, rel string, d fs.DirEntry) (regular, isDir bool) {
 	isRegular, isDirectory := classify(d)
 	switch {
 	case isRegular:
 		s.Files++
-		return true, false, nil
+		return true, false
 	case isDirectory:
 		s.Dirs++
-		return false, true, nil
+		return false, true
 	default:
 		s.skip(rel)
-		return false, false, nil
+		return false, false
 	}
 }
 

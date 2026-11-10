@@ -15,10 +15,7 @@ import "io/fs"
 func Scan(root string) (Stats, error) {
 	var st Stats
 	err := walkRel(root, func(rel, path string, d fs.DirEntry) error {
-		regular, _, err := countEntry(&st, rel, d)
-		if err != nil {
-			return err
-		}
+		regular, _ := countEntry(&st, rel, d)
 		if regular {
 			size, err := scanFileSize(d)
 			if err != nil {
