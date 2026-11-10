@@ -168,16 +168,16 @@ func Analyze(s string) (*Analysis, error) {
 
 	for a.i < len(a.s) {
 		c := a.s[a.i]
-		switch {
-		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+		switch c {
+		case ' ', '\t', '\n', '\r':
 			flush()
 			a.i++
-		case c == ';':
+		case ';':
 			endSeg(";")
 			a.i++
-		case c == '|':
+		case '|':
 			endSeg(a.controlPair('|'))
-		case c == '&':
+		case '&':
 			if strings.HasPrefix(a.s[a.i:], "&&") {
 				endSeg("&&")
 				a.i += 2
@@ -202,7 +202,7 @@ func Analyze(s string) (*Analysis, error) {
 			}
 			endSeg("&")
 			a.i++
-		case c == '<' || c == '>':
+		case '<', '>':
 			if a.i+1 < len(a.s) && a.s[a.i+1] == '(' {
 				// 进程替换 <( ) / >( )：词的构成部分，走词扫描
 				w, err := a.scanWord()
@@ -344,11 +344,11 @@ func (a *analyzer) scanWord() (res wordScan, err error) {
 	var sb strings.Builder
 	for a.i < len(a.s) {
 		c := a.s[a.i]
-		switch {
-		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ';' || c == '|' || c == '&':
+		switch c {
+		case ' ', '\t', '\n', '\r', ';', '|', '&':
 			res.Text = sb.String()
 			return res, nil
-		case c == '<' || c == '>':
+		case '<', '>':
 			if a.i+1 < len(a.s) && a.s[a.i+1] == '(' {
 				v, err := a.substParen()
 				if err != nil {
@@ -362,7 +362,7 @@ func (a *analyzer) scanWord() (res wordScan, err error) {
 			}
 			res.Text = sb.String()
 			return res, nil
-		case c == '\'':
+		case '\'':
 			// 单引号内一切原样（含反斜杠、$、反引号）——不置 Dynamic
 			a.i++
 			j := strings.IndexByte(a.s[a.i:], '\'')
@@ -373,14 +373,14 @@ func (a *analyzer) scanWord() (res wordScan, err error) {
 			a.i += j + 1
 			res.digits = false
 			res.started = true
-		case c == '"':
+		case '"':
 			a.i++
 			if err := a.scanDoubleQuote(&sb, &res.Dynamic); err != nil {
 				return res, err
 			}
 			res.digits = false
 			res.started = true
-		case c == '\\':
+		case '\\':
 			// 裸反斜杠：转义任意下一字符；\+换行是行拼接（整体消失）
 			if a.i+1 >= len(a.s) {
 				return res, ErrTrailingEscape
@@ -391,7 +391,7 @@ func (a *analyzer) scanWord() (res wordScan, err error) {
 				res.digits = false
 			}
 			a.i += 2
-		case c == '`':
+		case '`':
 			v, err := a.substBacktick()
 			if err != nil {
 				return res, err
@@ -400,7 +400,7 @@ func (a *analyzer) scanWord() (res wordScan, err error) {
 			res.Dynamic = true
 			res.digits = false
 			res.started = true
-		case c == '$':
+		case '$':
 			next := byte(0)
 			if a.i+1 < len(a.s) {
 				next = a.s[a.i+1]

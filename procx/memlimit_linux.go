@@ -179,7 +179,7 @@ func subtreeHasMemory(dir string) bool {
 
 // enableMemory 向 dir 的 subtree_control 写 "+memory"。
 func enableMemory(dir string) error {
-	return os.WriteFile(filepath.Join(dir, "cgroup.subtree_control"), []byte("+memory"), 0o600) //nolint:gosec // G703:落点是本库自建的 cgroup 目录（NewMemGroup 产出），非外部可控路径
+	return os.WriteFile(filepath.Join(dir, "cgroup.subtree_control"), []byte("+memory"), 0o600)
 }
 
 // attachMemGroup 把 pid 写进组的 cgroup.procs（设置面）。
@@ -206,7 +206,9 @@ func removeMemGroup(ctx context.Context, dir string) error {
 		case errors.Is(err, os.ErrNotExist):
 			return errors.Join(killErrs...) // 组已回收
 		case err != nil:
-			lastErr = err
+			// listGroupProcs 读错不丢信号：并入 killErrs（此前赋给 lastErr 后
+			// 立即被 removeCgroupTree 的返回覆盖，读错静默消失——ineffassign 实锤）
+			killErrs = append(killErrs, fmt.Errorf("procx: 读 cgroup 组内进程 %s: %w", dir, err))
 		default:
 			for _, pid := range pids {
 				if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
