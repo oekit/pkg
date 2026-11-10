@@ -19,6 +19,16 @@ func TestParseRetryAfter(t *testing.T) {
 		"":     0,
 		"abc":  0,
 		" 30 ": 30 * time.Second,
+		// 可信上界（MaxServerRetryAfter=5min）正好采信：
+		"300": 300 * time.Second,
+		// 上界之外按「不采信」返回 0（此前这些值会原样乘进 Duration）：
+		"301": 0,
+		// #343 回归：无上界时 time.Duration(secs)*time.Second 的 int64 回绕——
+		// 18446744074 * 1e9 mod 2^64 = 290.448384ms，反被当成正常小退避采纳；
+		// 9223372037 * 1e9 回绕成负值。两者都必须在乘法前拦为 0。
+		"18446744074":          0,
+		"9223372037":           0,
+		"18446744073709551614": 0, // 64 位下 Atoi 范围错误 → 0
 	}
 	for in, want := range cases {
 		if got := parseRetryAfter(in); got != want {
@@ -85,5 +95,34 @@ func TestRetryAfterTransportCaptures(t *testing.T) {
 	_ = resp2.Body.Close()
 	if calls.Load() != 2 {
 		t.Fatalf("服务端应被调用两次: %d", calls.Load())
+	}
+}
+
+// TestRetryAfterOverflowNotAdopted #343 端到端回归：服务端返回超大秒数
+// （语义是「等 5.8 亿年」），修复前经 int64 回绕变成 290.448384ms 且恰好
+// 通过 SelectRetryDelay 的可信闸被采纳——被 429 的端点反被更快重试。
+// 修复后该值必须在解析层拦为 0，最终退避回落到本地曲线。
+func TestRetryAfterOverflowNotAdopted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "18446744074")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	tr := RetryAfterTransport{}
+	ctx := WithRetryAfterSink(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	if got := RetryAfterFrom(ctx); got != 0 {
+		t.Fatalf("超大建议必须被拦为 0（不得捕获回绕值）: %v", got)
+	}
+	local := 2 * time.Second
+	if got := SelectRetryDelay(local, RetryAfterFrom(ctx)); got != local {
+		t.Fatalf("无采信建议时最终退避应为本地曲线 %v: %v", local, got)
 	}
 }
