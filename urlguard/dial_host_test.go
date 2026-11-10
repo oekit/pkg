@@ -86,7 +86,7 @@ func TestDialFunc_AllowsPublicHost(t *testing.T) {
 func TestDialFunc_HostVerdictMatchesCheckHost(t *testing.T) {
 	cases := []struct {
 		name string
-		opts []Option
+		opts []GuardOption
 		host string
 	}{
 		{"约定域 .local", nil, "svc.local"},
@@ -97,9 +97,9 @@ func TestDialFunc_HostVerdictMatchesCheckHost(t *testing.T) {
 		{"私网 IP 字面量", nil, "10.0.0.1"},
 		{"公网 IP 字面量", nil, "93.184.216.34"},
 		{"exotic IPv4 字面量", nil, "127.1"},
-		{"allowPrivate 下约定域", []Option{WithAllowPrivate()}, "svc.local"},
-		{"allowDomains 显式放行约定域", []Option{WithAllowDomains("svc.local")}, "svc.local"},
-		{"allowDomains 不覆盖兄弟域", []Option{WithAllowDomains("svc.local")}, "other.local"},
+		{"allowPrivate 下约定域", []GuardOption{WithAllowPrivate()}, "svc.local"},
+		{"allowDomains 显式放行约定域", []GuardOption{WithAllowDomains("svc.local")}, "svc.local"},
+		{"allowDomains 不覆盖兄弟域", []GuardOption{WithAllowDomains("svc.local")}, "other.local"},
 	}
 
 	for _, tt := range cases {

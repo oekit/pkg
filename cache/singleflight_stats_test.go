@@ -297,10 +297,15 @@ func TestSingleFlightCache_Stats_NilValueHitCountParity(t *testing.T) {
 }
 
 // TestSingleFlightCache_Stats_ConcurrentMissCounted 钉住并发口径：N 个并发
-// 未命中记 N 次未命中（与内层直连一致），回源仍只调用一次（单飞有效）。
+// 未命中记 N 次未命中（与内层直连一致），语义同一的构造期回源仍只调用
+// 一次（单飞有效）。
 //
 // 这是「一次读恰好计入命中或未命中之一」在并发下的口径：每个等待者的
 // 前置检查各计一次未命中，回源加载路径不再重复计。
+//
+// 单飞断言落在 GetOrLoad（构造期 Source）上——按调用注入的路径自 pkg#353
+// 起不再合并（source 不可比较，合并即串味），见
+// TestSingleFlightCache_GetOrLoadWithSource_NoCrossMerge。
 func TestSingleFlightCache_Stats_ConcurrentMissCounted(t *testing.T) {
 	var calls atomic.Int64
 	src := func(context.Context, string) (*string, error) {
@@ -311,7 +316,7 @@ func TestSingleFlightCache_Stats_ConcurrentMissCounted(t *testing.T) {
 		return &v, nil
 	}
 
-	inner := NewLocalCache(LocalConfig[string]{TTL: 0})
+	inner := NewLocalCache(LocalConfig[string]{TTL: 0, Source: src})
 	t.Cleanup(func() { _ = inner.Close(context.Background()) })
 	sf := NewSingleFlightCache[string](inner)
 
@@ -321,8 +326,8 @@ func TestSingleFlightCache_Stats_ConcurrentMissCounted(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			if _, err := sf.GetOrLoadWithSource(context.Background(), "k", src); err != nil {
-				t.Errorf("GetOrLoadWithSource: %v", err)
+			if _, err := sf.GetOrLoad(context.Background(), "k"); err != nil {
+				t.Errorf("GetOrLoad: %v", err)
 			}
 		}()
 	}

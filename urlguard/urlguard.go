@@ -176,8 +176,8 @@ type exactHost struct {
 // portNoPort 表示"未指定端口"，与端口 0 区分。
 const portNoPort = -1
 
-// Option 配置 Guard。
-type Option func(*Guard)
+// GuardOption 配置 Guard（pkg#355：禁裸 Option——多包 co-import 冲突）。
+type GuardOption func(*Guard)
 
 // WithAllowPrivate 放行全部内网/loopback 地址——仅供测试环境打本机 mock server；
 // 生产构造不要使用。
@@ -186,13 +186,13 @@ type Option func(*Guard)
 // 字面量形态（2852039166 / 0177.0.0.1 / 0x7f000001 / 127.1 等）仍无条件拒绝。
 // 打本机请写标准点分十进制（127.0.0.1 / [::1]）——宽松解析器（inet_aton
 // 语义）对 exotic 形态的解析行为不可控，字面量形态判定不随本豁免放开。
-func WithAllowPrivate() Option {
+func WithAllowPrivate() GuardOption {
 	return func(g *Guard) { g.allowPrivate = true }
 }
 
 // WithAllowCIDRs 按网段显式豁免（如内网 webhook 端点 "10.20.0.0/16"）。
 // 网段文法非法时 New 报错。
-func WithAllowCIDRs(cidrs ...string) Option {
+func WithAllowCIDRs(cidrs ...string) GuardOption {
 	return func(g *Guard) { g.rawAllowCIDRs = append(g.rawAllowCIDRs, cidrs...) }
 }
 
@@ -219,7 +219,7 @@ func WithAllowCIDRs(cidrs ...string) Option {
 //   - exotic IPv4 字面量闸门无条件先跑，不随本豁免放开；
 //   - 公开的 CheckIP 无 host 上下文，**不**享受本豁免（豁免是 host 维度的，
 //     CheckIP 只拿得到 IP）——豁免通道在 CheckURL/CheckHost/DialFunc。
-func WithAllowDomains(domains ...string) Option {
+func WithAllowDomains(domains ...string) GuardOption {
 	return func(g *Guard) {
 		if g.allowDomains == nil {
 			g.allowDomains = map[string]struct{}{}
@@ -237,7 +237,7 @@ func WithAllowDomains(domains ...string) Option {
 }
 
 // WithAllowedSchemes 覆盖 CheckURL 的 scheme 白名单（缺省 http/https）。
-func WithAllowedSchemes(schemes ...string) Option {
+func WithAllowedSchemes(schemes ...string) GuardOption {
 	return func(g *Guard) {
 		if g.schemes == nil {
 			g.schemes = map[string]struct{}{}
@@ -281,7 +281,7 @@ func WithAllowedSchemes(schemes ...string) Option {
 // 注意：白名单只在 URL 层判定。DialFunc 做的是 IP 级判定（DNS rebinding /
 // TOCTOU 闭合），不参与白名单比对——拨号层的 addr 是实际拨号地址（默认端口
 // 已补齐），按字面比对会误杀正常配置。
-func WithExactHosts(hosts ...string) Option {
+func WithExactHosts(hosts ...string) GuardOption {
 	return func(g *Guard) {
 		g.exactEnabled = true
 		g.rawExactHosts = append(g.rawExactHosts, hosts...)
@@ -324,7 +324,7 @@ func WithExactHosts(hosts ...string) Option {
 // 钩子可能被调用多次：拨号层对解析出的**每个** IP 各调一次（预检），
 // 建连成功后对真实端点再调一次（复核），URL 层的 IP 字面量判定也会调。
 // 钩子应是无副作用的纯判定。
-func WithCheckIPFunc(fn func(net.IP) error) Option {
+func WithCheckIPFunc(fn func(net.IP) error) GuardOption {
 	return func(g *Guard) { g.checkIPFunc = fn }
 }
 
@@ -342,12 +342,12 @@ func WithCheckIPFunc(fn func(net.IP) error) Option {
 //
 // 钩子可能被调用多次：CheckHost / CheckURL / 拨号层各判定一次。钩子应是
 // 无副作用的纯判定。
-func WithCheckHostFunc(fn func(host string) error) Option {
+func WithCheckHostFunc(fn func(host string) error) GuardOption {
 	return func(g *Guard) { g.checkHostFunc = fn }
 }
 
 // New 构造 Guard。CIDR 文法非法时报错（fail-fast，不带病运行）。
-func New(opts ...Option) (*Guard, error) {
+func New(opts ...GuardOption) (*Guard, error) {
 	g := &Guard{
 		schemes: map[string]struct{}{},
 		lookup:  defaultLookup,
