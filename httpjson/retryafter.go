@@ -94,14 +94,23 @@ func (t RetryAfterTransport) RoundTrip(req *http.Request) (*http.Response, error
 	return resp, err
 }
 
-// parseRetryAfter 解析 Retry-After：延迟秒数（整数）或 HTTP-date。无法解析返回 0。
+// parseRetryAfter 解析 Retry-After：延迟秒数（整数）或 HTTP-date。无法解析
+// 或超出可信上限返回 0。
+//
+// 秒数形态在乘进 time.Duration 之前先判上界：secs 来自 Atoi 无上界，直接
+// 乘 time.Second 会让 int64 纳秒回绕——超大建议可能溢出成毫秒级小正值，
+// 恰好穿透 SelectRetryDelay 的「≤5min 才采信」闸（#343：建议「等 5.8 亿年」
+// 被算成「等 0.29 秒」反被采信）。超上限与「无法解析」同口径处理为 0：
+// 不采信，退避交回本地曲线/上层 failover。
 func parseRetryAfter(v string) time.Duration {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return 0
 	}
 	if secs, err := strconv.Atoi(v); err == nil {
-		if secs < 0 {
+		// 上界与 MaxServerRetryAfter 同口径（300s）；同时封死 int64 溢出
+		// 的入口——超过上限的秒数永远到不了乘法这一步。
+		if secs <= 0 || secs > int(MaxServerRetryAfter/time.Second) {
 			return 0
 		}
 		return time.Duration(secs) * time.Second
