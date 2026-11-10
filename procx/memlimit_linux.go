@@ -2,6 +2,10 @@
 
 package procx
 
+// cgroup 虚拟文件写入统一 0o600：目标文件（memory.max / cgroup.procs 等）由
+// 内核创建，perm 参数仅在 O_CREAT 创建时生效——此处取 0600 满足 gosec G306
+// 的最小权限判据，不改变任何运行期行为。
+
 import (
 	"context"
 	"errors"
@@ -100,7 +104,7 @@ func makeMemGroup(parent string, aligned int64) (string, error) {
 	}
 
 	maxFile := filepath.Join(dir, "memory.max")
-	if err := os.WriteFile(maxFile, []byte(strconv.FormatInt(aligned, 10)), 0o644); err != nil {
+	if err := os.WriteFile(maxFile, []byte(strconv.FormatInt(aligned, 10)), 0o600); err != nil {
 		return cleanup(err)
 	}
 	back, err := os.ReadFile(maxFile)
@@ -118,7 +122,7 @@ func makeMemGroup(parent string, aligned int64) (string, error) {
 	// 无换出面可限，如实跳过——memory.max 仍是物理内存上限。
 	swapFile := filepath.Join(dir, "memory.swap.max")
 	if _, err := os.Stat(swapFile); err == nil {
-		if err := os.WriteFile(swapFile, []byte("0"), 0o644); err != nil {
+		if err := os.WriteFile(swapFile, []byte("0"), 0o600); err != nil {
 			return cleanup(fmt.Errorf("写 %s 失败: %w", swapFile, err))
 		}
 		if back, err := os.ReadFile(swapFile); err != nil || strings.TrimSpace(string(back)) != "0" {
@@ -143,10 +147,10 @@ func delegateDance(base string) (string, error) {
 	}
 	moved := make([]int, 0, len(pids))
 	for _, pid := range pids {
-		if err := os.WriteFile(filepath.Join(rest, "cgroup.procs"), []byte(strconv.Itoa(pid)), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(rest, "cgroup.procs"), []byte(strconv.Itoa(pid)), 0o600); err != nil {
 			// 回滚：已挪的挪回去。
 			for _, done := range moved {
-				_ = os.WriteFile(filepath.Join(base, "cgroup.procs"), []byte(strconv.Itoa(done)), 0o644)
+				_ = os.WriteFile(filepath.Join(base, "cgroup.procs"), []byte(strconv.Itoa(done)), 0o600)
 			}
 			_ = os.Remove(rest)
 			return "", fmt.Errorf("挪 pid=%d 至 %s: %w", pid, rest, err)
@@ -155,7 +159,7 @@ func delegateDance(base string) (string, error) {
 	}
 	if err := enableMemory(base); err != nil {
 		for _, done := range moved {
-			_ = os.WriteFile(filepath.Join(base, "cgroup.procs"), []byte(strconv.Itoa(done)), 0o644)
+			_ = os.WriteFile(filepath.Join(base, "cgroup.procs"), []byte(strconv.Itoa(done)), 0o600)
 		}
 		_ = os.Remove(rest)
 		return "", err
@@ -175,13 +179,13 @@ func subtreeHasMemory(dir string) bool {
 
 // enableMemory 向 dir 的 subtree_control 写 "+memory"。
 func enableMemory(dir string) error {
-	return os.WriteFile(filepath.Join(dir, "cgroup.subtree_control"), []byte("+memory"), 0o644)
+	return os.WriteFile(filepath.Join(dir, "cgroup.subtree_control"), []byte("+memory"), 0o600)
 }
 
 // attachMemGroup 把 pid 写进组的 cgroup.procs（设置面）。
 func attachMemGroup(dir string, pid int) error {
 	procs := filepath.Join(dir, "cgroup.procs")
-	if err := os.WriteFile(procs, []byte(strconv.Itoa(pid)), 0o644); err != nil {
+	if err := os.WriteFile(procs, []byte(strconv.Itoa(pid)), 0o600); err != nil {
 		return fmt.Errorf("procx: 移入 cgroup 组 %s 失败（pid=%d）: %w", dir, pid, err)
 	}
 	return nil
