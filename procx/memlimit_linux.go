@@ -185,7 +185,7 @@ func enableMemory(dir string) error {
 // attachMemGroup 把 pid 写进组的 cgroup.procs（设置面）。
 func attachMemGroup(dir string, pid int) error {
 	procs := filepath.Join(dir, "cgroup.procs")
-	if err := os.WriteFile(procs, []byte(strconv.Itoa(pid)), 0o600); err != nil {
+	if err := os.WriteFile(procs, []byte(strconv.Itoa(pid)), 0o600); err != nil { //nolint:gosec // G703:落点是本库自建 cgroup 组内的 cgroup.procs，非外部可控路径
 		return fmt.Errorf("procx: 移入 cgroup 组 %s 失败（pid=%d）: %w", dir, pid, err)
 	}
 	return nil

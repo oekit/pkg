@@ -184,8 +184,8 @@ func TestPutChunk(t *testing.T) {
 	}
 
 	// 状态门：非收片态不收片。
-	if err := m.sessions.Abandon(ctx, s.ID); err != nil {
-		t.Fatal(err)
+	if cerr := m.sessions.Abandon(ctx, s.ID); cerr != nil {
+		t.Fatal(cerr)
 	}
 	if err := m.PutChunk(ctx, s.ID, 1, strings.NewReader("BBBB"), 4); !errors.Is(err, ErrSessionAborted) {
 		t.Fatalf("中止态收片 err = %v, want ErrSessionAborted", err)
@@ -210,15 +210,15 @@ func TestListPartsReconcile(t *testing.T) {
 	// 传 0、2；随后字节被偷走（模拟存储丢件）——登记了但字节丢的分片
 	// 必须回缺片清单，否则断点查询会把客户端骗去 Complete 才炸。
 	for i, data := range map[int]string{0: "AAAA", 2: "cc"} {
-		if err := m.PutChunk(ctx, s.ID, i, strings.NewReader(data), 4); err != nil {
-			t.Fatal(err)
+		if cerr := m.PutChunk(ctx, s.ID, i, strings.NewReader(data), 4); cerr != nil {
+			t.Fatal(cerr)
 		}
 	}
-	if err := chunks.DeletePrefix(ctx, s.ID); err != nil {
-		t.Fatal(err)
+	if cerr := chunks.DeletePrefix(ctx, s.ID); cerr != nil {
+		t.Fatal(cerr)
 	}
-	if err := m.PutChunk(ctx, s.ID, 0, strings.NewReader("AAAA"), 4); err != nil { // 只补回 0
-		t.Fatal(err)
+	if cerr := m.PutChunk(ctx, s.ID, 0, strings.NewReader("AAAA"), 4); cerr != nil { // 只补回 0
+		t.Fatal(cerr)
 	}
 	recv, missing, _, err = m.ListParts(ctx, s.ID)
 	if err != nil || !slices.Equal(recv, []int{0}) || !slices.Equal(missing, []int{1, 2}) {
@@ -226,8 +226,8 @@ func TestListPartsReconcile(t *testing.T) {
 	}
 
 	// 字节在但没登记（写后登记前崩溃）：不算已收（登记是收片成功的一部分）。
-	if err := chunks.Put(ctx, s.ID, 1, strings.NewReader("BBBB")); err != nil {
-		t.Fatal(err)
+	if cerr := chunks.Put(ctx, s.ID, 1, strings.NewReader("BBBB")); cerr != nil {
+		t.Fatal(cerr)
 	}
 	recv, missing, _, err = m.ListParts(ctx, s.ID)
 	if err != nil || !slices.Equal(recv, []int{0}) || !slices.Equal(missing, []int{1, 2}) {
@@ -318,11 +318,11 @@ func TestCompleteMissingChunks(t *testing.T) {
 	}
 
 	// 回滚后可补传重试（会话不换）。
-	if err := m.PutChunk(ctx, s.ID, 1, strings.NewReader("BBBB"), 4); err != nil {
-		t.Fatal(err)
+	if cerr := m.PutChunk(ctx, s.ID, 1, strings.NewReader("BBBB"), 4); cerr != nil {
+		t.Fatal(cerr)
 	}
-	if err := m.PutChunk(ctx, s.ID, 2, strings.NewReader("cc"), 2); err != nil {
-		t.Fatal(err)
+	if cerr := m.PutChunk(ctx, s.ID, 2, strings.NewReader("cc"), 2); cerr != nil {
+		t.Fatal(cerr)
 	}
 	if err := m.Complete(ctx, s.ID, func(context.Context, *Session, io.Reader) error { return nil }); err != nil {
 		t.Fatalf("补传后 Complete: %v", err)
@@ -539,14 +539,14 @@ func TestMemSessionStoreStateGates(t *testing.T) {
 	st := NewMemSessionStore()
 	s := &Session{ID: "a", Hash: "h", Size: 4, ChunkSize: 2, Status: StatusUploading, CreatedAt: time.Now()}
 
-	if err := st.Create(ctx, s); err != nil {
-		t.Fatal(err)
+	if cerr := st.Create(ctx, s); cerr != nil {
+		t.Fatal(cerr)
 	}
 	if err := st.Create(ctx, s); !errors.Is(err, ErrSessionExists) {
 		t.Errorf("重复 Create err = %v, want ErrSessionExists", err)
 	}
-	if err := st.AppendReceived(ctx, "a", []int{0, 0}); err != nil { // 幂等登记
-		t.Fatal(err)
+	if cerr := st.AppendReceived(ctx, "a", []int{0, 0}); cerr != nil { // 幂等登记
+		t.Fatal(cerr)
 	}
 
 	// 读侧快照隔离：改返回值不污染内部。
@@ -573,8 +573,8 @@ func TestMemSessionStoreStateGates(t *testing.T) {
 	if err := st.AppendReceived(ctx, "a", []int{1}); !errors.Is(err, ErrMergeInProgress) {
 		t.Errorf("合并中登记 err = %v", err)
 	}
-	if err := st.Finish(ctx, "a"); err != nil {
-		t.Fatal(err)
+	if cerr := st.Finish(ctx, "a"); cerr != nil {
+		t.Fatal(cerr)
 	}
 	if err := st.Finish(ctx, "a"); err == nil {
 		t.Errorf("二次 Finish = nil, want error")
@@ -588,8 +588,8 @@ func TestMemSessionStoreStateGates(t *testing.T) {
 	if err := st.Abandon(ctx, "a"); !errors.Is(err, ErrSessionDone) {
 		t.Errorf("完成态中止 err = %v", err)
 	}
-	if err := st.Delete(ctx, "a"); err != nil {
-		t.Fatal(err)
+	if cerr := st.Delete(ctx, "a"); cerr != nil {
+		t.Fatal(cerr)
 	}
 	if err := st.Delete(ctx, "a"); !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("二次 Delete err = %v", err)
@@ -623,8 +623,8 @@ func TestMemChunkStore(t *testing.T) {
 	ctx := context.Background()
 	c := NewMemChunkStore()
 
-	if err := c.Put(ctx, "a", 0, strings.NewReader("xyz")); err != nil {
-		t.Fatal(err)
+	if cerr := c.Put(ctx, "a", 0, strings.NewReader("xyz")); cerr != nil {
+		t.Fatal(cerr)
 	}
 	if size, err := c.Stat(ctx, "a", 0); err != nil || size != 3 {
 		t.Fatalf("Stat = %d %v", size, err)
@@ -650,8 +650,8 @@ func TestMemChunkStore(t *testing.T) {
 		t.Errorf("缺失 Open err = %v, want ErrChunkNotFound", err)
 	}
 	// DeletePrefix 幂等。
-	if err := c.DeletePrefix(ctx, "a"); err != nil {
-		t.Fatal(err)
+	if cerr := c.DeletePrefix(ctx, "a"); cerr != nil {
+		t.Fatal(cerr)
 	}
 	if err := c.DeletePrefix(ctx, "a"); err != nil {
 		t.Errorf("幂等 DeletePrefix = %v", err)
