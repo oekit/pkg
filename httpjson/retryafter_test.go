@@ -21,8 +21,11 @@ func TestParseRetryAfter(t *testing.T) {
 		" 30 ": 30 * time.Second,
 		// 可信上界（MaxServerRetryAfter=5min）正好采信：
 		"300": 300 * time.Second,
-		// 上界之外按「不采信」返回 0（此前这些值会原样乘进 Duration）：
-		"301": 0,
+		// 超可信上界的值**原样捕获**（#363）：采信与否由 SelectRetryDelay
+		// 判定（超钳制 ⇒ 本地曲线），parse 层不折叠——「超钳制」与「无建议」
+		// 必须可区分：
+		"301": 301 * time.Second,
+		"700": 700 * time.Second,
 		// #343 回归：无上界时 time.Duration(secs)*time.Second 的 int64 回绕——
 		// 18446744074 * 1e9 mod 2^64 = 290.448384ms，反被当成正常小退避采纳；
 		// 9223372037 * 1e9 回绕成负值。两者都必须在乘法前拦为 0。
@@ -124,5 +127,41 @@ func TestRetryAfterOverflowNotAdopted(t *testing.T) {
 	local := 2 * time.Second
 	if got := SelectRetryDelay(local, RetryAfterFrom(ctx)); got != local {
 		t.Fatalf("无采信建议时最终退避应为本地曲线 %v: %v", local, got)
+	}
+}
+
+// TestRetryAfterOverCapObservableNotAdopted #363 回归：超可信上限（但不溢出）的
+// 秒数建议必须**可观测**地进 sink——MaxServerRetryAfter「超过 5 分钟的建议不
+// 直接采信」与 SelectRetryDelay「≤5min 或 < 本地曲线才采信，否则本地曲线」
+// 两处声明都以「超钳制的建议值存在、在取舍层被降级」为前提；parse 层把超钳制
+// 折叠成 0 后秒数形态的超钳制建议永远到不了取舍层，且下游无法区分「无建议」
+// 与「建议超钳制」（oagentkit/agentrun 的 Retry-After 门控实测被此盲掉，
+// 其 TestWithRetryStillSkipsRerunOnHugeRateLimitHint 跟版转红）。
+// 双判据缺一不可：可观测 + 不被采信（#343 的安全目标不回退）。
+func TestRetryAfterOverCapObservableNotAdopted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "700") // 700s > 5min 可信上限，但远不溢出
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	tr := RetryAfterTransport{}
+	ctx := WithRetryAfterSink(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+
+	if got := RetryAfterFrom(ctx); got != 700*time.Second {
+		t.Fatalf("超钳制建议应可观测捕获（#363）: %v", got)
+	}
+	if got := SelectRetryDelay(0, RetryAfterFrom(ctx)); got != 0 {
+		t.Fatalf("超钳制建议不得被采信（#343 安全目标）: %v", got)
+	}
+	local := 2 * time.Second
+	if got := SelectRetryDelay(local, RetryAfterFrom(ctx)); got != local {
+		t.Fatalf("超钳制建议应回落本地曲线: %v", got)
 	}
 }
