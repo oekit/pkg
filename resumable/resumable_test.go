@@ -118,10 +118,10 @@ func TestInitDedup(t *testing.T) {
 
 	// 钩子错误原样上抛。
 	want := errors.New("store down")
-	if _, _, err := m.Init(ctx, InitReq{Hash: "h", Size: 1, ChunkSize: 1}, func(context.Context, string) (bool, error) {
+	if _, _, got := m.Init(ctx, InitReq{Hash: "h", Size: 1, ChunkSize: 1}, func(context.Context, string) (bool, error) {
 		return false, want
-	}); !errors.Is(err, want) {
-		t.Fatalf("dedup err = %v, want %v", err, want)
+	}); !errors.Is(got, want) {
+		t.Fatalf("dedup err = %v, want %v", got, want)
 	}
 
 	// 未命中：建会话。

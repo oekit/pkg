@@ -261,8 +261,8 @@ func (m *Manager) PutChunk(ctx context.Context, id string, idx int, r io.Reader,
 	if err != nil {
 		return err
 	}
-	if err := uploadingOnly(sess); err != nil {
-		return err
+	if upErr := uploadingOnly(sess); upErr != nil {
+		return upErr
 	}
 	n := sess.NumChunks()
 	if idx < 0 || idx >= n {
@@ -274,8 +274,8 @@ func (m *Manager) PutChunk(ctx context.Context, id string, idx int, r io.Reader,
 	}
 	// 流式写入：只读 want+1 字节，多一字节即超长（不整片进内存）。
 	lr := &io.LimitedReader{R: r, N: want + 1}
-	if err := m.chunks.Put(ctx, id, idx, lr); err != nil {
-		return fmt.Errorf("resumable: 写分片 %d: %w", idx, err)
+	if putErr := m.chunks.Put(ctx, id, idx, lr); putErr != nil {
+		return fmt.Errorf("resumable: 写分片 %d: %w", idx, putErr)
 	}
 	if lr.N == 0 {
 		return fmt.Errorf("%w: 分片 %d 超过 %d 字节", ErrChunkTooLarge, idx, want)

@@ -24,7 +24,7 @@ func newCmd(ctx context.Context, name string, args []string, grace time.Duration
 	if ctx == nil {
 		ctx = context.Background() // 仓规总则②：nil = 显式回退默认值
 	}
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G702:执行调用方给定命令是本库核心职能（进程执行原语），name/args 由调用方显式提供
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		terminateTree(cmd, grace)

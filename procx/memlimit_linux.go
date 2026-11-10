@@ -69,11 +69,11 @@ func createMemGroup(limitBytes int64) (string, int64, error) {
 		}
 		attempts = append(attempts, fmt.Errorf("procx: 本组 %s 建组: %w", base, err))
 	} else if err := enableMemory(base); err == nil {
-		dir, err := makeMemGroup(base, aligned)
-		if err == nil {
+		dir, mkErr := makeMemGroup(base, aligned)
+		if mkErr == nil {
 			return dir, aligned, nil
 		}
-		attempts = append(attempts, fmt.Errorf("procx: 本组 %s 建组: %w", base, err))
+		attempts = append(attempts, fmt.Errorf("procx: 本组 %s 建组: %w", base, mkErr))
 	} else {
 		attempts = append(attempts, fmt.Errorf("procx: 本组 %s 启用 memory: %w", base, err))
 		// 策略 3：委托舞蹈——本组清空后才能启用 memory。
@@ -179,7 +179,7 @@ func subtreeHasMemory(dir string) bool {
 
 // enableMemory 向 dir 的 subtree_control 写 "+memory"。
 func enableMemory(dir string) error {
-	return os.WriteFile(filepath.Join(dir, "cgroup.subtree_control"), []byte("+memory"), 0o600)
+	return os.WriteFile(filepath.Join(dir, "cgroup.subtree_control"), []byte("+memory"), 0o600) //nolint:gosec // G703:落点是本库自建的 cgroup 目录（NewMemGroup 产出），非外部可控路径
 }
 
 // attachMemGroup 把 pid 写进组的 cgroup.procs（设置面）。
