@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -179,6 +180,11 @@ func TestPlatformConstructors_FailClosed(t *testing.T) {
 		{"Gitea空secret", func() { _ = NewGiteaValidator(nil) }},
 		{"GitCode空secret", func() { _ = NewGitCodeValidator(nil, []byte("t")) }},
 		{"Gitee空secret", func() { _ = NewGiteeValidator(nil, []byte("p")) }},
+		{"GitHubStyleSigner空secret", func() { _ = NewGitHubStyleSigner(nil) }},
+		{"ForgejoSigner空secret", func() { _ = NewForgejoSigner([]byte{}) }},
+		{"GiteaSigner空secret", func() { _ = NewGiteaSigner(nil) }},
+		{"GitCodeSigner空secret", func() { _ = NewGitCodeSigner([]byte{}) }},
+		{"GiteeSigner空secret", func() { _ = NewGiteeSigner(nil) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -190,4 +196,56 @@ func TestPlatformConstructors_FailClosed(t *testing.T) {
 			tc.fn()
 		})
 	}
+}
+
+// TestPlatformSignerValidator_PairingTable 配对表测试（#325/#328 主张的
+// 「发与收字段约定单源」的硬保证）：同 secret 下每个平台签名器 Sign 产出
+// 的 header 喂给对应验证器 Validate 必过——五平台逐对钉住，任何一侧改
+// 约定（header 名/前缀/编码/message 形态）都会在这里红。
+func TestPlatformSignerValidator_PairingTable(t *testing.T) {
+	const giteeSecret = "gitee-pairing-secret"
+	body := []byte(`{"action":"ping"}`)
+
+	type pair struct {
+		name string
+		sign func() Signer
+		val  func() Validator
+	}
+	cases := []pair{
+		{"GitHub", func() Signer { return NewGitHubStyleSigner([]byte(testSecret)) },
+			func() Validator { return NewGitHubValidator([]byte(testSecret)) }},
+		{"Forgejo", func() Signer { return NewForgejoSigner([]byte(testSecret)) },
+			func() Validator { return NewForgejoValidator([]byte(testSecret)) }},
+		{"Gitea", func() Signer { return NewGiteaSigner([]byte(testSecret)) },
+			func() Validator { return NewGiteaValidator([]byte(testSecret)) }},
+		{"GitCode", func() Signer { return NewGitCodeSigner([]byte(testSecret)) },
+			func() Validator { return NewGitCodeValidator([]byte(testSecret), nil) }},
+		{"Gitee", func() Signer {
+			return NewGiteeSigner([]byte(giteeSecret), TimestampSignerWithClock(platClock))
+		}, func() Validator {
+			return NewGiteeValidator([]byte(giteeSecret), nil, WithClock(platClock))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hdr, err := tc.sign().Sign(body)
+			if err != nil {
+				t.Fatalf("Sign 不应出错, got %v", err)
+			}
+			if err := tc.val().Validate(mkReq(t, headerMap(hdr), body), body); err != nil {
+				t.Fatalf("配对表 round-trip 应通过, got %v", err)
+			}
+		})
+	}
+}
+
+// headerMap http.Header → mkReq 的 map 形态（配置态键值全量灌入）。
+func headerMap(h http.Header) map[string]string {
+	m := make(map[string]string, len(h))
+	for k, vs := range h {
+		if len(vs) > 0 {
+			m[k] = vs[0]
+		}
+	}
+	return m
 }

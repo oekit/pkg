@@ -69,3 +69,53 @@ func NewGiteeValidator(secret []byte, password []byte, opts ...TimestampOption) 
 	}
 	return Fallback(sign, NewStaticTokenValidator(headerGiteeSign, password))
 }
+
+// 发出侧平台签名器（#325/#328）：下方每个构造器与上方同名 Validator 是
+// 严格配对——同 secret 下 Sign 产出的 header 喂给对应 Validate 必过（配对
+// 表测试 platforms_test.go 钉住）。跨服务对接按这张表取对：
+//
+//	发出侧                  收侧
+//	NewGitHubStyleSigner ↔ NewGitHubValidator
+//	NewForgejoSigner     ↔ NewForgejoValidator
+//	NewGiteaSigner       ↔ NewGiteaValidator
+//	NewGitCodeSigner     ↔ NewGitCodeValidator
+//	NewGiteeSigner       ↔ NewGiteeValidator
+//	NewHMACSigner + SignerWith* ↔ NewHMACValidator + With*
+//	NewTimestampHMACSigner ↔ NewTimestampHMACValidator
+
+// NewGitHubStyleSigner GitHub 形态发出侧：X-Hub-Signature-256，值
+// sha256=<hex>——与 NewGitHubValidator 同款形态。
+func NewGitHubStyleSigner(secret []byte) *HMACSigner {
+	return NewHMACSigner(secret, crypto.SHA256, headerGitHubSignature,
+		SignerWithSignaturePrefix("sha256="))
+}
+
+// NewForgejoSigner Forgejo 形态发出侧：X-Forgejo-Signature，裸 hex——与
+// NewForgejoValidator 同款（收端自带 X-Gitea-Signature 回退，发端只写
+// 主 header）。
+func NewForgejoSigner(secret []byte) *HMACSigner {
+	return NewHMACSigner(secret, crypto.SHA256, headerForgejoSignature)
+}
+
+// NewGiteaSigner Gitea 形态发出侧：X-Gitea-Signature，裸 hex——与
+// NewGiteaValidator 同款。
+func NewGiteaSigner(secret []byte) *HMACSigner {
+	return NewHMACSigner(secret, crypto.SHA256, headerGiteaSignature)
+}
+
+// NewGitCodeSigner GitCode 形态发出侧：X-GitCode-Signature，裸 hex——与
+// NewGitCodeValidator 的签名模式同款。静态令牌模式没有「生成」面（令牌
+// 是明文常量，发出就是 req.Header.Set("X-GitCode-Token", token) 一行），
+// 不设对应构造器。
+func NewGitCodeSigner(secret []byte) *HMACSigner {
+	return NewHMACSigner(secret, crypto.SHA256, headerGitCodeSignature)
+}
+
+// NewGiteeSigner Gitee 形态发出侧：X-Gitee-Timestamp（毫秒）+ X-Gitee-Token
+// （base64(HMAC-SHA256(key=secret, message=timestamp+"\n"+secret))）——与
+// NewGiteeValidator 的签名模式同款。opts 透传 SignerWithMessage /
+// SignerWithClock / SignerWithURLEncoded（须与收端同配）。
+func NewGiteeSigner(secret []byte, opts ...TimestampSignerOption) *TimestampHMACSigner {
+	return NewTimestampHMACSigner(secret, crypto.SHA256,
+		headerGiteeTimestamp, headerGiteeSign, opts...)
+}
