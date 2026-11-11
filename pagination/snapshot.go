@@ -3,6 +3,8 @@ package pagination
 import (
 	"reflect"
 	"sync"
+
+	"github.com/oekit/pkg/reflectx"
 )
 
 // 页快照（#285/#318）：伪翻页检测与已收集数据都以「上一页快照」为基准，
@@ -51,10 +53,11 @@ func staticType[T any]() reflect.Type {
 // pageSnapshot 把 fetch 返回的一页拷成**独立快照**：元素类型含引用成员时按
 // 引用结构深拷贝，纯值类型退化为整片拷贝（零反射开销，行为与逐值拷贝一致）。
 //
-// 边界（如实声明）：struct 字段全部导出时逐字段递归完整深拷贝；含未导出
-// 字段的 struct 走整体 memcpy（reflect 无法逐个 Set 未导出字段——time.Time
-// 等含未导出字段的值类型依赖这一路），其未导出字段内的引用成员保持共享；
-// 上游经 unexported 指针字段原地覆写的形态超出快照能力。
+// 边界（如实声明）：struct 先整块值拷贝保住未导出字段（reflect 无法逐个
+// Set 未导出字段——time.Time 等含未导出字段的值类型依赖这一路），再把可
+// Set 的**导出**引用型字段逐一深拷贝替换；未导出字段内部的引用成员保持
+// 共享（reflect 无法探入），上游经 unexported 指针字段原地覆写的形态超出
+// 快照能力。走法单源见 reflectx.DeepCopyValue。
 func pageSnapshot[T any](items []T) []T {
 	if len(items) == 0 {
 		return nil
@@ -72,105 +75,16 @@ func pageSnapshot[T any](items []T) []T {
 }
 
 // deepCopyItem 单元素深拷贝（经 T 的静态反射视图——nil 接口也拿得到类型）。
+// 实现单源在 reflectx.DeepCopyValue（core#130 治本：与 oekit/core/config 的
+// deepCopyValue 收敛为唯一实现，含 core#102 指针环防护）。
 func deepCopyItem[T any](it T) T {
-	rv := reflect.ValueOf(&it).Elem()
-	return deepCopyValue(rv).Interface().(T)
+	return reflectx.DeepCopy(it)
 }
 
-// deepCopyValue 递归拷贝引用结构：指针/slice/array/map/interface 展开重建，
-// 数字/字符串/bool 等值类型直接赋值，func/chan/UnsafePointer 共享（不可拷贝、
-// 无原地覆写语义）。struct 走法见 pageSnapshot 的边界声明。
-//
-// 指针环安全（core#102 同款环防护，跨仓同步 core#130）：元素类型含自引用/
-// 互引用指针（如链表节点、父指针树）时，无环检测的递归拷贝会无限下探——
-// fatal error: stack overflow 崩进程（不是返回错误）。现按**指针身份**记忆
-// 已拷贝节点：环上第二次访问直接返回已拷贝节点，终止递归；环内结构共享
-// 关系原样保留（src 里两个指针指向同一块，拷贝后仍指向同一块）。环必须经
-// 指针闭合（Go 无值环），指针分支「先注册新节点、再下探内容」即可兜住全部
-// 环形态。
-func deepCopyValue(v reflect.Value) reflect.Value {
-	return deepCopyVisited(v, map[uintptr]reflect.Value{})
-}
-
-// deepCopyVisited 是 deepCopyValue 的递归体；visited 键为 src 指针地址
-// （拷贝期间 src 不被分配/移动，地址即身份），值为对应的新拷贝。
-func deepCopyVisited(v reflect.Value, visited map[uintptr]reflect.Value) reflect.Value {
-	switch v.Kind() {
-	case reflect.Pointer:
-		if v.IsNil() {
-			return reflect.Zero(v.Type())
-		}
-		if out, ok := visited[v.Pointer()]; ok {
-			return out // 环闭合（core#102）：返回已拷贝节点，结构共享
-		}
-		c := reflect.New(v.Type().Elem())
-		visited[v.Pointer()] = c // 先注册再下探：自引用环在此终止
-		c.Elem().Set(deepCopyVisited(v.Elem(), visited))
-		return c
-	case reflect.Interface:
-		if v.IsNil() {
-			return reflect.Zero(v.Type())
-		}
-		c := reflect.New(v.Type()).Elem()
-		c.Set(deepCopyVisited(v.Elem(), visited))
-		return c
-	case reflect.Slice:
-		if v.IsNil() {
-			return reflect.Zero(v.Type())
-		}
-		c := reflect.MakeSlice(v.Type(), v.Len(), v.Cap())
-		for i := range v.Len() {
-			c.Index(i).Set(deepCopyVisited(v.Index(i), visited))
-		}
-		return c
-	case reflect.Array:
-		c := reflect.New(v.Type()).Elem()
-		for i := range v.Len() {
-			c.Index(i).Set(deepCopyVisited(v.Index(i), visited))
-		}
-		return c
-	case reflect.Map:
-		if v.IsNil() {
-			return reflect.Zero(v.Type())
-		}
-		c := reflect.MakeMapWithSize(v.Type(), v.Len())
-		iter := v.MapRange()
-		for iter.Next() {
-			c.SetMapIndex(deepCopyVisited(iter.Key(), visited), deepCopyVisited(iter.Value(), visited))
-		}
-		return c
-	case reflect.Struct:
-		allExported, hasRef := structCopyPlan(v.Type())
-		if !allExported || !hasRef {
-			// 整体 memcpy：两侧均非只读，含未导出字段也允许（值赋值语义）。
-			c := reflect.New(v.Type()).Elem()
-			c.Set(v)
-			return c
-		}
-		c := reflect.New(v.Type()).Elem()
-		for i := range v.NumField() {
-			c.Field(i).Set(deepCopyVisited(v.Field(i), visited))
-		}
-		return c
-	default:
-		c := reflect.New(v.Type()).Elem()
-		c.Set(v)
-		return c
-	}
-}
-
-// structCopyPlan 判 struct 的拷贝走法：字段是否全导出、是否含引用成员
-// （决定整体 memcpy 还是逐字段递归）。
-func structCopyPlan(t reflect.Type) (allExported, hasRef bool) {
-	allExported, hasRef = true, false
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		if !f.IsExported() {
-			return false, false
-		}
-		if typeContainsRef(f.Type) {
-			hasRef = true
-		}
-	}
-	return allExported, hasRef
-}
+// deepCopyValue 已收敛到 reflectx.DeepCopyValue（core#130 治本）：递归拷贝
+// 引用结构 + core#102 指针环防护的唯一实现在 pkg/reflectx，本包经
+// deepCopyItem（reflectx.DeepCopy）消费。struct 走法为「整块值拷贝保未导出
+// 字段 + 可 Set 的引用型字段逐一递归替换」——比旧实现（含未导出字段的
+// struct 整块 memcpy、导出引用字段一并共享）的引用隔离**更紧**，快照独立
+// 性只增不减；func/chan/UnsafePointer 共享（不可拷贝、无原地覆写语义），
+// 见 pageSnapshot 的边界声明。
