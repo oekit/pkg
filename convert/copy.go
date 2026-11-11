@@ -22,12 +22,13 @@ func DeepCopy(value any) any {
 	return value
 }
 
-// AppendStrings 将 b 切片追加到 a 切片。
+// AppendStrings 将 b 切片追加到 a 切片（#379：内建 append(a, b...) 一行，
+// 不再手写逐元素循环）。
+//
+// 语义注意：返回值才是结果切片——append 可能原地扩容复用 a 的底层数组，
+// 也可能分配新数组；调用方不得假设 a 本身已被更新。
 func AppendStrings(a, b []string) []string {
-	for i := 0; i < len(b); i++ {
-		a = append(a, b[i])
-	}
-	return a
+	return append(a, b...)
 }
 
 // Convert 通过 JSON 序列化/反序列化将 data 转换到 target。

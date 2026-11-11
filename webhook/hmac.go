@@ -60,21 +60,36 @@ func WithSignaturePrefix(prefix string) HMACOption {
 	}
 }
 
-// NewHMACValidator 构造泛型 HMAC 验签器。
-//
-// secret 为空是构造期配置错误且**安全错误**：**空密钥使 HMAC 验证对可预测
-// 载荷形同虚设**——panic fail-closed（#270 纪律第 2 条）。algo 支持
-// crypto.SHA256/crypto.SHA384/crypto.SHA512（sha1/sha224 仅存量平台兼容
-// 用），算法白名单外的值非法 panic；header 为空串非法 panic。
-func NewHMACValidator(secret []byte, algo crypto.Hash, header string, opts ...HMACOption) *HMACValidator {
-	if len(secret) == 0 {
-		panic("webhook: HMAC secret 为空——空密钥使 HMAC 验证对可预测载荷形同虚设，拒绝构造（fail-closed）")
-	}
+// mustHMACAlgo 构造期算法白名单单源（#376）：HMAC 验签器/签名器两个家族
+// （含各自的时间戳变体与 SignHMAC/SignTimestampHMAC helper）共用同一份——
+// 白名单外的 crypto.Hash panic fail-fast（仓规总则①）。此前五份逐字拷贝，
+// 新增验签器要靠复制粘贴维持口径；收敛后新增第四个验签器零成本继承。
+// sha1/sha224 仅存量平台兼容用，新接入优先 SHA-256 及以上。
+func mustHMACAlgo(algo crypto.Hash) {
 	switch algo {
 	case crypto.SHA1, crypto.SHA224, crypto.SHA256, crypto.SHA384, crypto.SHA512:
 	default:
 		panic(fmt.Sprintf("webhook: 不支持的哈希算法 crypto.Hash(%d)——HMAC 家族限 SHA-1/224/256/384/512（fail-fast，仓规总则①）", uint(algo)))
 	}
+}
+
+// mustSecret 构造期 secret 非空校验单源（#376）：role 标注构造方身份进
+// panic 文案（如 "HMAC"、"HMACSigner"）。空密钥是构造期配置错误且**安全
+// 错误**——空密钥使 HMAC 验证/签名对可预测载荷形同虚设，panic fail-closed。
+func mustSecret(secret []byte, role string) {
+	if len(secret) == 0 {
+		panic(fmt.Sprintf("webhook: %s secret 为空——空密钥使 HMAC 验证/签名对可预测载荷形同虚设，拒绝构造（fail-closed）", role))
+	}
+}
+
+// NewHMACValidator 构造泛型 HMAC 验签器。
+//
+// secret 为空 panic fail-closed（同 mustSecret，#270 纪律第 2 条）。algo 支持
+// crypto.SHA256/crypto.SHA384/crypto.SHA512（sha1/sha224 仅存量平台兼容
+// 用），算法白名单外的值非法 panic；header 为空串非法 panic。
+func NewHMACValidator(secret []byte, algo crypto.Hash, header string, opts ...HMACOption) *HMACValidator {
+	mustSecret(secret, "HMAC")
+	mustHMACAlgo(algo)
 	if header == "" {
 		panic("webhook: HMAC 的 header 为空串（fail-fast，仓规总则①）")
 	}

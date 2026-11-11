@@ -80,35 +80,53 @@ func deepCopyItem[T any](it T) T {
 // deepCopyValue 递归拷贝引用结构：指针/slice/array/map/interface 展开重建，
 // 数字/字符串/bool 等值类型直接赋值，func/chan/UnsafePointer 共享（不可拷贝、
 // 无原地覆写语义）。struct 走法见 pageSnapshot 的边界声明。
+//
+// 指针环安全（core#102 同款环防护，跨仓同步 core#130）：元素类型含自引用/
+// 互引用指针（如链表节点、父指针树）时，无环检测的递归拷贝会无限下探——
+// fatal error: stack overflow 崩进程（不是返回错误）。现按**指针身份**记忆
+// 已拷贝节点：环上第二次访问直接返回已拷贝节点，终止递归；环内结构共享
+// 关系原样保留（src 里两个指针指向同一块，拷贝后仍指向同一块）。环必须经
+// 指针闭合（Go 无值环），指针分支「先注册新节点、再下探内容」即可兜住全部
+// 环形态。
 func deepCopyValue(v reflect.Value) reflect.Value {
+	return deepCopyVisited(v, map[uintptr]reflect.Value{})
+}
+
+// deepCopyVisited 是 deepCopyValue 的递归体；visited 键为 src 指针地址
+// （拷贝期间 src 不被分配/移动，地址即身份），值为对应的新拷贝。
+func deepCopyVisited(v reflect.Value, visited map[uintptr]reflect.Value) reflect.Value {
 	switch v.Kind() {
 	case reflect.Pointer:
 		if v.IsNil() {
 			return reflect.Zero(v.Type())
 		}
+		if out, ok := visited[v.Pointer()]; ok {
+			return out // 环闭合（core#102）：返回已拷贝节点，结构共享
+		}
 		c := reflect.New(v.Type().Elem())
-		c.Elem().Set(deepCopyValue(v.Elem()))
+		visited[v.Pointer()] = c // 先注册再下探：自引用环在此终止
+		c.Elem().Set(deepCopyVisited(v.Elem(), visited))
 		return c
 	case reflect.Interface:
 		if v.IsNil() {
 			return reflect.Zero(v.Type())
 		}
 		c := reflect.New(v.Type()).Elem()
-		c.Set(deepCopyValue(v.Elem()))
+		c.Set(deepCopyVisited(v.Elem(), visited))
 		return c
 	case reflect.Slice:
 		if v.IsNil() {
 			return reflect.Zero(v.Type())
 		}
 		c := reflect.MakeSlice(v.Type(), v.Len(), v.Cap())
-		for i := 0; i < v.Len(); i++ {
-			c.Index(i).Set(deepCopyValue(v.Index(i)))
+		for i := range v.Len() {
+			c.Index(i).Set(deepCopyVisited(v.Index(i), visited))
 		}
 		return c
 	case reflect.Array:
 		c := reflect.New(v.Type()).Elem()
-		for i := 0; i < v.Len(); i++ {
-			c.Index(i).Set(deepCopyValue(v.Index(i)))
+		for i := range v.Len() {
+			c.Index(i).Set(deepCopyVisited(v.Index(i), visited))
 		}
 		return c
 	case reflect.Map:
@@ -118,7 +136,7 @@ func deepCopyValue(v reflect.Value) reflect.Value {
 		c := reflect.MakeMapWithSize(v.Type(), v.Len())
 		iter := v.MapRange()
 		for iter.Next() {
-			c.SetMapIndex(deepCopyValue(iter.Key()), deepCopyValue(iter.Value()))
+			c.SetMapIndex(deepCopyVisited(iter.Key(), visited), deepCopyVisited(iter.Value(), visited))
 		}
 		return c
 	case reflect.Struct:
@@ -130,8 +148,8 @@ func deepCopyValue(v reflect.Value) reflect.Value {
 			return c
 		}
 		c := reflect.New(v.Type()).Elem()
-		for i := 0; i < v.NumField(); i++ {
-			c.Field(i).Set(deepCopyValue(v.Field(i)))
+		for i := range v.NumField() {
+			c.Field(i).Set(deepCopyVisited(v.Field(i), visited))
 		}
 		return c
 	default:

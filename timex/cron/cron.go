@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -306,77 +306,26 @@ func dowValue(v uint64) uint64 {
 
 // getDowField 解析 day-of-week 字段，7≡Sunday 在**所有形态**下都成立：
 // 单值（`7`）、列表（`6,7`）、范围（`5-7`）、带步长（`5-7/2`、`0-7/2`）。
+// 全部走通用 parseRange + dowValue 归一钩子（#375 收敛单源——dow 的范围/
+// 步进循环此前在 parseDowPart 手写一份，与通用 parseRange 平行）。
+//
+// 注意**不能**把 token 里的 "7" 文本替换成 "0"：范围 `5-7` 归一后是**环形**
+// 区间（5,6,0），而 `start > end` 的检查会把 `5-0` 判成非法区间——这正是
+// 「只在 getField 层做数值归一」的坑。故范围按**端点原值**校验/遍历、
+// 落位时才经 dowValue 折回（钩子语义见 parseRange）。
 func getDowField(field string) (uint64, error) {
 	var bits uint64
 	for _, part := range strings.Split(field, ",") {
-		if err := parseDowPart(part, &bits); err != nil {
+		if err := parseRange(part, 0, maxDow, &bits, dowValue); err != nil {
 			return 0, err
 		}
 	}
 	return bits, nil
 }
 
-// parseDowPart 解析 dow 字段的一个逗号分段。
-//
-// 不能简单地把 token 里的 "7" 文本替换成 "0"：范围 `5-7` 归一后是**环形**
-// 区间（5,6,0），而 `start > end` 的检查会把 `5-0` 判成非法区间——这正是
-// 「只在 getField 层做数值归一」的坑。故范围按**端点原值**遍历、落位时再
-// 走 dowValue。
-func parseDowPart(s string, bits *uint64) error {
-	// "*" 与 "*/n" 与 7 无关，直接交给通用解析（域 0–6）
-	if s == "*" || strings.HasPrefix(s, "*/") {
-		return parseRange(s, 0, 6, bits)
-	}
-
-	body, step, err := splitStep(s)
-	if err != nil {
-		return err
-	}
-
-	if startStr, endStr, ok := strings.Cut(body, "-"); ok {
-		start, perr := parseUint(startStr)
-		if perr != nil {
-			return perr
-		}
-		end, perr := parseUint(endStr)
-		if perr != nil {
-			return perr
-		}
-		if start > end {
-			return fmt.Errorf("invalid range: %s", s)
-		}
-		if end > maxDow || start > maxDow {
-			return fmt.Errorf("out of range [0, 7]: %s", s)
-		}
-		for i := start; i <= end; i += step {
-			*bits |= 1 << dowValue(i)
-		}
-		return nil
-	}
-
-	start, err := parseUint(body)
-	if err != nil {
-		return err
-	}
-	if start > maxDow {
-		return fmt.Errorf("out of range [0, 7]: %s", s)
-	}
-	start = dowValue(start)
-
-	// 单值步长 "N/step"：从 N 步进到字段最大值。上界取 6 而不是 7 ——
-	// 7 与 0 是同一个 Sunday，把 7 也算进去等于重复遍历一圈。
-	if strings.Contains(s, "/") {
-		for i := start; i <= 6; i += step {
-			*bits |= 1 << i
-		}
-		return nil
-	}
-	// 纯单值（含 "7"）：只置位，不步进
-	*bits |= 1 << start
-	return nil
-}
-
-// splitStep 把 "a/b" 切成 ("a", b)；不含步长时 step = 1。
+// splitStep 把 "a/b" 切成 ("a", b)；不含步长时 step = 1。步长切分的单源
+// （#375）：parseRange 的全部形态（a-b/n、N/step、*/n）都经此剥步长，
+// "step cannot be zero" 的校验只剩这一处。
 func splitStep(s string) (body string, step uint64, err error) {
 	body, stepStr, ok := strings.Cut(s, "/")
 	if !ok {
@@ -397,61 +346,69 @@ func getField(field string, min, max uint64) (uint64, error) {
 
 	ranges := strings.Split(field, ",")
 	for _, r := range ranges {
-		if err := parseRange(r, min, max, &bits); err != nil {
+		if err := parseRange(r, min, max, &bits, nil); err != nil {
 			return 0, err
 		}
 	}
 	return bits, nil
 }
 
-func parseRange(s string, min, max uint64, bits *uint64) error {
-	if s == "*" {
-		*bits |= starBit
-		// 设置所有位
-		for i := min; i <= max; i++ {
-			*bits |= 1 << i
+// parseRange 解析 cron 字段的一个逗号分段，把命中的值置位到 bits——全部
+// 字段共用的范围/步长解析单源（#375）。
+//
+// normalize 是「落位前值归一」钩子：dow 场景传 dowValue 保留「7≡0 环形
+// 别名」语义——输入域仍按 [min, max] 校验（dow 传 0..maxDow=7，单值/列表/
+// 范围的端点都可写 7），落位与步进统一经 normalize 折回真实位；其余字段
+// 传 nil（恒等）。
+//
+// 支持形态：`*`、`*/n`、`a-b`、`a-b/n`、`N`、`N/step`（单值步长从 N 步进到
+// 字段最大值，robfig/cron 语义）。
+func parseRange(s string, min, max uint64, bits *uint64, normalize func(uint64) uint64) error {
+	norm := func(v uint64) uint64 {
+		if normalize != nil {
+			return normalize(v)
 		}
-		return nil
+		return v
+	}
+	// 域含别名（normalize 非 nil）时，单值步进的终点取别名前的最后一个值：
+	// dow 的 7 与 0 是同一个 Sunday，把 7 也步进一遍等于重复遍历一圈。
+	stepTop := max
+	if normalize != nil {
+		stepTop = max - 1
 	}
 
-	// 处理 */n 步长
-	if strings.HasPrefix(s, "*/") {
-		step, err := parseUint(s[2:])
-		if err != nil {
-			return err
+	// splitStep 统一剥步长（#375：三处内联步长切分不再各写一遍）——
+	// 之后 body 只剩 "*"、"a-b"、"N" 三种形态。
+	body, step, err := splitStep(s)
+	if err != nil {
+		return err
+	}
+
+	if body == "*" {
+		if s == "*" {
+			// 纯星号：整域全置位 + starBit（「未指定」语义，dayMatches 用）。
+			// "*/n" 是指定了节奏，**不得**置 starBit。
+			*bits |= starBit
+			for i := min; i <= max; i++ {
+				*bits |= 1 << norm(i)
+			}
+			return nil
 		}
-		if step == 0 {
-			return fmt.Errorf("step cannot be zero")
-		}
+		// "*/n"：整域步进
 		for i := min; i <= max; i += step {
-			*bits |= 1 << i
+			*bits |= 1 << norm(i)
 		}
 		return nil
 	}
 
-	// 处理范围 a-b（可带步长 a-b/n）
-	parts := strings.SplitN(s, "-", 2)
-	if len(parts) == 2 {
-		start, err := parseUint(parts[0])
+	// 范围 a-b（步长已剥，含 a-b/n 形态）
+	if startStr, endStr, ok := strings.Cut(body, "-"); ok {
+		var start, end uint64
+		start, err = parseUint(startStr)
 		if err != nil {
 			return err
 		}
-		// 上界可能带步长（"a-b/n"）——**先按 "/" 切分再分别解析**：
-		// 直接 parseUint(parts[1]) 会拿 "5/2" 去解析而报错（ParseUint 全串
-		// 严格校验），"a-b/n" 永远走不到下面的步长分支（该分支此前是死代码）。
-		endPart := parts[1]
-		step := uint64(1)
-		if stepParts := strings.SplitN(parts[1], "/", 2); len(stepParts) == 2 {
-			endPart = stepParts[0]
-			step, err = parseUint(stepParts[1])
-			if err != nil {
-				return err
-			}
-			if step == 0 {
-				return fmt.Errorf("step cannot be zero")
-			}
-		}
-		end, err := parseUint(endPart)
+		end, err = parseUint(endStr)
 		if err != nil {
 			return err
 		}
@@ -462,42 +419,35 @@ func parseRange(s string, min, max uint64, bits *uint64) error {
 			return fmt.Errorf("out of range [%d, %d]: %s", min, max, s)
 		}
 		for i := start; i <= end; i += step {
-			*bits |= 1 << i
+			*bits |= 1 << norm(i)
 		}
 		return nil
 	}
 
-	// 单值步长 "N/step"（robfig/cron 语义：从 N 开始步进到字段最大值）
-	if stepParts := strings.SplitN(s, "/", 2); len(stepParts) == 2 {
-		start, err := parseUint(stepParts[0])
-		if err != nil {
-			return err
-		}
-		step, err := parseUint(stepParts[1])
-		if err != nil {
-			return err
-		}
-		if step == 0 {
-			return fmt.Errorf("step cannot be zero")
-		}
-		if start < min || start > max {
-			return fmt.Errorf("out of range [%d, %d]: %s", min, max, s)
-		}
-		for i := start; i <= max; i += step {
-			*bits |= 1 << i
-		}
-		return nil
-	}
-
-	// 单个值
-	val, err := parseUint(s)
+	// 单值（含 "N/step"）
+	var start uint64
+	start, err = parseUint(body)
 	if err != nil {
 		return err
 	}
-	if val < min || val > max {
-		return fmt.Errorf("out of range [%d, %d]: %d", min, max, val)
+	if start < min || start > max {
+		// "N/step" 报整段（既有文案口径），纯单值报值本身
+		if strings.ContainsRune(s, '/') {
+			return fmt.Errorf("out of range [%d, %d]: %s", min, max, s)
+		}
+		return fmt.Errorf("out of range [%d, %d]: %d", min, max, start)
 	}
-	*bits |= 1 << val
+	if strings.ContainsRune(s, '/') {
+		// 单值步长 "N/step"：从 N（归一后）步进到字段最大值（终点见
+		// stepTop 说明）
+		start = norm(start)
+		for i := start; i <= stepTop; i += step {
+			*bits |= 1 << i
+		}
+		return nil
+	}
+	// 纯单值（含 dow 的 "7"）：只置位，不步进
+	*bits |= 1 << norm(start)
 	return nil
 }
 
@@ -586,24 +536,20 @@ type Entry struct {
 	Job      func()
 }
 
-// byTime 按时间排序 Entry 切片。
-type byTime []Entry
-
-func (s byTime) Len() int      { return len(s) }
-func (s byTime) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-func (s byTime) Less(i, j int) bool {
-	if s[i].Next.IsZero() {
-		return false
-	}
-	if s[j].Next.IsZero() {
-		return true
-	}
-	return s[i].Next.Before(s[j].Next)
-}
-
-// SortEntries 按下次执行时间排序。
+// SortEntries 按下次执行时间排序（零值 Next 排最后——「尚未计算」不是
+// 「最早」，与既有 sort.Interface 实现同口径）。
 func SortEntries(entries []Entry) {
-	sort.Sort(byTime(entries))
+	slices.SortFunc(entries, func(a, b Entry) int {
+		switch {
+		case a.Next.IsZero() && b.Next.IsZero():
+			return 0
+		case a.Next.IsZero():
+			return 1
+		case b.Next.IsZero():
+			return -1
+		}
+		return a.Next.Compare(b.Next)
+	})
 }
 
 // NextSchedule 返回最近的 N 个调度时间。
@@ -616,7 +562,7 @@ func NextSchedule(s Schedule, from time.Time, n int) []time.Time {
 	}
 	times := make([]time.Time, 0, n)
 	t := from
-	for i := 0; i < n; i++ {
+	for range n {
 		t = s.Next(t)
 		if t.IsZero() {
 			break

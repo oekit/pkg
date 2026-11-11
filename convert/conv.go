@@ -155,72 +155,14 @@ func AnyToInt(v any) int {
 
 // AnyToInt64 任意类型转 int64，无法转换返回 0。
 // 支持 bool（true=1, false=0）、string/[]byte（按十进制解析）、所有数值类型。
+//
+// 判定单源（#371）：唯一实现在 anyToInt64OK（opt.go），本函数是其「丢弃
+// ok 位」的适配层。此前两套平行的 type switch 各自演化，已发生过 #255 式
+// 漂移（OptBool 与 AnyToBool 对 0.5 给出相反结论）——同一个判据的改动现在
+// 只需改一处。
 func AnyToInt64(v any) int64 {
-	switch val := v.(type) {
-	case nil:
-		return 0
-	case int:
-		return int64(val)
-	case int8:
-		return int64(val)
-	case int16:
-		return int64(val)
-	case int32:
-		return int64(val)
-	case int64:
-		return val
-	case uint:
-		// 超出 int64 表示范围属于"无法转换"，按契约返回 0（而非回绕为负数）
-		if uint64(val) > math.MaxInt64 {
-			return 0
-		}
-		return int64(val)
-	case uint8:
-		return int64(val)
-	case uint16:
-		return int64(val)
-	case uint32:
-		return int64(val)
-	case uint64:
-		if val > math.MaxInt64 {
-			return 0
-		}
-		return int64(val)
-	case float32:
-		return float64ToInt64Safe(float64(val))
-	case float64:
-		return float64ToInt64Safe(val)
-	case bool:
-		if val {
-			return 1
-		}
-		return 0
-	case string:
-		return Str2Int64(val, 0)
-	case []byte:
-		return BytesToInt64(val)
-	case json.Number:
-		// encoding.Unmarshal 使用 UseNumber，数值是 json.Number；
-		// 不处理会导致所有 JSON 数值静默归零
-		if iv, err := val.Int64(); err == nil {
-			return iv
-		}
-		fv, err := val.Float64()
-		if err != nil {
-			return 0
-		}
-		return float64ToInt64Safe(fv)
-	}
-	return 0
-}
-
-// float64ToInt64Safe 浮点转 int64：NaN/±Inf 与超出 int64 表示范围的值
-// 按"无法转换"契约返回 0（直接 int64(f) 属于 implementation-defined）。
-func float64ToInt64Safe(f float64) int64 {
-	if math.IsNaN(f) || math.IsInf(f, 0) || f < math.MinInt64 || f >= 9223372036854775808 {
-		return 0
-	}
-	return int64(f)
+	v64, _ := anyToInt64OK(v)
+	return v64
 }
 
 // float64ToUint64Safe 浮点转 uint64：NaN/±Inf、负数与超出 uint64 表示范围的值返回 0。
@@ -354,20 +296,10 @@ func AnyToFloat32(v any) float32 {
 // 承诺相反。而 (0,1) 恰是概率、比例、阈值这类字段的典型取值，判错方向会让
 // JSON 配置或查询参数里的开关静默失真。故经 AnyToFloat64 比较——浮点只在
 // 自身为 0 时才舍入到 0，整数值经 float64 转换也不会变成 0。
+//
+// 判定单源（#371）：唯一实现在 anyToBoolOK（opt.go），本函数是其「丢弃
+// ok 位」的适配层（同 #255 漂移史，见 anyToBoolOK 注释）。
 func AnyToBool(v any) bool {
-	switch val := v.(type) {
-	case nil:
-		return false
-	case bool:
-		return val
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
-		return AnyToFloat64(val) != 0
-	case string:
-		return Str2Bool(val, false)
-	case []byte:
-		return Str2Bool(string(val), false)
-	case json.Number:
-		return AnyToFloat64(val) != 0
-	}
-	return false
+	b, _ := anyToBoolOK(v)
+	return b
 }

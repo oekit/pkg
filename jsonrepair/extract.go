@@ -57,7 +57,11 @@ func Unmarshal(text string, v any) error {
 		if strictErr == nil {
 			strictErr = err
 		}
-		return fmt.Errorf("jsonrepair: 输出不可解析为 JSON（严格: %v；宽容: %v）", strictErr, err)
+		// 双 %w（#382，对齐仓内 core#118 已确立的惯例）：严格与宽容两路错误
+		// 都进包装链，Error() 文本不变；调用方回喂 LLM 重试前可对
+		// *json.SyntaxError / *json.UnmarshalTypeError 做 errors.As 分流——
+		// %v 会把两路链拍平成纯文本，两类失败不可区分。
+		return fmt.Errorf("jsonrepair: 输出不可解析为 JSON（严格: %w；宽容: %w）", strictErr, err)
 	}
 	return nil
 }

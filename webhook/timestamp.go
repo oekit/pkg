@@ -105,14 +105,8 @@ func WithURLEncoded() TimestampOption {
 // secret 为空 panic fail-closed（同 HMAC 家族）；tsName/sigName 空串
 // panic。algo 白名单同 NewHMACValidator。
 func NewTimestampHMACValidator(secret []byte, algo crypto.Hash, tsName, sigName string, opts ...TimestampOption) *TimestampHMACValidator {
-	if len(secret) == 0 {
-		panic("webhook: Timestamp HMAC secret 为空——空密钥使 HMAC 验证对可预测载荷形同虚设，拒绝构造（fail-closed）")
-	}
-	switch algo {
-	case crypto.SHA1, crypto.SHA224, crypto.SHA256, crypto.SHA384, crypto.SHA512:
-	default:
-		panic(fmt.Sprintf("webhook: 不支持的哈希算法 crypto.Hash(%d)——HMAC 家族限 SHA-1/224/256/384/512（fail-fast，仓规总则①）", uint(algo)))
-	}
+	mustSecret(secret, "Timestamp HMAC")
+	mustHMACAlgo(algo)
 	if tsName == "" || sigName == "" {
 		panic("webhook: Timestamp HMAC 的 tsName/sigName 为空串（fail-fast，仓规总则①）")
 	}

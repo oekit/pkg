@@ -97,8 +97,10 @@ func AnyToInt32(v any) int32 {
 	return int32(i)
 }
 
-// anyToInt64OK 与 AnyToInt64 同口径，但**额外报告能否转换**——
-// Opt* 一族需要区分「转换不了」与「转换成了 0」。
+// anyToInt64OK 是 any→int64 的**唯一实现**（#371 收敛单源）：AnyToInt64
+// 是丢弃 ok 位的适配层，OptInt64 / OptInt32 / AnyToInt32 直接消费 ok 位——
+// 「转换不了」与「转换成了 0」在此分得开，Opt* 一族靠它不把零值伪装成
+// 「没有这个字段」。
 func anyToInt64OK(v any) (int64, bool) {
 	switch val := v.(type) {
 	case nil:
@@ -119,6 +121,7 @@ func anyToInt64OK(v any) (int64, bool) {
 	case int64:
 		return val, true
 	case uint:
+		// 超出 int64 表示范围属于"无法转换"，按契约报 false（而非回绕为负数）
 		if uint64(val) > math.MaxInt64 {
 			return 0, false
 		}
@@ -143,6 +146,8 @@ func anyToInt64OK(v any) (int64, bool) {
 	case []byte:
 		return strToInt64OK(string(val))
 	case json.Number:
+		// encoding.Unmarshal 使用 UseNumber，数值是 json.Number；
+		// 不处理会导致所有 JSON 数值静默归零
 		if iv, err := val.Int64(); err == nil {
 			return iv, true
 		}
@@ -155,12 +160,13 @@ func anyToInt64OK(v any) (int64, bool) {
 	return 0, false
 }
 
-// anyToBoolOK 与 AnyToBool 同口径，但**额外报告能否转换**。
+// anyToBoolOK 是 any→bool 的**唯一实现**（#371 收敛单源）：AnyToBool 是
+// 丢弃 ok 位的适配层，OptBool 消费 ok 位。
 //
 // 数值与 json.Number 分支**不得**经整数中转（[#255]，#205 的同源漏网）：
 // AnyToInt64 会把 |v|<1 的浮点截断成 0，于是 OptBool(0.5) 判成 &false——
 // 与 AnyToBool(0.5)=true 对同一值给出相反结论，而且后果更重：nil/非 nil
-// 还叠加了「字段存不存在」的第二层语义。判定与 AnyToBool 逐字共用
+// 还叠加了「字段存不存在」的第二层语义。判定与 AnyToBool 共用同一实现
 // （AnyToFloat64 != 0），两个入口对任何值都不可能再分叉。
 func anyToBoolOK(v any) (bool, bool) {
 	switch val := v.(type) {

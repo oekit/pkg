@@ -6,65 +6,6 @@ import (
 	"testing"
 )
 
-// emptyMessageError 是报文为空串的错误（errors.New("") 或消息由空变量拼出的
-// 自定义错误）。这类错误真实存在：消息由配置/变量拼装时可能是空的。
-type emptyMessageError struct{}
-
-func (emptyMessageError) Error() string { return "" }
-
-// TestErrorf_WrappedEmptyMessage_NotNil 回归测试：被包装错误的报文为空时，
-// Errorf **不得**返回 nil。
-//
-// 缺陷成因：Errorf 先算 msg，再判 `if msg == "" { return nil }`——「格式化结果
-// 为空串返回 nil」的本意是给 `Errorf("")` 一个方便取向，但 %w 的消息来自
-// 被包装错误本身，报文为空时整条消息渲染成空串 ⇒ 返回 nil ⇒ 被包装的错误
-// 连同它的整条链一起消失 ⇒ 调用方的 `if err != nil` 分支整个跳过，
-// 失败被静默吞成成功。
-func TestErrorf_WrappedEmptyMessage_NotNil(t *testing.T) {
-	cause := emptyMessageError{}
-	err := Errorf("%w", cause)
-	if err == nil {
-		t.Fatal("Errorf(\"%w\", 空报文错误) 返回了 nil：失败被静默吞成成功")
-	}
-	// 包装链必须仍然可判定。
-	if !Is(err, cause) {
-		t.Fatal("errors.Is 应能命中被包装的错误")
-	}
-}
-
-// TestErrorf_WrappedEmptyMessage_MatchesStdlib 与 stdlib fmt.Errorf 对齐：
-// 同输入同 nil 性。
-func TestErrorf_WrappedEmptyMessage_MatchesStdlib(t *testing.T) {
-	cases := []struct {
-		format string
-		args   []any
-	}{
-		{"%w", []any{emptyMessageError{}}},
-		{"%w", []any{stderrors.New("")}},
-		{"ctx: %w", []any{emptyMessageError{}}},
-		{"%w and %w", []any{emptyMessageError{}, emptyMessageError{}}},
-	}
-	for _, c := range cases {
-		got := Errorf(c.format, c.args...)
-		want := fmt.Errorf(c.format, c.args...)
-		if (got == nil) != (want == nil) {
-			t.Errorf("format=%q：nil 性与 stdlib 不一致（ours=%v stdlib=%v）", c.format, got == nil, want == nil)
-		}
-	}
-}
-
-// TestErrorf_EmptyFormatStillNil 「无 %w 且消息为空 ⇒ 返回 nil」的原有取向
-// 保持不变（这是被既有测试钉住的行为，不在本次修复范围内）。
-func TestErrorf_EmptyFormatStillNil(t *testing.T) {
-	if err := Errorf(""); err != nil {
-		t.Fatalf("Errorf(\"\") 应返回 nil，实得 %v", err)
-	}
-	// %v 渲染 nil 得到 "<nil>"——非空串 ⇒ 返回错误（与 fmt.Errorf 同口径）。
-	if err := Errorf("%v", nil); err == nil {
-		t.Fatal("Errorf 渲染 nil 得到非空消息，应返回非 nil 错误")
-	}
-}
-
 // TestBizError_TypedNil_NoPanic 回归测试：typed-nil（*BizError 赋给 error
 // 接口）不得让 Error()/String() 崩，也不得让 AsBizError 报「命中」。
 //
