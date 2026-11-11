@@ -16,8 +16,12 @@ import (
 )
 
 var (
-	durationType = reflect.TypeOf(time.Duration(0))
-	timeType     = reflect.TypeOf(time.Time{})
+	// DurationType 是 time.Duration 的 reflect.Type。Duration 与普通 int64
+	// 同 kind，识别「这个字段是不是时长字段」须按类型同一性判定——全矩阵
+	// 配置引擎共享同一份判定（core#129 单源；SetFromString 内部同用它把
+	// 时长字符串走 time.ParseDuration 文法落位）。
+	DurationType = reflect.TypeFor[time.Duration]()
+	timeType     = reflect.TypeFor[time.Time]()
 )
 
 // loadOptions 是 LoadOption 的落点；Load 与 Redact 共用同一套声明。
@@ -404,13 +408,24 @@ func leafSupported(t reflect.Type) bool {
 // applyEnvValue 把环境变量字符串（或 tag 缺省值）按字段类型解析落位。
 // 解析失败记入汇总并保留字段现状——一个坏值不掩盖后续字段的其它问题。
 func applyEnvValue(raw string, fv reflect.Value, fpath string, errs *[]error) {
-	if e := setFromString(raw, fv); e != nil {
+	if e := SetFromString(raw, fv); e != nil {
 		*errs = append(*errs, fmt.Errorf("config: 字段 %s: %w", fpath, e))
 	}
 }
 
-// setFromString 按目标字段类型解析字符串。
-func setFromString(raw string, fv reflect.Value) error {
+// SetFromString 按目标字段类型把字符串解析后写入 fv（「字符串按 reflect.Kind
+// 解析落位」的全矩阵共享原语，core#129 单源——此前 oekit/core/config 的
+// setScalarFromString 与本包内部实现平行维护、错误口径各自演化）。
+//
+// 支持面：string（原文写入，**不裁剪**——口令/token 的首尾空白是合法内容，
+// 裁剪与否由调用方按自己的契约决定）、bool、各宽度 int/uint/float、
+// time.Duration（按类型同一性识别，走 time.ParseDuration 文法）、以及切片
+// （逗号切分、逐元素去首尾空白后按元素类型递归解析）。其余类型报错，
+// 不做静默猜测。
+//
+// 错误文案是本包的中文口径（「布尔值非法 %q」等）；调用方可按需再包一层
+// 自己的前缀（core 侧即如此接线）。
+func SetFromString(raw string, fv reflect.Value) error {
 	switch fv.Kind() {
 	case reflect.String:
 		fv.SetString(raw)
@@ -423,7 +438,7 @@ func setFromString(raw string, fv reflect.Value) error {
 		fv.SetBool(b)
 		return nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if fv.Type() == durationType {
+		if fv.Type() == DurationType {
 			d, err := time.ParseDuration(raw)
 			if err != nil {
 				return fmt.Errorf("时长非法 %q（如 30s/5m）: %w", raw, err)
@@ -461,7 +476,7 @@ func setFromString(raw string, fv reflect.Value) error {
 		out := reflect.MakeSlice(fv.Type(), 0, len(parts))
 		for _, p := range parts {
 			elem := reflect.New(fv.Type().Elem()).Elem()
-			if err := setFromString(strings.TrimSpace(p), elem); err != nil {
+			if err := SetFromString(strings.TrimSpace(p), elem); err != nil {
 				return err
 			}
 			out = reflect.Append(out, elem)
@@ -502,7 +517,7 @@ func setFromYAML(v any, fv reflect.Value) error {
 		fv.SetBool(b)
 		return nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if fv.Type() == durationType {
+		if fv.Type() == DurationType {
 			s, ok := v.(string)
 			if !ok {
 				return typeMismatch(fv, v, "时长请用字符串形态（如 30s/5m）")
