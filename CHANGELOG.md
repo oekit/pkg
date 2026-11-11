@@ -2,6 +2,12 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.46.0] — 2026-11-12
+
+- - feat(config): 导出 SetFromString/DurationType——「字符串按 reflect.Kind 解析落位」的全矩阵唯一原语（core#129 治本侧：oekit/core/config 的 setScalarFromString 平行实现改引后删除）；内部实现零改动、行为零变化
+- feat(reflectx): 新增反射原语包——DeepCopyValue/DeepCopy 深拷贝唯一实现（core#102 指针环防护 + core#84 struct 先整块拷贝保未导出字段、可 Set 引用字段逐一递归替换的强语义），core/config 与 pkg/pagination 两份平行实现收敛于此（core#130 治本侧）
+- refactor(pagination): deepCopyItem 改走 reflectx.DeepCopy，删除本地 deepCopyValue/deepCopyVisited/structCopyPlan；含未导出字段的 struct 其导出引用字段由共享变深拷贝（快照隔离只紧不松）；nil 接口元素不再 panic
+
 ## [v0.45.0] — 2026-11-12
 
 - 单源收敛十一单 + 双契约单源新增：convert 两套 any→int64/bool 开关收敛 OK 变体单源（#255 式漂移治本，#371）+ AppendStrings 改内建 append（#379）；cache 惰性删除块单源 lazyDeleteExpired + Get/GetEx 收敛 getHit 内核（#373）、世代写入路径 putEntryLocked 单源并按职责拆 local_load/local_sweep（#374）；cron parseRange normalize 钩子收敛三份范围+步长逻辑、splitStep 唯一步长切分（#375）；webhook 构造期校验收敛 mustHMACAlgo/mustSecret（#376）；timex ParseFirst 单行委托 ParseFirstInLocation（#377）；urlguard 拨号面两处 %w 补链 + 内置拒绝导出哨兵 ErrBlockedRange/ErrBlockedDomain/ErrExoticLiteral + 缺省 Guard 缓存（#380）+ CIDR 清单导出跨仓单源 BlockedCIDRSpecs/IsBlockedIP/ParseCIDRList（core#132 pkg 侧）；jsonrepair 终态错误双 %w 保留两路链（#382）；errors 新增 panic 收编单源 PanicError/Recovered（error 身份不丢+goroutine 栈+panic 值类型，cache/singleflight 转换点改用，全矩阵 wave 2 消费，#381）；pagination 快照深拷贝同步 core#102 指针环防护（core#130 pkg 侧）；新增 distlock 后端中立契约包（Locker 接口两仓并集 + 哨兵集以 redisx 文案为基准 + WithLock WithoutCancel 释放纪律，etcdx#123 治本侧，redisx/etcdx 波次消费）；Go 地板抬至 1.26.0。**BREAKING**：删除零引用的 errors.Errorf（#378）——普通错误包装统一 stdlib fmt.Errorf("%w")，本包只留 stdlib 没有的能力（Wrap kv/Recovered/MultiError 等）
