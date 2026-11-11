@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 )
@@ -100,31 +99,6 @@ func TestRunWithMemoryLimitFailClosed(t *testing.T) {
 	if res != nil {
 		t.Errorf("fail-closed 应返回 nil Result，got %+v", res)
 	}
-}
-
-// memGroupsUnder 递归找出 root 下残留的 procx-mem-* 限额组目录。
-func memGroupsUnder(t *testing.T, root string) []string {
-	t.Helper()
-	var found []string
-	var walk func(dir string)
-	walk = func(dir string) {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return
-		}
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			p := filepath.Join(dir, e.Name())
-			if strings.HasPrefix(e.Name(), "procx-mem-") {
-				found = append(found, p)
-			}
-			walk(p)
-		}
-	}
-	walk(root)
-	return found
 }
 
 // TestMemLimitOOMKill（能力探测通过才跑）：超限子进程被 OOM-kill，父侧从

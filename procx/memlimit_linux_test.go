@@ -118,3 +118,31 @@ func TestMemLimitSignalSemantics(t *testing.T) {
 		t.Fatalf("Result.ExitCode = %d, want -1（stdlib 信号口径，不归一）", res.ExitCode)
 	}
 }
+
+// memGroupsUnder 递归找出 root 下残留的 procx-mem-* 限额组目录。
+// （只被本文件的 linux 实证面使用——原在 memlimit_test.go，darwin 下该
+// 文件编译而 linux 侧引用不编译 ⇒ unused 假红挡本地发版门禁，挪进唯一
+// 使用方所在文件。）
+func memGroupsUnder(t *testing.T, root string) []string {
+	t.Helper()
+	var found []string
+	var walk func(dir string)
+	walk = func(dir string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			p := filepath.Join(dir, e.Name())
+			if strings.HasPrefix(e.Name(), "procx-mem-") {
+				found = append(found, p)
+			}
+			walk(p)
+		}
+	}
+	walk(root)
+	return found
+}
