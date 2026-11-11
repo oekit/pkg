@@ -2,6 +2,7 @@ package jsonrepair
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -137,6 +138,26 @@ func TestUnmarshalErrorCarriesBothPaths(t *testing.T) {
 	err := Unmarshal("完全不是 JSON", &got)
 	if err == nil || !strings.Contains(err.Error(), "严格") || !strings.Contains(err.Error(), "宽容") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+// TestUnmarshalErrorWrapsBothChains 回归（#382）：终态错误必须双 %w——严格
+// 与宽容两路错误都进包装链（core#118 已确立的惯例），调用方可对
+// *json.SyntaxError 做 errors.As 分流；此前 %v 把两路链拍平成纯文本，
+// 两类失败不可区分。
+func TestUnmarshalErrorWrapsBothChains(t *testing.T) {
+	var got out
+	err := Unmarshal("完全不是 JSON", &got)
+	if err == nil {
+		t.Fatal("期望报错")
+	}
+	var syn *json.SyntaxError
+	if !errors.As(err, &syn) {
+		t.Fatalf("双 %%w 后 errors.As 应命中严格路的 *json.SyntaxError, got %T: %v", err, err)
+	}
+	// 文本渲染不变：两路原因都在。
+	if !strings.Contains(err.Error(), "严格") || !strings.Contains(err.Error(), "宽容") {
+		t.Fatalf("文本应保留两路原因, got %v", err)
 	}
 }
 

@@ -27,20 +27,10 @@ import "time"
 //
 //	dueOn, ok := timex.ParseFirst(raw, time.RFC3339, "2006-01-02 15:04:05", "2006-01-02")
 func ParseFirst(s string, layouts ...string) (time.Time, bool) {
-	if s == "" || len(layouts) == 0 {
-		return time.Time{}, false
-	}
-	for _, layout := range layouts {
-		if layout == "" {
-			return time.Time{}, false
-		}
-	}
-	for _, layout := range layouts {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
+	// 单行委托（#377）：nil loc 回退 time.UTC 已内建于 ParseFirstInLocation
+	// （nil = 显式回退默认值，仓规总则②）——空串校验与首命中循环不再各持
+	// 一份，未来加边界规则只改一处。
+	return ParseFirstInLocation(s, nil, layouts...)
 }
 
 // ParseFirstInLocation 同 ParseFirst，但 layout 不含时区信息时按 loc 解析

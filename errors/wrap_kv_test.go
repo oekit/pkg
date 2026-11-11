@@ -1,6 +1,7 @@
 package errors
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -46,17 +47,17 @@ func TestKvFromChain_AllLayersOuterFirst(t *testing.T) {
 		t.Fatalf("顺序应为外层在前内层在后, got %#v", kv)
 	}
 
-	// Errorf 单 %w 夹在中间：链穿过 formattedError 继续 收集
-	ef := Errorf("wrap once: %w", inner)
+	// fmt.Errorf 单 %w 夹在中间：链穿过 fmt 的 wrapError 继续收集
+	ef := fmt.Errorf("wrap once: %w", inner)
 	if got := KvFromChain(Wrap(ef, "top", "k", "v")); len(got) != 4 || got[0] != "k" {
-		t.Fatalf("链上的 formattedError 应被穿透, got %#v", got)
+		t.Fatalf("链上的 fmt 包装错误应被穿透, got %#v", got)
 	}
 }
 
 func TestKvFromChain_MultiErrorBranchDepthFirst(t *testing.T) {
 	left := Wrap(New("l"), "lctx", "side", "left")
 	right := Wrap(New("r"), "rctx", "side", "right")
-	multi := Errorf("%w and %w", left, right) // 多 %w：Unwrap() []error
+	multi := fmt.Errorf("%w and %w", left, right) // 多 %w：Unwrap() []error
 	outer := Wrap(multi, "fanout", "stage", 1)
 
 	kv := KvFromChain(outer)

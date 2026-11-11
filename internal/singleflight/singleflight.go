@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // Flight 对同一个 key 的并发调用只执行一次 fn。
@@ -71,14 +73,11 @@ func (f *Flight[T]) Do(ctx context.Context, key string, fn func(ctx context.Cont
 	// 同一套契约套件上的两个实现会给出「都通过了」的假保证（#147）。
 	defer func() {
 		if r := recover(); r != nil {
-			// r 是 error 时用 %w 保留身份——waiter 才能 errors.Is/As 到原始错误；
-			// %v 只留文本，身份丢了。
-			var perr error
-			if e, ok := r.(error); ok {
-				perr = fmt.Errorf("singleflight: fn panic: %w", e)
-			} else {
-				perr = fmt.Errorf("singleflight: fn panic: %v", r)
-			}
+			// panic 收编单源（#381，errors.Recovered）：r 是 error 时身份
+			// 保留——waiter 才能 errors.Is/As 到原始错误；%v 只留文本，
+			// 身份丢了。栈与类型信息由 PanicError 携带，error/非 error
+			// 双分支不再由调用方手写。
+			perr := fmt.Errorf("singleflight: fn panic: %w", errors.Recovered(r))
 			c.err = perr
 			f.calls.CompareAndDelete(key, c)
 			close(c.ready)

@@ -87,48 +87,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // DialFunc 与 httpx/net 的拨号函数同形（标准库形态），可直接互相包装。
 type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
-
-// blockedCIDRs 是缺省阻断网段（见包文档）。固定清单而非可变注册表——
-// 需要放行某网段走 WithAllowCIDRs 显式豁免，宁可白名单也不要运行时改黑名单。
-var blockedCIDRs = mustParseCIDRs(
-	"0.0.0.0/8",       // "this network"（含 0.0.0.0）
-	"127.0.0.0/8",     // loopback
-	"10.0.0.0/8",      // RFC1918 私网
-	"172.16.0.0/12",   // RFC1918 私网
-	"192.168.0.0/16",  // RFC1918 私网
-	"169.254.0.0/16",  // 链路本地（含云元数据 169.254.169.254）
-	"100.64.0.0/10",   // CGNAT 共享地址
-	"192.0.0.0/24",    // IETF 协议指定
-	"192.0.2.0/24",    // TEST-NET-1（文档保留）
-	"198.18.0.0/15",   // 网络基准测试保留
-	"198.51.100.0/24", // TEST-NET-2（文档保留）
-	"203.0.113.0/24",  // TEST-NET-3（文档保留）
-	"224.0.0.0/4",     // IPv4 组播
-	"240.0.0.0/4",     // IPv4 保留/广播
-	"::1/128",         // IPv6 loopback
-	"::/128",          // IPv6 未指定
-	"::/96",           // IPv4-compatible（::127.0.0.1 即 127.0.0.1 的 IPv6 写法；RFC 4291 已废弃）
-	"fe80::/10",       // IPv6 链路本地
-	"fc00::/7",        // IPv6 ULA
-	"fec0::/10",       // IPv6 site-local（RFC 3879 已废弃，企业网历史在用）
-	"ff00::/8",        // IPv6 组播
-	"64:ff9b::/96",    // NAT64 well-known prefix（64:ff9b::7f00:1 即 127.0.0.1 的 IPv6 写法）
-	"64:ff9b:1::/48",  // NAT64 local-use prefix（RFC 8215，本机翻译前缀）
-	"100::/64",        // discard-only（非全球可达）
-	"2001::/32",       // Teredo（可内嵌 IPv4）
-	"2001:2::/48",     // benchmarking（非全球可达）
-	"2001:10::/28",    // ORCHID（非全球可达）
-	"2001:20::/28",    // ORCHIDv2（非全球可达）
-	"2001:db8::/32",   // 文档段（不该出现在出站目标）
-	"2002::/16",       // 6to4（可内嵌任意 IPv4，含私网/回环）
-	"3fff::/20",       // 文档段（RFC 9637，IPv6 侧 TEST-NET；IANA 2024 新登记，#297）
-	"5f00::/16",       // SRv6 SID（RFC 9602，非全球可达；IANA 2024 新登记，#297）
-	"100:0:0:1::/64",  // dummy prefix（RFC 9780；IANA 2025 新登记，#297）
-)
 
 // blockedDomainSuffixes 是缺省阻断域名后缀（小写；host 等于后缀或以其为点分后缀均命中）。
 var blockedDomainSuffixes = []string{"localhost", "internal", "local", "localdomain"}
@@ -380,21 +343,31 @@ func New(opts ...GuardOption) (*Guard, error) {
 	return g, nil
 }
 
-// IsBlockedURL 用缺省 Guard 做层 1 字面量校验（等价 New().CheckURL）。
-// nil 返回 = 放行。
-func IsBlockedURL(raw string) error {
+// defaultGuard 是缺省 Guard 的包级单例（#380）：IsBlockedURL /
+// SafeDialFunc 此前每次调用都 New + 建两张 map——热路径上的纯浪费。Guard
+// 在 New 之后只读、可并发共享（包文档承诺），缺省构造无选项输入不可能
+// 失败，sync.OnceValue 惰性建一次即可。
+var defaultGuard = sync.OnceValue(func() *Guard {
 	g, err := New()
 	if err != nil {
-		return err
+		// 不可达：缺省构造无 rawAllowCIDRs/rawExactHosts 输入，文法校验
+		// 无从失败。留 panic 而非吞错，构造逻辑改动时当场炸出来。
+		panic(fmt.Sprintf("urlguard: default guard construct failed: %v", err))
 	}
-	return g.CheckURL(raw)
+	return g
+})
+
+// IsBlockedURL 用缺省 Guard 做层 1 字面量校验（等价 New().CheckURL）。
+// nil 返回 = 放行。内置拒绝可经 ErrBlockedRange / ErrBlockedDomain /
+// ErrExoticLiteral 哨兵判定（#380）。
+func IsBlockedURL(raw string) error {
+	return defaultGuard().CheckURL(raw)
 }
 
 // SafeDialFunc 用缺省 Guard 包装拨号函数（等价 New().DialFunc(next)）。
 // next 为 nil 时用 net 的默认拨号。
 func SafeDialFunc(next DialFunc) DialFunc {
-	g, _ := New()
-	return g.DialFunc(next)
+	return defaultGuard().DialFunc(next)
 }
 
 // CheckIP 判定单个 IP 是否可放行（nil 返回 = 放行）。
@@ -447,7 +420,8 @@ func (g *Guard) checkIPForHost(host string, ip net.IP) error {
 	if !g.allowPrivate && !g.inAllowCIDRs(ip) && !g.inAllowDomains(host) {
 		for _, n := range blockedCIDRs {
 			if n.Contains(ip) {
-				return fmt.Errorf("urlguard: %s is in blocked range %s", ip, n)
+				// 哨兵（#380）：防护拒绝与网络故障可编程区分。
+				return fmt.Errorf("%w: %s is in blocked range %s", ErrBlockedRange, ip, n)
 			}
 		}
 	}
@@ -527,7 +501,8 @@ func (g *Guard) checkHostLiteral(host string) error {
 	// 下豁免全部内置网段 → 完整走通。宽松解析器行为不可控，字面量形态判定
 	// 必须先于一切豁免（allowPrivate 消费方要打本机请写标准点分十进制）。
 	if looksLikeExoticIPv4(host) {
-		return fmt.Errorf("urlguard: host %q is an exotic IPv4 literal form", host)
+		// 哨兵（#380）；本闸门无条件执行，不随 allowPrivate 豁免（pkg#236）。
+		return fmt.Errorf("%w: host %q is an exotic IPv4 literal form", ErrExoticLiteral, host)
 	}
 	if g.allowPrivate {
 		return g.checkHostPolicy(host)
@@ -539,7 +514,8 @@ func (g *Guard) checkHostLiteral(host string) error {
 	}
 	for _, suffix := range blockedDomainSuffixes {
 		if host == suffix || strings.HasSuffix(host, "."+suffix) {
-			return fmt.Errorf("urlguard: host %q uses blocked domain %q", host, suffix)
+			// 哨兵（#380）：防护拒绝与网络故障可编程区分。
+			return fmt.Errorf("%w: host %q uses blocked domain %q", ErrBlockedDomain, host, suffix)
 		}
 	}
 	return g.checkHostPolicy(host)
@@ -740,7 +716,9 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 		// 豁免内置网段判定——写面放行的目标，拨号面结论必须一致。
 		for _, ip := range ips {
 			if cerr := g.checkIPForHost(canon, ip); cerr != nil {
-				return nil, fmt.Errorf("urlguard: dial %q blocked: %v", addr, cerr)
+				// %w（#380）：与同函数 :733 的字面量拒绝同口径——防护拒绝
+				// 的哨兵（ErrBlockedRange 等）经链透传，调用方 errors.Is 可判。
+				return nil, fmt.Errorf("urlguard: dial %q blocked: %w", addr, cerr)
 			}
 		}
 		conn, err := next(ctx, network, addr)
@@ -757,7 +735,8 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 			if ip := addrIP(ra); ip != nil {
 				if err := g.checkIPForHost(canon, ip); err != nil {
 					_ = conn.Close()
-					return nil, fmt.Errorf("urlguard: dial %q blocked: connected endpoint %s violates guard: %v", addr, ip, err)
+					// %w（#380）：端点复核的拒绝同样是防护拦截，哨兵照旧可判。
+					return nil, fmt.Errorf("urlguard: dial %q blocked: connected endpoint %s violates guard: %w", addr, ip, err)
 				}
 			}
 		}
@@ -777,7 +756,7 @@ func (g *Guard) resolve(ctx context.Context, host string) ([]net.IP, error) {
 	// 与 checkHostLiteral 的闸门同口径**无条件执行**（pkg#236）：不受
 	// allowPrivate 豁免——allowPrivate 只豁免网段判定，不豁免字面量形态判定。
 	if looksLikeExoticIPv4(host) {
-		return nil, fmt.Errorf("urlguard: host %q is an exotic IPv4 literal form", host)
+		return nil, fmt.Errorf("%w: host %q is an exotic IPv4 literal form", ErrExoticLiteral, host)
 	}
 	addrs, err := g.lookup(ctx, host)
 	if err != nil {

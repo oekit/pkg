@@ -11,7 +11,6 @@ package webhook
 import (
 	"crypto"
 	"encoding/base64"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -67,14 +66,8 @@ func TimestampSignerWithClock(now func() time.Time) TimestampSignerOption {
 // Validator 的逐参数对偶。构造校验同口径：secret 为空 panic fail-closed、
 // algo 白名单、tsName/sigName 空串 panic、nil 选项 panic。
 func NewTimestampHMACSigner(secret []byte, algo crypto.Hash, tsName, sigName string, opts ...TimestampSignerOption) *TimestampHMACSigner {
-	if len(secret) == 0 {
-		panic("webhook: Timestamp HMACSigner secret 为空——空密钥使 HMAC 签名对可预测载荷形同虚设，拒绝构造（fail-closed）")
-	}
-	switch algo {
-	case crypto.SHA1, crypto.SHA224, crypto.SHA256, crypto.SHA384, crypto.SHA512:
-	default:
-		panic(fmt.Sprintf("webhook: 不支持的哈希算法 crypto.Hash(%d)——HMAC 家族限 SHA-1/224/256/384/512（fail-fast，仓规总则①）", uint(algo)))
-	}
+	mustSecret(secret, "Timestamp HMACSigner")
+	mustHMACAlgo(algo)
 	if tsName == "" || sigName == "" {
 		panic("webhook: Timestamp HMACSigner 的 tsName/sigName 为空串（fail-fast，仓规总则①）")
 	}

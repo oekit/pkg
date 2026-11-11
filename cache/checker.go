@@ -119,7 +119,11 @@ func (c *Checker) Check(ctx context.Context) error {
 	// 原样抛给首个调用方（保留原始调用栈）。
 	defer func() {
 		if r := recover(); r != nil {
-			perr := fmt.Errorf("cache: refresh panic: %v", r)
+			// panic 收编单源（#381，errors.Recovered）：error 身份保留
+			// （waiter 可 errors.Is/As 到 refresh 回调 panic 出去的原始错误），
+			// goroutine 栈与 panic 值类型信息由 PanicError 携带——此前 %v
+			// 把身份拍平成文本。
+			perr := fmt.Errorf("cache: refresh panic: %w", errors.Recovered(r))
 			c.mu.Lock()
 			c.cachedErr = perr
 			c.validUntil = c.now().Add(c.failTTL)

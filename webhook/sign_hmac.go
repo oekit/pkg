@@ -150,14 +150,8 @@ func SignerWithClock(now func() time.Time) HMACSignerOption {
 // 密钥等于裸奔，宁可不发）；algo 白名单同 NewHMACValidator；header 空串
 // panic；nil 选项 panic。
 func NewHMACSigner(secret []byte, algo crypto.Hash, header string, opts ...HMACSignerOption) *HMACSigner {
-	if len(secret) == 0 {
-		panic("webhook: HMACSigner secret 为空——无密钥的签名等于裸奔，拒绝构造（fail-closed）")
-	}
-	switch algo {
-	case crypto.SHA1, crypto.SHA224, crypto.SHA256, crypto.SHA384, crypto.SHA512:
-	default:
-		panic(fmt.Sprintf("webhook: 不支持的哈希算法 crypto.Hash(%d)——HMAC 家族限 SHA-1/224/256/384/512（fail-fast，仓规总则①）", uint(algo)))
-	}
+	mustSecret(secret, "HMACSigner")
+	mustHMACAlgo(algo)
 	if header == "" {
 		panic("webhook: HMACSigner 的 header 为空串（fail-fast，仓规总则①）")
 	}
@@ -256,13 +250,7 @@ const signCarrierHeader = "X-Oekit-Signature"
 // 口径同语义面——Gitee 形态 base64(hmac(algo, key=secret,
 // msg=ts+"\n"+secret))。与 giteeMessage 共享 message 组装，天然不漂移。
 func SignTimestampHMAC(secret []byte, algo crypto.Hash, ts string) string {
-	if len(secret) == 0 {
-		panic("webhook: SignTimestampHMAC secret 为空——空密钥使 HMAC 签名对可预测载荷形同虚设，拒绝构造（fail-closed）")
-	}
-	switch algo {
-	case crypto.SHA1, crypto.SHA224, crypto.SHA256, crypto.SHA384, crypto.SHA512:
-	default:
-		panic(fmt.Sprintf("webhook: 不支持的哈希算法 crypto.Hash(%d)——HMAC 家族限 SHA-1/224/256/384/512（fail-fast，仓规总则①）", uint(algo)))
-	}
+	mustSecret(secret, "SignTimestampHMAC")
+	mustHMACAlgo(algo)
 	return base64.StdEncoding.EncodeToString(hmacSum(algo, secret, giteeMessage(ts, secret)))
 }
