@@ -2,6 +2,12 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.45.0] — 2026-11-12
+
+- 单源收敛十一单 + 双契约单源新增：convert 两套 any→int64/bool 开关收敛 OK 变体单源（#255 式漂移治本，#371）+ AppendStrings 改内建 append（#379）；cache 惰性删除块单源 lazyDeleteExpired + Get/GetEx 收敛 getHit 内核（#373）、世代写入路径 putEntryLocked 单源并按职责拆 local_load/local_sweep（#374）；cron parseRange normalize 钩子收敛三份范围+步长逻辑、splitStep 唯一步长切分（#375）；webhook 构造期校验收敛 mustHMACAlgo/mustSecret（#376）；timex ParseFirst 单行委托 ParseFirstInLocation（#377）；urlguard 拨号面两处 %w 补链 + 内置拒绝导出哨兵 ErrBlockedRange/ErrBlockedDomain/ErrExoticLiteral + 缺省 Guard 缓存（#380）+ CIDR 清单导出跨仓单源 BlockedCIDRSpecs/IsBlockedIP/ParseCIDRList（core#132 pkg 侧）；jsonrepair 终态错误双 %w 保留两路链（#382）；errors 新增 panic 收编单源 PanicError/Recovered（error 身份不丢+goroutine 栈+panic 值类型，cache/singleflight 转换点改用，全矩阵 wave 2 消费，#381）；pagination 快照深拷贝同步 core#102 指针环防护（core#130 pkg 侧）；新增 distlock 后端中立契约包（Locker 接口两仓并集 + 哨兵集以 redisx 文案为基准 + WithLock WithoutCancel 释放纪律，etcdx#123 治本侧，redisx/etcdx 波次消费）；Go 地板抬至 1.26.0。**BREAKING**：删除零引用的 errors.Errorf（#378）——普通错误包装统一 stdlib fmt.Errorf("%w")，本包只留 stdlib 没有的能力（Wrap kv/Recovered/MultiError 等）
+
+关联问题单：pkg#371、pkg#373、pkg#374、pkg#375、pkg#376、pkg#377、pkg#378、pkg#379、pkg#380、pkg#381、pkg#382。
+
 ## [v0.44.0] — 2026-11-11
 
 - 三件套新原语：shellx.Analyze 词法事实面（重定向/命令替换/普通参数可辨，#358）；procx cgroup v2 memory.max 内存限额（fail-closed + OOM 信号可辨 + swap 封死，#359）；resumable 分片上传/断点续传会话面（CAS 进度 + 断点双源对账 + 孤儿清扫，#361）
