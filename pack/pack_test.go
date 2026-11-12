@@ -8,6 +8,7 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -686,4 +687,71 @@ func jsonEqual(t *testing.T, a, b []byte) bool {
 		t.Fatalf("解析 %s: %v", b, err)
 	}
 	return reflect.DeepEqual(av, bv)
+}
+
+// TestNewWriter_RejectsNonPositiveVersion 钉住 #389：formatVersion <= 0 在
+// **构造期** panic（fail-fast 总则①）。此前静默接受、延迟到首次 AddJSONL 才
+// 报错且 w.err 永久毒化后续全部调用——非法版本不该带病通过构造期。
+func TestNewWriter_RejectsNonPositiveVersion(t *testing.T) {
+	for _, v := range []int{0, -1} {
+		func() {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("NewWriter(formatVersion=%d) 应 panic", v)
+				}
+				msg, ok := r.(string)
+				if !ok || !strings.Contains(msg, "formatVersion") {
+					t.Fatalf("panic 信息应指明 formatVersion, got %v", r)
+				}
+			}()
+			_ = NewWriter(io.Discard, v)
+		}()
+	}
+}
+
+// TestWriter_ConcurrentAddJSONL 钉住 #387 的实现面：AddJSONL 全程持内部互斥
+// 锁，多 goroutine 并发写**安全**（只是落包顺序不保证）——-race 下无数据竞争、
+// 全部条目齐整入包、行数与清单一致。
+func TestWriter_ConcurrentAddJSONL(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewWriter(&buf, CurrentFormatVersion)
+
+	const files, rows = 8, 50
+	var wg sync.WaitGroup
+	for i := range files {
+		wg.Go(func() {
+			name := fmt.Sprintf("f%d.jsonl", i)
+			data := make([]userRow, rows)
+			for j := range rows {
+				data[j] = userRow{ID: j, Name: name}
+			}
+			n, err := w.AddJSONL(name, data)
+			if err != nil {
+				t.Errorf("AddJSONL(%s) = %v", name, err)
+				return
+			}
+			if n != rows {
+				t.Errorf("AddJSONL(%s) 行数 = %d, want %d", name, n, rows)
+			}
+		})
+	}
+	wg.Wait()
+
+	m, err := w.Close()
+	if err != nil {
+		t.Fatalf("Close = %v", err)
+	}
+	if len(m.Counts) != files {
+		t.Fatalf("清单文件数 = %d, want %d", len(m.Counts), files)
+	}
+	for i := range files {
+		name := fmt.Sprintf("f%d.jsonl", i)
+		if got := m.Counts[name]; got != rows {
+			t.Fatalf("清单 %s 行数 = %d, want %d", name, got, rows)
+		}
+		if _, ok := m.Files[name]; !ok {
+			t.Fatalf("清单缺 %s 的 SHA-256", name)
+		}
+	}
 }

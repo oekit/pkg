@@ -10,6 +10,16 @@ func TestGetCurrentTime(t *testing.T) {
 	if now <= 0 {
 		t.Error("GetCurrentTime() should return positive value")
 	}
+	// #388：宽度钉子——与 time.Now().Unix()（int64）及同族
+	// GetCurrentDayStartTime（int64）直接做比较/算术：int 与 int64 是不同
+	// 类型且无隐式转换，返回类型若改回 int（32 位平台 2038 截断），本测试
+	// 直接编译失败。
+	if drift := GetCurrentTime() - time.Now().Unix(); drift < -1 || drift > 1 {
+		t.Errorf("GetCurrentTime() 与 Unix() 漂移 %d 秒", drift)
+	}
+	if day := GetCurrentDayStartTime(); day > now {
+		t.Errorf("GetCurrentDayStartTime() = %d later than now %d", day, now)
+	}
 }
 
 func TestGetCurrentDate(t *testing.T) {

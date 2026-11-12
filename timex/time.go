@@ -1,7 +1,6 @@
 package timex
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -14,12 +13,18 @@ const (
 // TimestampString 返回当前 Unix 时间戳的字符串。
 // 时间戳始终为 UTC 秒数，不含时区偏移（Unix 时间戳是时区无关的）。
 func TimestampString() string {
-	return fmt.Sprintf("%d", time.Now().Unix())
+	return strconv.FormatInt(time.Now().Unix(), 10)
 }
 
-// GetCurrentTime 返回当前 Unix 时间戳。
-func GetCurrentTime() int {
-	return int(time.Now().Unix())
+// GetCurrentTime 返回当前 Unix 时间戳（秒，int64）。
+//
+// 宽度与同族对齐（#388）：GetCurrentDayStartTime / Date2Stamp / StampInt2Date
+// 全部是 int64，唯独「当前时间戳」这个最高频入口曾是 int——32 位平台
+// （GOARCH=386/arm）上 2038-01 起回绕为负，且调用方常拿它与 int64 时间戳
+// 比较/入库。（0.x 阶段允许 breaking，minor 直接改签名对齐同族，不留
+// GetCurrentTime64 并行入口。）
+func GetCurrentTime() int64 {
+	return time.Now().Unix()
 }
 
 // GetCurrentDate 返回当前日期字符串，默认格式为 "2006-01-02"。

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -700,5 +701,72 @@ func TestPutChunkStatError(t *testing.T) {
 	err := m.PutChunk(ctx, s.ID, 0, strings.NewReader("AAAA"), 4)
 	if !errors.Is(err, boom) {
 		t.Fatalf("PutChunk Stat 故障 err = %v, want 上抛 %v", err, boom)
+	}
+}
+
+// TestNumChunks_OverflowSafe 钉住 #407：先加后除的分子在 Size 接近 MaxInt64
+// 时先溢出回绕到负半区 ⇒ 分片数 ≤ 0。修后 `(Size-1)/ChunkSize + 1` 数学等价
+// 且分子恒非负——常规口径不变，溢出区域给出正确分片数。
+func TestNumChunks_OverflowSafe(t *testing.T) {
+	cases := []struct {
+		name        string
+		size, chunk int64
+		want        int
+		note        string
+	}{
+		{"零对象", 0, 4, 0, "Size==0 恒 0"},
+		{"常规整除", 8, 4, 2, ""},
+		{"常规有余数", 10, 4, 3, "4/4/2"},
+		{"单片", 1, 4, 1, ""},
+		{"ChunkSize非法", 10, 0, 0, "防御分支不变"},
+		{"ChunkSize负", 10, -4, 0, "防御分支不变"},
+		{"Size=MaxInt64", math.MaxInt64, 1 << 60, 8, "此前分子溢出回绕出 -8"},
+		{"Size=MaxInt64 整除", math.MaxInt64, math.MaxInt64, 1, "此前分子溢出回绕出 0"},
+		{"Size=MaxInt64 小片", math.MaxInt64, 1 << 20, int(math.MaxInt64)>>20 + 1, "此前 -8796093022207"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Session{Size: tc.size, ChunkSize: tc.chunk}
+			if got := s.NumChunks(); got != tc.want {
+				t.Fatalf("NumChunks(Size=%d, Chunk=%d) = %d, want %d (%s)",
+					tc.size, tc.chunk, got, tc.want, tc.note)
+			}
+			// 契约底线：Size>0 且 ChunkSize>0 时分片数必须 > 0——≤0 会让
+			// reconcile 空过、Complete 交付 0 字节。
+			if tc.size > 0 && tc.chunk > 0 && s.NumChunks() <= 0 {
+				t.Fatal("Size>0 且 ChunkSize>0 时分片数必须为正")
+			}
+		})
+	}
+}
+
+// TestComplete_OverflowSizeFailsLoudly 钉住 #407 的端到端后果：分子溢出曾让
+// reconcile 空过（received/missing 双双为空）⇒ Complete 返回 nil 成功并交付
+// 0 字节对象。修后同一会话如实报缺片（这里 8 片一片都没传），不静默交付。
+func TestComplete_OverflowSizeFailsLoudly(t *testing.T) {
+	ctx := context.Background()
+	m, _, _ := newTestManager()
+	s, _, err := m.Init(ctx, InitReq{
+		Owner: "u1", Hash: "h1",
+		Size: math.MaxInt64, ChunkSize: 1 << 60, // 8 片；此前 NumChunks()=-8
+	}, nil)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if got := s.NumChunks(); got != 8 {
+		t.Fatalf("NumChunks = %d, want 8", got)
+	}
+
+	mergeCalled := false
+	err = m.Complete(ctx, s.ID, func(_ context.Context, _ *Session, r io.Reader) error {
+		mergeCalled = true
+		_, _ = io.Copy(io.Discard, r)
+		return nil
+	})
+	if !errors.Is(err, ErrMissingChunks) {
+		t.Fatalf("Complete err = %v, want ErrMissingChunks（此前 nil 成功 + 0 字节交付）", err)
+	}
+	if mergeCalled {
+		t.Fatal("缺片会话不得进 merge")
 	}
 }

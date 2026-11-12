@@ -91,8 +91,14 @@ func TestLooksLikeExoticIPv4(t *testing.T) {
 		{"example.com", false},
 		{"1.2.3.4.5", false}, // 超四段 ⇒ 不是 inet_aton 形态
 		{"0xzz", false},      // 非法十六进制
-		{"1.2.3.", false},    // 空段
-		{"", false},
+		// #413：空段按候选处理（fail-closed）——含空段的名字既不是合法域名
+		// （DNS 必失败）也不是合法 IP，此前 parseIPv4Part("") 早退整段判
+		// false，折叠产物带尾点残留的 `127.0.0.1.`（5 段）同理漏进「普通域名」
+		// 分支。判定面的正常入口已先剥尾点，这里兜住一切上游未剥的形态。
+		{"1.2.3.", true},   // 尾空段（4 段含空）
+		{"127..0.1", true}, // 内部空段
+		{".8.8.8.8", true}, // 首空段
+		{"", true},         // 整串为空 = 最不可懂的名字（上游 empty host 检查已先拒）
 	}
 	for _, c := range cases {
 		if got := looksLikeExoticIPv4(c.host); got != c.want {

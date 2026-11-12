@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"time"
 )
 
@@ -96,11 +97,22 @@ type Session struct {
 }
 
 // NumChunks 返回分片总数（Size==0 时为 0）。
+//
+// 计算口径（#407）：`(Size-1)/ChunkSize + 1`——先加后除的写法
+// `(Size+ChunkSize-1)/ChunkSize` 的**分子**在 Size 接近 MaxInt64 时先溢出
+// 回绕到负半区 ⇒ 分片数 ≤ 0 ⇒ reconcile 的 `for i := range n` 空过（齐全
+// 校验形同虚设）、merge 收到 0 字节流、Complete 返回 nil 并交付 0 字节对象。
+// 先减后除数学等价（Size >= 1 时）且分子恒非负，不存在溢出形态。
+//
+// 结果按 int 表示宽度饱和（32 位平台上 int64 分片数可能超出 int 范围——
+// 饱和到 MaxInt 而不是回绕出负数； Size/ChunkSize 组合超出 int 表示范围
+// 本身就是不可执行的会话，reconcile/Complete 的逐片对账会如实把它算成
+// 缺片，不会静默空过）。
 func (s *Session) NumChunks() int {
 	if s.Size == 0 || s.ChunkSize <= 0 {
 		return 0
 	}
-	return int((s.Size + s.ChunkSize - 1) / s.ChunkSize)
+	return int(min((s.Size-1)/s.ChunkSize+1, int64(math.MaxInt)))
 }
 
 // chunkLen 返回 idx 号分片的应有字节数（前置：idx 合法）——非末片是

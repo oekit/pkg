@@ -483,7 +483,14 @@ func (g *Guard) checkHostLiteral(host string) error {
 	if !ok {
 		return fmt.Errorf("urlguard: host %q contains non-ASCII characters that cannot be deterministically folded (IDN/全角形式 fail-closed)", host)
 	}
-	host = folded
+	// 折叠产物再剥尾点（#413）：全角尾分隔符（。．｡ → .）的折叠发生在
+	// canonicalHost 的剥点**之后**——`127.0.0.1。` 归一后是 `127.0.0.1.`，
+	// 折叠产物若不再剥点，net.ParseIP 返回 nil、exotic 判据按 5 段早退，
+	// 判定落到「普通域名」分支 ⇒ 同一目标加一个全角尾点即从拒到放。
+	host = strings.TrimRight(folded, ".")
+	if host == "" {
+		return fmt.Errorf("urlguard: empty host")
+	}
 	if ip := net.ParseIP(stripIPv6Zone(host)); ip != nil {
 		// IP 字面量带 host 上下文判定（#296）：host 命中 allowDomains 时
 		// 豁免内置网段判定——CheckURL/CheckHost 的字面量分支与拨号面同源。
@@ -609,9 +616,25 @@ func isASCII(s string) bool {
 // 口径（fail-closed）：命中即拒，不解码成 IPv4 再走范围判定——cgo resolver
 // 语义更宽，字面量层防护必须 fail-closed（同族 oagentkit/guardx/egress 的
 // looksLikeExoticIPv4 同款）。正常点分十进制由 net.ParseIP 先判，不走这里。
+//
+// 空段形态（#413）同样按候选处理：`127..0.1`、折叠后尾点残留的
+// `127.0.0.1.`（5 段含空段）此前因 parseIPv4Part("") 早退整段判 false，
+// 落进「普通域名」分支——含空段的名字不是合法域名（DNS 必失败）也不是
+// 合法 IP，按 fail-closed 一律拒绝而不是交给 DNS。
 func looksLikeExoticIPv4(host string) bool {
 	parts := strings.Split(host, ".")
-	if len(parts) == 0 || len(parts) > 4 {
+	if len(parts) == 0 {
+		return false
+	}
+	// 空段先于段数上限判定（#413）：`.8.8.8.8` 是 5 段、`1.2.3.` 是 4 段含空——
+	// 含空段的名字既不是合法域名（DNS 必失败）也不是合法 IP，一律按候选处理
+	// （fail-closed），不因段数超限早退漏进「普通域名」分支。
+	for _, p := range parts {
+		if p == "" {
+			return true
+		}
+	}
+	if len(parts) > 4 {
 		return false // inet_aton 最多四段
 	}
 	nonDecimal := false
@@ -777,10 +800,13 @@ func defaultLookup(ctx context.Context, host string) ([]net.IP, error) {
 	return ips, nil
 }
 
-// canonicalHost 把 host 归一为判定口径：小写、去空白、去尾点、去 IPv6 方括号。
+// canonicalHost 把 host 归一为判定口径：小写、去空白、去全部尾点、去 IPv6
+// 方括号（#413：此前只剥一个 ASCII 尾点——`localhost..` 剥完还剩
+// `localhost.`，双尾点变体从「阻断」翻成「放行」；DNS 语义的「尾点不敏感」
+// 本就是剥全部尾点，FQDN 多尾点不是合法名字）。
 func canonicalHost(host string) string {
 	host = strings.ToLower(strings.TrimSpace(host))
-	host = strings.TrimSuffix(host, ".")
+	host = strings.TrimRight(host, ".")
 	host = strings.TrimPrefix(host, "[")
 	host = strings.TrimSuffix(host, "]")
 	return host
