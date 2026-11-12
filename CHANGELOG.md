@@ -2,6 +2,12 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.47.1] — 2026-11-13
+
+- fix(timex): EndOfMinute/EndOfHour 改「下一周期起点 −1ns」——非整小时 DST 位移时区（Lord Howe/Macquarie 30 分钟回拨）不再与相邻周期重叠（#418）。头注释不变量新增第三条（不重叠），适用域扩至全部 DST 时区。
+
+关联问题单：pkg#418。
+
 ## [v0.47.0] — 2026-11-13
 
 - 29 单修复批（#383-#408 清单 18 + 批3 九单 + #412/#413）：errors.Errorf 兼容恢复（#405/#401，stdlib 缺失语义原样+Deprecated 迁移指引）、resumable/bufiox 溢出双修（#406/#407/#408）、urlguard 写面哨兵（#390）、jsonrepair 导出哨兵（#384）、pack 构造期校验（#389）、timex int64 2038（#388）、mathx 随机源统一 math/rand/v2（#386）、bloomx 热路径零分配（#385）、WrapSchedule 零值哨兵（#383）、singleflighttest 元测试三件套（#394）等。
