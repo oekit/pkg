@@ -104,16 +104,14 @@ func TestSecureBytes_ClearAndNil(t *testing.T) {
 func TestSecureString_Concurrent(t *testing.T) {
 	s := NewSecureString("v0")
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			for j := 0; j < 200; j++ {
+	for i := range 8 {
+		wg.Go(func() {
+			for range 200 {
 				s.Set(strings.Repeat("x", i+1))
 				_ = s.Get()
 				_ = s.EqualConstantTime("x")
 			}
-		}(i)
+		})
 	}
 	wg.Wait()
 }

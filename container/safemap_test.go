@@ -47,18 +47,16 @@ func TestSafeMap_GetOrSet(t *testing.T) {
 func TestSafeMap_ConcurrentSetGet(t *testing.T) {
 	sm := NewSafeMap[int, int]()
 	var wg sync.WaitGroup
-	for g := 0; g < 8; g++ {
-		wg.Add(1)
-		go func(g int) {
-			defer wg.Done()
-			for i := 0; i < 200; i++ {
+	for g := range 8 {
+		wg.Go(func() {
+			for i := range 200 {
 				sm.Set(i, g)
 				sm.Get(i)
 				if i%10 == 0 {
 					sm.GetOrSet(i, g)
 				}
 			}
-		}(g)
+		})
 	}
 	wg.Wait()
 	if sm.Len() != 200 {

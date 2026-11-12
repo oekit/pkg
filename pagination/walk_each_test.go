@@ -339,7 +339,7 @@ func TestWalkEach_PooledPointerFetchKeepsYielding(t *testing.T) {
 			n = 1 // 短页收尾
 		}
 		out := make([]*pooledRelease, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			next++
 			slots[i] = pooledRelease{ID: next, title: fmt.Sprintf("r%d", next)}
 			out[i] = &slots[i]

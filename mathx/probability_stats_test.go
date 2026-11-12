@@ -39,17 +39,17 @@ func TestProbabilityElems_BandFollowsCallerOrder(t *testing.T) {
 func TestProbability_AllBucketsReachable(t *testing.T) {
 	counts := map[int]int{}
 	const rounds = 3000
-	for i := 0; i < rounds; i++ {
+	for range rounds {
 		idx, _ := Probability([]int{1, 2, 3})
 		counts[idx]++
 	}
-	for idx := 0; idx < 3; idx++ {
+	for idx := range 3 {
 		if counts[idx] == 0 {
 			t.Errorf("桶 %d 从未被选中（分布 %v）——边界值被判给了前一个桶", idx, counts)
 		}
 	}
 	// 均匀权重的三个桶应大致等分。
-	for idx := 0; idx < 3; idx++ {
+	for idx := range 3 {
 		if counts[idx] < rounds/4 || counts[idx] > rounds/2 {
 			t.Errorf("桶 %d 选中 %d 次（期望约 %d），分布 %v", idx, counts[idx], rounds/3, counts)
 		}

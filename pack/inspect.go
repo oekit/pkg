@@ -8,8 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/oekit/pkg/errors"
@@ -324,10 +325,5 @@ func readLimited(f *zip.File, limit int64) ([]byte, error) {
 
 // sortedKeys 返回 map 的键（字典序），保证问题清单输出稳定。
 func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
+	return slices.Sorted(maps.Keys(m))
 }

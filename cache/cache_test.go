@@ -127,18 +127,16 @@ func TestLocalCache_ConcurrentAccess(t *testing.T) {
 	const opsPerGoroutine = 100
 
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			for i := 0; i < opsPerGoroutine; i++ {
+	for g := range goroutines {
+		wg.Go(func() {
+			for i := range opsPerGoroutine {
 				key := "key"
-				v := id*opsPerGoroutine + i
+				v := g*opsPerGoroutine + i
 				_ = c.Set(ctx, key, &v)
 				_, _ = c.Get(ctx, key)
 				_, _ = c.Exists(ctx, key)
 			}
-		}(g)
+		})
 	}
 	wg.Wait()
 
@@ -166,10 +164,8 @@ func TestLocalCache_ConcurrentGetOrLoad(t *testing.T) {
 
 	const goroutines = 50
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goroutines {
+		wg.Go(func() {
 			got, err := c.GetOrLoad(ctx, "shared-key")
 			if err != nil {
 				t.Errorf("GetOrLoad error: %v", err)
@@ -178,7 +174,7 @@ func TestLocalCache_ConcurrentGetOrLoad(t *testing.T) {
 			if got == nil || *got != 42 {
 				t.Errorf("expected 42, got %v", got)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -211,10 +207,8 @@ func TestSingleFlightCache_ConcurrentGetOrLoad(t *testing.T) {
 
 	const goroutines = 30
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goroutines {
+		wg.Go(func() {
 			val, err := sf.GetOrLoad(ctx, "hot-key")
 			if err != nil {
 				t.Errorf("GetOrLoad error: %v", err)
@@ -223,7 +217,7 @@ func TestSingleFlightCache_ConcurrentGetOrLoad(t *testing.T) {
 			if val == nil || *val != 99 {
 				t.Errorf("expected 99, got %v", val)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

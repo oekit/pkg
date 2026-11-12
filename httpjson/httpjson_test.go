@@ -428,7 +428,7 @@ func TestAddJitter_SaturatesInsteadOfOverflowing(t *testing.T) {
 func TestAddJitter_StaysInRange(t *testing.T) {
 	base := 100 * time.Millisecond
 	n := int64(20 * time.Millisecond)
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		d := addJitter(base, n)
 		if d < base || d >= base+time.Duration(n) {
 			t.Fatalf("抖动越界：%v 不在 [%v, %v)", d, base, base+time.Duration(n))

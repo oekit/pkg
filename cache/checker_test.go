@@ -14,7 +14,7 @@ func TestCheckCachesSuccess(t *testing.T) {
 		calls++
 		return nil
 	}, 50*time.Millisecond, 0, WithClock(func() time.Time { return time.Now() }))
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := c.Check(context.Background()); err != nil {
 			t.Fatalf("第 %d 次检查不应报错：%v", i, err)
 		}
@@ -65,12 +65,12 @@ func TestCheckInflightMerged(t *testing.T) {
 	}, time.Hour, 0)
 
 	errCh := make(chan error, 3)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		go func() { errCh <- c.Check(context.Background()) }()
 	}
 	time.Sleep(50 * time.Millisecond) // 等并发者都到齐（后两个合并到首次刷新）
 	close(release)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if err := <-errCh; err != nil {
 			t.Fatalf("并发检查不应报错：%v", err)
 		}

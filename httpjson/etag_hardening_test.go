@@ -123,7 +123,7 @@ func TestMemETagStore_Bounded(t *testing.T) {
 		if s.cfg.entries != DefaultETagStoreEntries || s.cfg.maxBody != DefaultMaxETagBodySize {
 			t.Fatalf("缺省上限 = %d/%d, want %d/%d", s.cfg.entries, s.cfg.maxBody, DefaultETagStoreEntries, DefaultMaxETagBodySize)
 		}
-		for i := 0; i < DefaultETagStoreEntries+1; i++ {
+		for i := range DefaultETagStoreEntries + 1 {
 			s.Put(fmt.Sprintf("k%d", i), `"e"`, "b")
 		}
 		if len(s.m) != DefaultETagStoreEntries {

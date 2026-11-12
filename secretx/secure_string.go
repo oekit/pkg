@@ -69,7 +69,7 @@ func (s *SecureString) Set(plaintext string) {
 
 	// XOR混淆
 	obfuscated := make([]byte, len(plaintext))
-	for i := 0; i < len(plaintext); i++ {
+	for i := range len(plaintext) {
 		obfuscated[i] = plaintext[i] ^ key[i]
 	}
 
@@ -88,7 +88,7 @@ func (s *SecureString) Get() string {
 
 	// XOR解密
 	plaintext := make([]byte, len(s.obfuscated))
-	for i := 0; i < len(s.obfuscated); i++ {
+	for i := range s.obfuscated {
 		plaintext[i] = s.obfuscated[i] ^ s.key[i]
 	}
 
@@ -125,7 +125,7 @@ func (s *SecureString) EqualConstantTime(other string) bool {
 
 	// 解密当前值
 	plaintext := make([]byte, len(s.obfuscated))
-	for i := 0; i < len(s.obfuscated); i++ {
+	for i := range s.obfuscated {
 		plaintext[i] = s.obfuscated[i] ^ s.key[i]
 	}
 

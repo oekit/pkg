@@ -170,13 +170,11 @@ func TestSingleFlightCache_StaleIfError_SelectiveWaiters(t *testing.T) {
 			arrived.Add(n)
 			gots := make([]*string, n)
 			errs := make([]error, n)
-			for i := 0; i < n; i++ {
-				wg.Add(1)
-				go func(i int) {
-					defer wg.Done()
+			for i := range n {
+				wg.Go(func() {
 					arrived.Done() // 到位即报到，接下来进入 GetOrLoad
 					gots[i], errs[i] = sf.GetOrLoad(ctx, "k")
-				}(i)
+				})
 			}
 			arrived.Wait()
 			for calls.Load() == 0 {
@@ -192,7 +190,7 @@ func TestSingleFlightCache_StaleIfError_SelectiveWaiters(t *testing.T) {
 			if got := calls.Load(); got != 1 {
 				t.Fatalf("单飞语义：source 只应被调 1 次，got %d", got)
 			}
-			for i := 0; i < n; i++ {
+			for i := range n {
 				if tc.want == "" {
 					if gots[i] != nil || !errors.Is(errs[i], boom) {
 						t.Fatalf("caller #%d: 取消兜底后 leader/等待方都应拿回源错误，got (%v, %v)", i, gots[i], errs[i])

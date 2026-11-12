@@ -381,16 +381,14 @@ func runConcurrent[T any](t *testing.T, c Contract[T], factory func(t *testing.T
 	const opsPerGoroutine = 50
 
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			for i := 0; i < opsPerGoroutine; i++ {
-				key := fmt.Sprintf("cachetest-cc-%d", (id+i)%4)
+	for g := range goroutines {
+		wg.Go(func() {
+			for i := range opsPerGoroutine {
+				key := fmt.Sprintf("cachetest-cc-%d", (g+i)%4)
 				// goroutine 内只允许 t.Errorf（t.Fatal 必须在测程 goroutine 调用）
 				switch i % 5 {
 				case 0:
-					if err := cc.Set(ctx, key, c.NewValue(id*opsPerGoroutine+i)); err != nil {
+					if err := cc.Set(ctx, key, c.NewValue(g*opsPerGoroutine+i)); err != nil {
 						t.Errorf("Set: %v", err)
 					}
 				case 1:
@@ -411,7 +409,7 @@ func runConcurrent[T any](t *testing.T, c Contract[T], factory func(t *testing.T
 					}
 				}
 			}
-		}(g)
+		})
 	}
 	wg.Wait()
 }

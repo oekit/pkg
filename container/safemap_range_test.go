@@ -42,7 +42,7 @@ func TestSafeMap_Range_CallbackMayWrite(t *testing.T) {
 // 读锁挡住（文档承诺）。
 func TestSafeMap_Range_ConcurrentWriteNotBlocked(t *testing.T) {
 	sm := NewSafeMap[string, int]()
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		sm.Set("k", i)
 	}
 
@@ -79,13 +79,13 @@ func TestSafeMap_Range_ConcurrentWriteSafe(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 500; i++ {
+		for i := range 500 {
 			sm.Set("k", i)
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 500; i++ {
+		for range 500 {
 			sm.Range(func(k string, v int) bool { return true })
 		}
 	}()

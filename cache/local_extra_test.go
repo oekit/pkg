@@ -29,7 +29,7 @@ func TestLocalCache_NoBackgroundSweep_NoGoroutine(t *testing.T) {
 	// 无后台件：构造 5 个实例，goroutine 数不得增加
 	before := runtime.NumGoroutine()
 	quiet := make([]*LocalCache[string], 0, 5)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		quiet = append(quiet, NewLocalCache(LocalConfig[string]{
 			TTL:               5 * time.Minute,
 			NoBackgroundSweep: true,
@@ -53,7 +53,7 @@ func TestLocalCache_NoBackgroundSweep_NoGoroutine(t *testing.T) {
 	// 对照组：缺省配置（后台清扫开）确实新增 goroutine
 	before2 := runtime.NumGoroutine()
 	noisy := make([]*LocalCache[string], 0, 5)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		noisy = append(noisy, NewLocalCache(LocalConfig[string]{TTL: 5 * time.Minute}))
 	}
 	runtime.Gosched()
@@ -265,7 +265,7 @@ func TestLocalCache_EvictPolicy_LRU(t *testing.T) {
 		}
 	}
 	// 反复读命中最旧的 key（提升顺序）
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := lru.Get(ctx, "a"); err != nil {
 			t.Fatalf("Get: %v", err)
 		}
@@ -288,7 +288,7 @@ func TestLocalCache_EvictPolicy_LRU(t *testing.T) {
 			t.Fatalf("Set %s: %v", k, err)
 		}
 	}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := fifo.Get(ctx, "a"); err != nil {
 			t.Fatalf("Get: %v", err)
 		}
@@ -463,17 +463,15 @@ func TestLocalCache_SetNX_Concurrent(t *testing.T) {
 		wins  atomic.Int64
 		start = make(chan struct{})
 	)
-	wg.Add(n)
-	for i := 0; i < n; i++ {
-		go func(i int) {
-			defer wg.Done()
+	for i := range n {
+		wg.Go(func() {
 			<-start
 			if ok, err := c.SetNX(ctx, "once", ptr(fmt.Sprintf("v%d", i)), 0); err != nil {
 				t.Errorf("SetNX: %v", err)
 			} else if ok {
 				wins.Add(1)
 			}
-		}(i)
+		})
 	}
 	close(start)
 	wg.Wait()

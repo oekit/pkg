@@ -252,7 +252,7 @@ func splitKey(text string, num int) (key, rest string, err error) {
 		}
 		return key, strings.TrimSpace(rest[1:]), nil
 	}
-	for i := 0; i < len(text); i++ {
+	for i := range len(text) {
 		if text[i] == ':' && (i+1 == len(text) || text[i+1] == ' ' || text[i+1] == '\t') {
 			return strings.TrimSpace(text[:i]), strings.TrimSpace(text[i+1:]), nil
 		}

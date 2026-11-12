@@ -72,15 +72,13 @@ func TestQueue_ConcurrentNoLoss(t *testing.T) {
 
 	var produced atomic.Int64
 	var wg sync.WaitGroup
-	for p := 0; p < producers; p++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < perProducer; i++ {
+	for range producers {
+		wg.Go(func() {
+			for range perProducer {
 				q.Put(1)
 				produced.Add(1)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if got := q.Len(); got != producers*perProducer {
@@ -89,10 +87,8 @@ func TestQueue_ConcurrentNoLoss(t *testing.T) {
 
 	var consumed atomic.Int64
 	var cwg sync.WaitGroup
-	for c := 0; c < consumers; c++ {
-		cwg.Add(1)
-		go func() {
-			defer cwg.Done()
+	for range consumers {
+		cwg.Go(func() {
 			for {
 				_, ok := q.Take()
 				if !ok {
@@ -100,7 +96,7 @@ func TestQueue_ConcurrentNoLoss(t *testing.T) {
 				}
 				consumed.Add(1)
 			}
-		}()
+		})
 	}
 	q.Close()
 	cwg.Wait()
@@ -145,7 +141,7 @@ func TestQueue_TryTakeVsTakeAfterClose(t *testing.T) {
 	q.Put("c")
 	q.Close()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if v, ok := q.TryTake(); ok {
 			t.Fatalf("TryTake #%d on closed queue = (%q, true), want false", i+1, v)
 		}

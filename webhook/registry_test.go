@@ -91,21 +91,17 @@ func TestRegistry_Concurrent(t *testing.T) {
 	rg := NewRegistry()
 	rg.Register("stable", NewGiteaValidator([]byte("s")))
 	var wg sync.WaitGroup
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+	for range 4 {
+		wg.Go(func() {
 			rg.Register("hot", NewGiteaValidator([]byte("s")))
 			_ = rg.Platforms()
-		}(i)
+		})
 	}
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 4 {
+		wg.Go(func() {
 			body := []byte("b")
 			_ = rg.Validate("stable", httptest.NewRequest(http.MethodPost, "/", nil), body)
-		}()
+		})
 	}
 	wg.Wait()
 }

@@ -179,9 +179,7 @@ func TestSingleFlightCache_RefreshNotMergedIntoLoad(t *testing.T) {
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() { // G1：GetOrLoad 慢加载（进行中）
-		defer wg.Done()
+	wg.Go(func() { // G1：GetOrLoad 慢加载（进行中）
 		got, err := sf.GetOrLoad(ctx, "k")
 		if err != nil {
 			t.Errorf("GetOrLoad: %v", err)
@@ -190,7 +188,7 @@ func TestSingleFlightCache_RefreshNotMergedIntoLoad(t *testing.T) {
 		if got == nil || *got != "old" {
 			t.Errorf("G1 应拿到自己的加载结果 old，got %v", got)
 		}
-	}()
+	})
 	<-loadStarted // G1 已进入 flight 并卡在 source 里
 
 	// Refresh 必须独立完成删除重建并拿到新值。

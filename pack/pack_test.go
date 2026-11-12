@@ -313,7 +313,7 @@ func TestStreamingLargeDataset(t *testing.T) {
 
 	rows := make([]map[string]any, 0, n)
 	var want bytes.Buffer
-	for i := 0; i < n; i++ {
+	for i := range n {
 		row := map[string]any{"id": i, "name": fmt.Sprintf("user-%d", i)}
 		rows = append(rows, row)
 		line, err := json.Marshal(row)

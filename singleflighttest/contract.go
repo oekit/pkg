@@ -56,13 +56,11 @@ func runDedup[T any](t *testing.T, f Flight[T]) {
 	}
 
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+	for i := range n {
+		wg.Go(func() {
 			<-start
 			_, errs[i] = f.Do(context.Background(), "k", fn)
-		}(i)
+		})
 	}
 	close(start)
 	wg.Wait()
@@ -70,7 +68,7 @@ func runDedup[T any](t *testing.T, f Flight[T]) {
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("fn called %d times, want 1", got)
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if errs[i] != nil {
 			t.Fatalf("caller %d err = %v", i, errs[i])
 		}
@@ -164,7 +162,7 @@ func runPanic[T any](t *testing.T, f Flight[T]) {
 	// 先让 waiter 挂到同一 call 上，再放行 panic
 	waiterErrs := make(chan error, n)
 	joined := make(chan struct{}, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		go func() {
 			joined <- struct{}{}
 			_, err := f.Do(context.Background(), "k", func(ctx context.Context) (T, error) {
@@ -175,7 +173,7 @@ func runPanic[T any](t *testing.T, f Flight[T]) {
 			waiterErrs <- err
 		}()
 	}
-	for i := 0; i < n; i++ {
+	for range n {
 		<-joined
 	}
 	time.Sleep(20 * time.Millisecond) // 等待进入 LoadOrStore waiter 分支
@@ -190,7 +188,7 @@ func runPanic[T any](t *testing.T, f Flight[T]) {
 		t.Fatal("caller 未收到 panic")
 	}
 
-	for i := 0; i < n; i++ {
+	for range n {
 		select {
 		case err := <-waiterErrs:
 			if err == nil {
@@ -345,10 +343,8 @@ func runDifferentKeys[T any](t *testing.T, f Flight[T]) {
 	release := make(chan struct{})
 
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+	for i := range 2 {
+		wg.Go(func() {
 			key := fmt.Sprintf("k%d", i)
 			_, _ = f.Do(context.Background(), key, func(ctx context.Context) (T, error) {
 				cur := running.Add(1)
@@ -363,7 +359,7 @@ func runDifferentKeys[T any](t *testing.T, f Flight[T]) {
 				var zero T
 				return zero, nil
 			})
-		}(i)
+		})
 	}
 	// 等两个 fn 都进入（**有界**：实现若把不同 key 串行化了，这里必须干脆地
 	// 失败而不是无限轮询挂死）。
@@ -383,20 +379,18 @@ func runError[T any](t *testing.T, f Flight[T]) {
 	errs := make([]error, n)
 
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+	for i := range n {
+		wg.Go(func() {
 			<-start
 			_, errs[i] = f.Do(context.Background(), "k", func(ctx context.Context) (T, error) {
 				var zero T
 				return zero, want
 			})
-		}(i)
+		})
 	}
 	close(start)
 	wg.Wait()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if !errors.Is(errs[i], want) {
 			t.Fatalf("caller %d err = %v, want %v", i, errs[i], want)
 		}
@@ -420,7 +414,7 @@ func runAfterFlightReruns[T any](t *testing.T, f Flight[T]) {
 		var zero T
 		return zero, nil
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := f.Do(context.Background(), "k", fn); err != nil {
 			t.Fatalf("第 %d 次 Do = %v", i+1, err)
 		}

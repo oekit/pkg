@@ -208,7 +208,7 @@ func TestLocalCache_Stats_Size(t *testing.T) {
 	t.Cleanup(func() { _ = c.Close(context.Background()) })
 	ctx := context.Background()
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := c.Set(ctx, string(rune('a'+i)), ptr("v")); err != nil {
 			t.Fatalf("Set: %v", err)
 		}

@@ -6,7 +6,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -272,7 +273,7 @@ func hasHex4(s string) bool {
 	if len(s) < 4 {
 		return false
 	}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		c := s[i]
 		isHex := '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
 		if !isHex {
@@ -503,11 +504,7 @@ func flattenObject(v any) (string, bool) {
 	if !ok || len(m) == 0 {
 		return "", false
 	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(m))
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
 		if s, ok := coerceString(m[k]); ok && strings.TrimSpace(s) != "" {

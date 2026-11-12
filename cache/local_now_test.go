@@ -299,7 +299,7 @@ func TestLocalCache_StaleIfError(t *testing.T) {
 
 	// 场景 2：反复回源失败反复兜底（过期条目保留于表内）
 	clock.Advance(time.Second)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if got, err := c.GetOrLoad(ctx, "k"); err != nil || *got != "fresh" {
 			t.Fatalf("repeat stale #%d = (%v, %v), want fresh/nil", i+1, got, err)
 		}

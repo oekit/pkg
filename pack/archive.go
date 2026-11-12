@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
-	"sort"
+	"slices"
 
 	"github.com/oekit/pkg/errors"
 )
@@ -41,7 +41,7 @@ func OpenVersion(r io.ReaderAt, size int64, expected int) (*Archive, error) {
 		return nil, err
 	}
 	entries, names, _ := indexEntries(zr)
-	sort.Strings(names)
+	slices.Sort(names)
 	return &Archive{zr: zr, manifest: m, entries: entries, names: names}, nil
 }
 

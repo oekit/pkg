@@ -63,7 +63,7 @@ func TestSpecSchedule_Next_MonthNotSkipped_LongRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	cur := time.Date(2025, 1, 31, 12, 0, 0, 0, time.Local)
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		next := s.Next(cur)
 		want := time.Date(2025, time.Month(2+i%12), 1, 0, 0, 0, 0, time.Local)
 		if next.Year() != want.Year() || next.Month() != want.Month() {

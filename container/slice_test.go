@@ -68,18 +68,16 @@ func TestSliceSnapshotIsCopy(t *testing.T) {
 func TestSliceConcurrent(t *testing.T) {
 	s := NewSlice[int]()
 	var wg sync.WaitGroup
-	for g := 0; g < 8; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 100; i++ {
+	for range 8 {
+		wg.Go(func() {
+			for i := range 100 {
 				s.Append(i)
 				s.Len()
 				s.Get(0)
 				s.Snapshot()
 				s.Range(func(i, v int) bool { return i < 10 })
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if s.Len() != 800 {
@@ -156,14 +154,12 @@ func TestSlice_AppendIfAbsent_Concurrent(t *testing.T) {
 	s := NewSlice[string]()
 	var success atomic.Int64
 	var wg sync.WaitGroup
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goroutines {
+		wg.Go(func() {
 			if s.AppendIfAbsent("same-key", nil) {
 				success.Add(1)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if success.Load() != 1 {

@@ -44,7 +44,7 @@ func TestCappedBuffer_LimitSemantics(t *testing.T) {
 func TestCappedBuffer_FloodStaysAtLimit(t *testing.T) {
 	b := &cappedBuffer{limit: 64 << 10}
 	chunk := bytes.Repeat([]byte{0x78}, 8192)
-	for i := 0; i < 13; i++ {
+	for range 13 {
 		n, err := b.Write(chunk)
 		if err != nil || n != len(chunk) {
 			t.Fatalf("写入必须全量成功（否则子进程卡 write）: n=%d err=%v", n, err)

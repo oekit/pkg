@@ -81,7 +81,7 @@ func TestSingleFlightCache_StaleIfError_RepeatedFallback(t *testing.T) {
 	}
 
 	sf := NewSingleFlightCache(c)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		got, err := sf.GetOrLoad(ctx, "k")
 		if err != nil || got == nil || *got != "v" {
 			t.Fatalf("repeat stale #%d = (%v, %v), want v/nil", i+1, got, err)

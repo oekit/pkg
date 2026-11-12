@@ -213,7 +213,7 @@ func TestFlipB64_ChangesPayload(t *testing.T) {
 	}
 	// 末组第 3 字符（= len-2）是危险位：它的低 4 位是丢弃位 ⇒ 翻转可能无效。
 	danger := len(payload) - 2
-	for i := 0; i < len(payload)-4; i++ {
+	for i := range len(payload) - 4 {
 		if i == danger {
 			continue
 		}
@@ -370,7 +370,7 @@ func TestPassphraseBox_ConcurrentUse(t *testing.T) {
 		_, err = box.Open(s)
 		done <- err
 	}()
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := <-done; err != nil {
 			t.Fatalf("并发使用: %v", err)
 		}

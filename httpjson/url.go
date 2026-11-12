@@ -44,7 +44,7 @@ func NormalizeBaseURL(raw string) string {
 // （尾斜杠裁剪只作用于此段——scheme 已被剥掉，裁剪够不到 scheme 的 `//`），
 // 后段（query/fragment）原样返回。
 func cutQueryFragment(rest string) (head, tail string) {
-	for i := 0; i < len(rest); i++ {
+	for i := range len(rest) {
 		if rest[i] == '?' || rest[i] == '#' {
 			return rest[:i], rest[i:]
 		}

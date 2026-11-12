@@ -83,29 +83,25 @@ func TestSlice_RemoveIf_AllMatchEmpties(t *testing.T) {
 func TestSlice_RemoveIf_ConcurrentWithAppend(t *testing.T) {
 	s := NewSlice[int]()
 	// 预置 10 个偶数（谓词删除目标）
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		s.Append(i * 2)
 	}
 
 	const writers = 8
 	var wg sync.WaitGroup
-	wg.Add(writers)
-	for w := 0; w < writers; w++ {
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 100; i++ {
+	for range writers {
+		wg.Go(func() {
+			for range 100 {
 				s.Append(1) // 奇数追加——谓词不命中
 			}
-		}()
+		})
 	}
 	// 并发谓词删除：只删偶数
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 50; i++ {
+	wg.Go(func() {
+		for range 50 {
 			s.RemoveIf(func(v int) bool { return v%2 == 0 })
 		}
-	}()
+	})
 	wg.Wait()
 
 	// 不变量：剩余元素全部是奇数（偶数最终全被删净），数量 = 成功追加数

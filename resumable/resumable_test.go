@@ -364,9 +364,7 @@ func TestCompleteConcurrentClaim(t *testing.T) {
 	results := make([]error, workers)
 	start := make(chan struct{})
 	for i := range workers {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			results[i] = m.Complete(ctx, s.ID, func(context.Context, *Session, io.Reader) error {
 				mu.Lock()
@@ -375,7 +373,7 @@ func TestCompleteConcurrentClaim(t *testing.T) {
 				time.Sleep(20 * time.Millisecond) // 拉长合并窗口，逼出并发对局
 				return nil
 			})
-		}(i)
+		})
 	}
 	close(start)
 	wg.Wait()
@@ -410,13 +408,11 @@ func TestPutChunkConcurrentProgress(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	for i := range size {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		wg.Go(func() {
 			// 同片并发双写：幂等覆盖 + 进度去重。
 			_ = m.PutChunk(ctx, s.ID, i, strings.NewReader("x"), chunk)
 			_ = m.PutChunk(ctx, s.ID, i, strings.NewReader("x"), chunk)
-		}(i)
+		})
 	}
 	wg.Wait()
 	recv, missing, _, err := m.ListParts(ctx, s.ID)

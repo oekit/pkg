@@ -222,14 +222,12 @@ func TestDialFunc_AllowPrivateRealDNS(t *testing.T) {
 func TestConcurrentUse(t *testing.T) {
 	g := mustGuard(t)
 	var wg sync.WaitGroup
-	for i := 0; i < 32; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 32 {
+		wg.Go(func() {
 			_ = g.CheckURL("http://10.0.0.1/")
 			_ = g.CheckURL("https://example.com/")
 			_ = g.CheckIP(net.ParseIP("::ffff:192.168.0.9"))
-		}()
+		})
 	}
 	wg.Wait()
 }
