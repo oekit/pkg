@@ -10,15 +10,15 @@ func TestGetCurrentTime(t *testing.T) {
 	if now <= 0 {
 		t.Error("GetCurrentTime() should return positive value")
 	}
-	// #388：返回类型必须是 int64——32 位平台上 int 会 2038 截断，且与同族
-	// （GetCurrentDayStartTime/Date2Stamp/StampInt2Date 均 int64）宽度漂移。
-	// 编译期锁定宽度：直接赋给 int64 变量，签名改回 int 时本测试编译失败。
-	var stamp int64 = GetCurrentTime()
-	if stamp != now {
-		t.Error("GetCurrentTime() width drift")
+	// #388：宽度钉子——与 time.Now().Unix()（int64）及同族
+	// GetCurrentDayStartTime（int64）直接做比较/算术：int 与 int64 是不同
+	// 类型且无隐式转换，返回类型若改回 int（32 位平台 2038 截断），本测试
+	// 直接编译失败。
+	if drift := GetCurrentTime() - time.Now().Unix(); drift < -1 || drift > 1 {
+		t.Errorf("GetCurrentTime() 与 Unix() 漂移 %d 秒", drift)
 	}
-	if day := GetCurrentDayStartTime(); day > stamp {
-		t.Errorf("GetCurrentDayStartTime() = %d later than now %d", day, stamp)
+	if day := GetCurrentDayStartTime(); day > now {
+		t.Errorf("GetCurrentDayStartTime() = %d later than now %d", day, now)
 	}
 }
 
