@@ -2,6 +2,10 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.47.0] — 2026-11-13
+
+- 29 单修复批（#383-#408 清单 18 + 批3 九单 + #412/#413）：errors.Errorf 兼容恢复（#405/#401，stdlib 缺失语义原样+Deprecated 迁移指引）、resumable/bufiox 溢出双修（#406/#407/#408）、urlguard 写面哨兵（#390）、jsonrepair 导出哨兵（#384）、pack 构造期校验（#389）、timex int64 2038（#388）、mathx 随机源统一 math/rand/v2（#386）、bloomx 热路径零分配（#385）、WrapSchedule 零值哨兵（#383）、singleflighttest 元测试三件套（#394）等。
+
 ## [v0.46.0] — 2026-11-12
 
 - - feat(config): 导出 SetFromString/DurationType——「字符串按 reflect.Kind 解析落位」的全矩阵唯一原语（core#129 治本侧：oekit/core/config 的 setScalarFromString 平行实现改引后删除）；内部实现零改动、行为零变化
