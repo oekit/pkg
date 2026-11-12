@@ -20,7 +20,29 @@ func TestWrapSchedule_Next(t *testing.T) {
 	}
 }
 
-// TestDelaySchedule_Next verifies DelaySchedule.Next adds the
+// TestWrapSchedule_UnsatisfiableStaysZero 钉住 #383：不可满足表达式（`0 0 31 2 *`
+// ——2 月永无 31 日，#185 的形态）经 WrapSchedule 包装后必须**仍返回零值**
+// （哨兵穿透包装器）。此前包装器对零值直接 Add ⇒ 零值变成公元 1 年+delay 的
+// 非零时刻 ⇒ 调用方 IsZero 判定失效、time.Until 为极大负值 ⇒ 立即触发、
+// prev 停在远古 ⇒ 内层 SpecSchedule 从远古重扫 5 年 ⇒ 调度器热转。
+func TestWrapSchedule_UnsatisfiableStaysZero(t *testing.T) {
+	spec, err := Parse("0 0 31 2 *") // 2 月 31 日：永不可满足
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := time.Date(2026, 3, 1, 0, 0, 0, 0, time.Local)
+	wrapped := WrapSchedule{Schedule: spec, Delay: 500 * time.Millisecond}
+	next := wrapped.Next(from)
+	if !next.IsZero() {
+		t.Fatalf("不可满足表达式经 WrapSchedule 包装后应仍返回零值哨兵, got %v", next)
+	}
+	// 调度器标准消费形态的防热转推演：IsZero 判定成立 ⇒ 不会把零值当触发点。
+	if next.After(from) {
+		t.Fatal("零值不应晚于入参")
+	}
+}
+
+// TestWrapSchedule_Next verifies DelaySchedule.Next adds the
 // configured delay to t.
 func TestDelaySchedule_Next(t *testing.T) {
 	d := NewDelaySchedule(2 * time.Second)

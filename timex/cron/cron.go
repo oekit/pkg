@@ -463,9 +463,21 @@ type WrapSchedule struct {
 	Delay    time.Duration
 }
 
-// Next 返回下一个调度时间。
+// Next 返回内层 Schedule 的下一次触发时间加 Delay。
+//
+// ⚠️ 零值哨兵穿透（#383）：内层 Next 返回零值 time.Time（不可满足表达式
+// 放弃，如 `0 0 31 2 *`——2 月永无 31 日）时**原样返回零值**，不加 Delay。
+// 此前对零值直接 Add——time.Time{}.Add(delay) 是公元 1 年 + delay 的非零
+// 具体时刻，内层的「放弃」哨兵经包装后失效：调用方 IsZero 判定落空、
+// time.Until 为极大负值 ⇒ 立即触发、prev 停在远古 ⇒ 内层 SpecSchedule 从
+// 远古重扫 5 年 ⇒ 调度器热转。哨兵语义必须穿透组合子，Next 的 godoc 契约
+// 「返回值严格晚于入参，除非返回零值表示放弃」对包装器同样成立。
 func (w WrapSchedule) Next(t time.Time) time.Time {
-	return w.Schedule.Next(t).Add(w.Delay)
+	next := w.Schedule.Next(t)
+	if next.IsZero() {
+		return next
+	}
+	return next.Add(w.Delay)
 }
 
 // DelaySchedule 在固定延迟后触发。

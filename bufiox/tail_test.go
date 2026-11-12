@@ -6,6 +6,7 @@ package bufiox
 import (
 	"bufio"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 )
@@ -167,5 +168,45 @@ func TestTailLines_CRLFNormalized(t *testing.T) {
 	}
 	if want := "a\nb"; tail != want {
 		t.Fatalf("CRLF 应归一为 LF, tail = %q, want %q", tail, want)
+	}
+}
+
+// TestTailLines_HugeBudgetNoLineCapCollapse 钉住 #408：budget 极大时行数软
+// 上限的乘法必须不回绕——此前 int64(budget)*4 在 budget >= 2^61 时回绕成
+// 非正数，丢头循环恒真 ⇒ 尾窗静默塌成 1 行且 truncated=true（失败形态被
+// 伪装成正常截断）。修法：乘法前判上界，乘积超 int64 时软上限饱和到
+// MaxInt64（永不生效——任何行数都满足「行数 <= budget×4」）。
+func TestTailLines_HugeBudgetNoLineCapCollapse(t *testing.T) {
+	const total = 100
+	in := strings.Repeat("\n", total) // Scanner 语义：100 个 \n = 100 行空行（内容字节 0，只触发行数软上限）
+	for _, budget := range []int{1024, 1 << 20, 1 << 61, 1 << 62, math.MaxInt64} {
+		tail, truncated, err := TailLines(strings.NewReader(in), budget)
+		if err != nil {
+			t.Fatalf("budget=%d err = %v", budget, err)
+		}
+		got := strings.Count(tail, "\n") + 1
+		if got != total {
+			t.Fatalf("budget=%d 保留行数 = %d, want %d（尾窗塌缩）", budget, got, total)
+		}
+		if truncated {
+			t.Fatalf("budget=%d 不应截断（窗口装得下全部行）", budget)
+		}
+	}
+}
+
+// TestTailLines_LineCapStillBinds 契约基线：正常预算下行数软上限仍然生效
+// ——极小行（空行）× 超行数预算按行丢头，防回归时把软上限整个修没了。
+func TestTailLines_LineCapStillBinds(t *testing.T) {
+	// budget=10 ⇒ 行数软上限 40：50 行空行丢头保留 40 行。
+	in := strings.Repeat("\n", 50) // Scanner 语义：50 个 \n = 50 行
+	tail, truncated, err := TailLines(strings.NewReader(in), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(tail, "\n") + 1; got != 40 {
+		t.Fatalf("保留行数 = %d, want 40", got)
+	}
+	if !truncated {
+		t.Fatal("应报告头部丢弃")
 	}
 }

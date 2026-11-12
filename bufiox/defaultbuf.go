@@ -261,8 +261,24 @@ func skipReader(rd io.Reader, n int) (skipped int, err error) {
 // ReadLen 实现 Reader。
 func (r *DefaultReader) ReadLen() int { return r.rn }
 
+// partialReadErr 把「部分读撞上流终态」的错误归一到接口契约口径（#406）：
+// n > 0 且终态是 io.EOF ⇒ io.ErrUnexpectedEOF（部分读）；n == 0 保持 io.EOF
+// （无数据可读）。其他错误（真实读错误）原样返回。BytesReader.ReadBinary
+// 的 switch 同口径——两条实现现在共享同一语义。
+func partialReadErr(n int, err error) error {
+	if n > 0 && err == io.EOF {
+		return io.ErrUnexpectedEOF
+	}
+	return err
+}
+
 // ReadBinary 实现 Reader：先拷贝缓冲存量，缺口大（≥ 4KiB）时直接读入
 // 调用方切片省一次中转拷贝，小缺口走 acquire 缓冲后拷贝。
+//
+// 错误口径与接口契约一致（#406）：读满 (len(bs), nil)、部分读 (n,
+// io.ErrUnexpectedEOF)、无数据 (0, io.EOF)。此前部分读撞上 io.EOF 时错误
+// 取决于「剩余字节此前是否已在内部缓冲里」——acquire 路径与直读粘滞路径
+// 把底层 io.EOF 原样上抛，被截断的帧被下游当成正常流尾。
 func (r *DefaultReader) ReadBinary(bs []byte) (int, error) {
 	if len(bs) == 0 {
 		return 0, nil
@@ -271,11 +287,10 @@ func (r *DefaultReader) ReadBinary(bs []byte) (int, error) {
 	r.ri += n
 	if need := len(bs) - n; need > 0 {
 		if need >= directlyReadThreshold {
-			// 直读路径要碰底层 ⇒ 终态错误直接返回，不再读（粘滞语义）。
-			// 返回原始终态错误（io.EOF），与 acquire 路径及接口约定一致。
+			// 直读路径要碰底层 ⇒ 终态错误置位后不再读（粘滞语义）。
 			if r.rdErr != nil {
 				r.rn += n
-				return n, r.rdErr
+				return n, partialReadErr(n, r.rdErr)
 			}
 			nn, err := readAtLeast(r.rd, bs[n:], need)
 			r.rdErr = err
@@ -283,14 +298,14 @@ func (r *DefaultReader) ReadBinary(bs []byte) (int, error) {
 			// 此前这条路径**漏记 rn** ⇒ ReadLen 少算本次读到的全部字节
 			// （接口约定：ReadLen 由 Next/ReadBinary/Skip 累加）。
 			r.rn += n
-			return n, err
+			return n, partialReadErr(n, err)
 		}
 		if err := r.acquire(need); err != nil {
 			m := copy(bs[n:], r.buf[r.ri:])
 			r.ri += m
 			n += m
 			r.rn += n
-			return n, err
+			return n, partialReadErr(n, err)
 		}
 		m := copy(bs[n:], r.buf[r.ri:])
 		r.ri += m

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"math"
 	"strings"
 )
 
@@ -53,7 +54,16 @@ func TailLines(r io.Reader, budget int) (tail string, truncated bool, err error)
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), tailMaxLineSize)
 
-	maxLines := int64(budget) * tailMaxLineFactor // int64：budget 极大时乘法不回绕
+	// 行数软上限：budget×factor，乘法**前**判上界（#408，与 pagination 的
+	// 既有做法同口径——int64 自身的乘法在 budget > 2^61 时一样回绕成负值，
+	// 回绕后的 maxLines ≤ 0 让丢头循环恒真 ⇒ 尾窗塌成 1 行）。预算大到乘积
+	// 超出 int64 时软上限退位为「永不生效」（budget×4 已不可表示，任何行数
+	// 都满足「行数 <= budget×4」），饱和到 MaxInt64 即可——行数由字节预算
+	// 与输入总长自然约束。
+	maxLines := int64(math.MaxInt64)
+	if b := int64(budget); b <= math.MaxInt64/tailMaxLineFactor {
+		maxLines = b * tailMaxLineFactor
+	}
 	var (
 		lines     []string
 		contentSz int // 窗口内行的内容字节数（不含分隔符）

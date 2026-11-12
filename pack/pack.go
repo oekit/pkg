@@ -31,7 +31,9 @@ type Manifest struct {
 
 // Writer 逐个写入迁移包的数据文件。
 //
-// Writer 不是并发安全的；一个包由一个 Writer 顺序写出。
+// 并发安全（#387）：AddJSONL / Close 全程持内部互斥锁串行化，可从多个
+// goroutine 并发调用——但条目落包顺序不保证（并发 AddJSONL 的文件顺序与
+// 调用顺序无关，顺序敏感的调用方自行串行）。close 之后的调用一律报错。
 type Writer struct {
 	mu       sync.Mutex
 	zw       *zip.Writer
@@ -60,10 +62,15 @@ func WithClock(now func() time.Time) WriterOption {
 // NewWriter 创建迁移包写入器，底层数据写入 w。
 //
 // formatVersion 是清单格式版本，应传 CurrentFormatVersion；版本会被写进清单，
-// 读取方据此判断能否识别该包。
+// 读取方据此判断能否识别该包。formatVersion <= 0 直接 panic（#389，构造期
+// fail-fast 同仓总则①）：非法版本此前静默接受、延迟到首次 AddJSONL 才报错
+// 且 w.err 永久毒化后续全部调用——纯参数校验没有理由不带病通过构造期。
 //
 // 可选项 WithClock 注入清单 created_at 的时刻来源（缺省 time.Now）。
 func NewWriter(w io.Writer, formatVersion int, opts ...WriterOption) *Writer {
+	if formatVersion <= 0 {
+		panic(fmt.Sprintf("pack: NewWriter 参数非法: formatVersion 必须为正整数, got %d", formatVersion))
+	}
 	wr := &Writer{
 		zw:      zip.NewWriter(w),
 		version: formatVersion,
@@ -96,10 +103,6 @@ func (w *Writer) AddJSONL(name string, rows any) (int, error) {
 		return 0, errors.New("pack: Writer 已关闭")
 	}
 	if w.err != nil {
-		return 0, w.err
-	}
-	if w.version <= 0 {
-		w.err = errors.New("pack: 格式版本必须为正整数")
 		return 0, w.err
 	}
 	safe, err := sanitizeName(name)
