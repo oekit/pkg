@@ -16,19 +16,17 @@ import "time"
 //
 // # 夏令时（两条不变量）
 //
-// 本文件的所有边界在 **整小时位移** 的 DST 切换下遵守两条不变量（回拨/前跳
-// 的 1 小时形态，America/New_York 等主流时区全部属于此类）：
+// 本文件的所有边界在 DST 切换下遵守两条不变量——整小时位移（America/New_York
+// 等主流时区）与**非整小时位移**（Australia/Lord_Howe、Antarctica/Macquarie
+// 的 30 分钟回拨，#418）均成立：
 //
 //	BeginningOfX(t) <= t <= EndOfX(t)
 //	BeginningOfX(t) 与 t 落在**同一个墙钟周期**内
+//	EndOfX(t) < BeginningOfX(下一周期)（不与相邻周期重叠）
 //
-// ⚠️ 已知边界（#418）：**非整小时位移**时区（Australia/Lord_Howe、
-// Antarctica/Macquarie：回拨 30 分钟）下 EndOfHour/EndOfMinute 的
-// 「起点 + 固定周期长度」会越入下一墙钟周期（实测 Lord Howe 回拨日
-// EndOfHour 与下一小时的 BeginningOfHour 重叠近 30 分钟）——重复段判定
-// 与周期长度都按 1 小时位移推导，30 分钟位移不成立。按墙钟小时/分钟
-// 分桶的统计在这些时区会重复计 30 分钟；此类场景请按绝对时间分桶
-// （t.Truncate）或先归一到固定偏移再取墙钟边界。整小时位移时区不受影响。
+// 纪律：所有 EndOfX 一律「下一周期起点 −1ns」推导（与 EndOfDay 系同型），
+// **绝不**「起点 + 固定周期长度」——后者在位移幅度 ≠ 周期长度的时区里
+// 必然越界（#418 实测 Lord Howe 回拨日 EndOfHour 曾与下一小时重叠近 30 分钟）。
 //
 // 达成两条不变量需要处理两类墙钟歧义：
 //
@@ -140,13 +138,21 @@ func BeginningOfYear(t time.Time) time.Time {
 }
 
 // EndOfMinute 返回 t 所在分钟的最后一纳秒。
+//
+// 与 EndOfDay 系同一纪律：下一周期起点 −1ns，而非「起点 + 固定周期长度」
+// （#418：起点加固定时长在非整小时 DST 位移时区会越入下一墙钟周期）。
 func EndOfMinute(t time.Time) time.Time {
-	return wallMinuteStart(t).Add(time.Minute - time.Nanosecond)
+	return wallMinuteStart(t.Add(time.Minute)).Add(-time.Nanosecond)
 }
 
 // EndOfHour 返回 t 所在小时的最后一纳秒。
+//
+// 与 EndOfDay 系同一纪律：下一周期起点 −1ns。wallHourStart 对回拨歧义的
+// 解析（重复小时取 t 实际所在的那一次）使 t.Add(time.Hour) 的墙钟小时起点
+// 恰为「t 所在周期的下一个起点」——非整小时位移时区（Lord Howe 等）下
+// EndOfHour 与相邻周期精确衔接、不重叠（#418）。
 func EndOfHour(t time.Time) time.Time {
-	return wallHourStart(t).Add(time.Hour - time.Nanosecond)
+	return wallHourStart(t.Add(time.Hour)).Add(-time.Nanosecond)
 }
 
 // EndOfDay 返回 t 所在日的最后一纳秒（23:59:59.999999999）。

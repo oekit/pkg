@@ -165,3 +165,58 @@ func TestBoundaries_Invariant_AllFunctions(t *testing.T) {
 		}
 	}
 }
+
+// —— #418：非整小时 DST 位移时区（30 分钟回拨）——
+
+// TestBoundaries_DSTFallBack_HalfHourShift 封堵 #418：Lord Howe/Macquarie
+// 回拨 30 分钟（02:00(+11) → 01:30(+10:30)），墙钟「01」小时跨两个 offset、
+// 「02」点的墙钟序列错位。旧 EndOfHour/EndOfMinute 按「起点 + 固定周期」
+// 计算，实测 EndOfHour 与下一小时的 BeginningOfHour 重叠近 30 分钟。
+// 修复后 EndOfX = 下一周期起点 −1ns，三条不变量在此类时区同样成立。
+func TestBoundaries_DSTFallBack_HalfHourShift(t *testing.T) {
+	loc, err := time.LoadLocation("Australia/Lord_Howe")
+	if err != nil {
+		t.Skipf("tzdata 缺 Lord_Howe: %v", err)
+	}
+	// 2026-04-05 Lord Howe 回拨日：02:00(+11) → 01:30(+10:30)。
+	// 扫回拨窗口前后每一分钟（含第一次 01:00-01:29(+11) 与第二次
+	// 01:30-01:59(+10:30) 两个「01」出现）。
+	base := time.Date(2026, 4, 5, 0, 0, 0, 0, loc)
+	for i := 0; i < 3*60; i++ {
+		at := base.Add(time.Duration(i) * time.Minute)
+
+		if eoh := EndOfHour(at); eoh.Before(at) {
+			t.Fatalf("EndOfHour(%v) = %v 早于输入", at, eoh)
+		} else if next := BeginningOfHour(at.Add(time.Hour)); !eoh.Before(next) && wallHourStart(at) != wallHourStart(next) {
+			// EndOfHour 不得越过下一墙钟小时的起点（同属自己周期内的
+			// 重复小时不算越界——Begin/End 落同一墙钟小时）。
+			t.Fatalf("★ EndOfHour(%v) = %v 越入下一墙钟小时(起点 %v)——#418 重叠回归", at, eoh, next)
+		}
+
+		if eom := EndOfMinute(at); eom.Before(at) {
+			t.Fatalf("EndOfMinute(%v) = %v 早于输入", at, eom)
+		} else if next := BeginningOfMinute(at.Add(time.Minute)); !eom.Before(next) && wallMinuteStart(at) != wallMinuteStart(next) {
+			t.Fatalf("★ EndOfMinute(%v) = %v 越入下一墙钟分钟——#418 同族", at, eom)
+		}
+	}
+
+	// 原始探针场景回归：第二次「01」出现（01:45 +10:30）的 EndOfHour 必须
+	// 停在自己周期内（旧实现落到 02:29:59.999）。
+	second := time.Date(2026, 4, 5, 1, 45, 0, 0, loc)
+	if eoh := EndOfHour(second); !eoh.Before(time.Date(2026, 4, 5, 2, 0, 0, 0, loc)) {
+		t.Fatalf("★ EndOfHour(01:45 回拨日) = %v 落进 02 点——重叠未修复", eoh)
+	}
+
+	// Macquarie 同型（同为 30 分钟回拨）。
+	mq, err := time.LoadLocation("Australia/Macquarie")
+	if err != nil {
+		return // tzdata 缺则跳过，Lord Howe 已覆盖判据
+	}
+	mqBase := time.Date(2026, 4, 4, 0, 0, 0, 0, mq)
+	for i := 0; i < 3*60; i++ {
+		at := mqBase.Add(time.Duration(i) * time.Minute)
+		if eoh := EndOfHour(at); eoh.Before(at) {
+			t.Fatalf("Macquarie: EndOfHour(%v) = %v 早于输入", at, eoh)
+		}
+	}
+}
