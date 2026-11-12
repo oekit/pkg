@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/oekit/pkg/stringx"
 )
 
 // Marshal 将 v 序列化为 JSON 字节。
@@ -131,11 +133,15 @@ func unmarshalStrict(decoder *json.Decoder, v any) error {
 var errTrailingData = errors.New("invalid character after top-level value: input must be a single JSON value")
 
 // formatError 构造带输入摘录的错误。摘录截断到 maxExcerpt（256）字节：
-// 理由见该常量。
+// 理由见该常量。截断经 stringx.TruncBytes 按 rune 边界回退（#419）——字节
+// 下标直切会腰斩多字节字符，错误文案含非法 UTF-8（进日志/告警平台是乱码，
+// 按 rune 计数的采集器会二次报错或丢行）；同仓 httpjson 的错误摘录已立
+// rune 安全纪律（StatusError 用 stringx.TruncEllipsis），两个摘录点同口径。
 func formatError(v string, err error) error {
 	excerpt := v
 	if len(excerpt) > maxExcerpt {
-		excerpt = excerpt[:maxExcerpt] + "...(truncated)"
+		cut, _ := stringx.TruncBytes(excerpt, maxExcerpt)
+		excerpt = cut + "...(truncated)"
 	}
 	return fmt.Errorf("string: `%s`, error: `%w`", excerpt, err)
 }

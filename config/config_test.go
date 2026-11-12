@@ -406,6 +406,39 @@ name: svc
 	if err := Load(&c{}, WithFile(path), WithSensitive("Token")); err != nil {
 		t.Fatalf("内嵌路径应可解析: %v", err)
 	}
+
+	// #416：脱敏必须**真的生效**——此前声明过检但 redactWalk 产出恒带层名
+	//（"Base.Token"），集合键与产出路径永不相交 ⇒ Redact 输出明文泄密。
+	out := Redact(v, WithSensitive("Token"))
+	if !strings.Contains(out, "Token=<redacted>") {
+		t.Fatalf("WithSensitive(Token) 必须脱敏内嵌字段, got:\n%s", out)
+	}
+	if strings.Contains(out, "super-secret") || strings.Contains(out, "abc") {
+		t.Fatalf("敏感值明文泄密:\n%s", out)
+	}
+
+	// #416：WithRequired 对内嵌字段必须**真的生效**——此前空值静默通过，
+	// 服务带缺配置启动，故障推迟到运行期。
+	type req struct {
+		Base
+	}
+	empty := &req{}
+	if err := Load(empty, WithRequired("Token")); err == nil {
+		t.Fatal("WithRequired(Token) 对内嵌字段的空值必须报错（此前静默失效）")
+	}
+	// 短路径声明 + 有值 ⇒ 通过。
+	if err := Load(v, WithFile(path), WithRequired("Token")); err != nil {
+		t.Fatalf("WithRequired(Token) 有值应通过: %v", err)
+	}
+
+	// #416：全限定形态（"Base.Token"）从「恰好能通」改为 fail-fast——
+	// 两条形态只有一条活路，声明的另一条此前静默失效（Required）/明文泄密
+	//（Sensitive），现在报错并给修正指引。
+	if err := Load(&req{}, WithRequired("Base.Token")); err == nil {
+		t.Fatal("内嵌层名拼进路径的声明应 fail-fast（此前过检但永不生效）")
+	} else if !strings.Contains(err.Error(), "层名不进字段路径") {
+		t.Fatalf("报错应给短路径修正指引, got %v", err)
+	}
 }
 
 // TestRedact 脱敏 dump：敏感字段恒为占位、命名子树整棵脱敏、输出按路径排序、

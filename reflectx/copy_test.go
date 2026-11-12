@@ -144,3 +144,66 @@ func TestDeepCopyInterfaceDynamicValue(t *testing.T) {
 		t.Fatal("接口内动态值仍别名")
 	}
 }
+
+// ---- #426 回归：Map/Slice 自引用环不再 stack overflow ----
+//
+// 环检测此前只挂 Pointer 分支——m["self"]=m 的 map 自引用、s[0]=s 的
+// slice 头自引用直接无限递归，goroutine stack exceeds fatal 打崩进程
+// （不是可恢复 error）。修后 Map/Slice 与 Pointer 同口径「先注册再下探」，
+// 环上第二次访问返回已拷贝节点，结构共享原样保留。
+
+func TestDeepCopy_MapSelfReference(t *testing.T) {
+	m := map[string]any{}
+	m["self"] = m
+	m["v"] = 42
+
+	out := DeepCopy(m)
+	if out["v"] != 42 {
+		t.Fatalf("普通键丢失: %v", out)
+	}
+	inner, ok := out["self"].(map[string]any)
+	if !ok {
+		t.Fatalf("自引用键形态丢失: %T", out["self"])
+	}
+	// 副本内部的自引用必须指向**副本自身**（结构共享保留），而不是源 map。
+	// map 不可比较——用底层存储指针判身份。
+	if reflect.ValueOf(inner["self"]).Pointer() != reflect.ValueOf(out).Pointer() {
+		t.Fatal("副本自引用未指向副本自身（环闭合语义破坏）")
+	}
+	// 副本与源完全独立：改副本不影响源。
+	inner["v"] = 99
+	if m["v"] != 42 {
+		t.Fatal("改副本污染了源")
+	}
+}
+
+func TestDeepCopy_SliceSelfReference(t *testing.T) {
+	s := make([]any, 2)
+	s[0] = s
+	s[1] = "tail"
+
+	out := DeepCopy(s)
+	if out[1] != "tail" {
+		t.Fatalf("尾元素丢失: %v", out)
+	}
+	inner, ok := out[0].([]any)
+	if !ok {
+		t.Fatalf("自引用元素形态丢失: %T", out[0])
+	}
+	if len(inner) != 2 || reflect.ValueOf(inner[0]).Pointer() != reflect.ValueOf(out).Pointer() {
+		t.Fatal("副本自引用未指向副本自身（环闭合语义破坏）")
+	}
+}
+
+func TestDeepCopy_MutualMapReference(t *testing.T) {
+	a := map[string]any{}
+	b := map[string]any{}
+	a["b"] = b
+	b["a"] = a
+
+	outA := DeepCopy(a)
+	outB := outA["b"].(map[string]any)
+	if reflect.ValueOf(outB["a"]).Pointer() != reflect.ValueOf(outA).Pointer() {
+		t.Fatal("互引用环闭合语义破坏（副本内 a/b 应互相指认）")
+	}
+}

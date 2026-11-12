@@ -46,6 +46,13 @@ func DeepCopy[T any](v T) T {
 
 // deepCopyVisited 是 DeepCopyValue 的递归体；visited 键为 src 指针地址
 // （拷贝期间 src 不被分配/移动，地址即身份），值为对应的新拷贝。
+//
+// 环防护覆盖 Pointer/Map/Slice 三类引用分支（#426）：此前只有 Pointer 登记
+// visited——不经指针也能成环（m["self"]=m 的 map 自引用、s[0]=s 的 slice
+// 头自引用），Map/Slice 分支直接递归 ⇒ goroutine stack exceeds fatal 打崩
+// 进程，不是可恢复错误。reflect.Value.Pointer() 对 Map（底层存储指针）与
+// Slice（首元素地址，len>=1 才可能自引用）同样可用，三类分支统一
+// 「先注册再下探」：环上第二次访问直接返回已拷贝节点，结构共享原样保留。
 func deepCopyVisited(v reflect.Value, visited map[uintptr]reflect.Value) reflect.Value {
 	if !v.IsValid() {
 		return v
@@ -55,7 +62,11 @@ func deepCopyVisited(v reflect.Value, visited map[uintptr]reflect.Value) reflect
 		if v.IsNil() {
 			return v
 		}
+		if out, ok := visited[v.Pointer()]; ok {
+			return out // 环闭合（#426）：返回已拷贝节点
+		}
 		out := reflect.MakeMapWithSize(v.Type(), v.Len())
+		visited[v.Pointer()] = out // 先注册再下探
 		iter := v.MapRange()
 		for iter.Next() {
 			out.SetMapIndex(deepCopyVisited(iter.Key(), visited), deepCopyVisited(iter.Value(), visited))
@@ -65,7 +76,11 @@ func deepCopyVisited(v reflect.Value, visited map[uintptr]reflect.Value) reflect
 		if v.IsNil() {
 			return v
 		}
+		if out, ok := visited[v.Pointer()]; ok {
+			return out // 环闭合（#426）：返回已拷贝节点
+		}
 		out := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+		visited[v.Pointer()] = out // 先注册再下探
 		for i := range v.Len() {
 			out.Index(i).Set(deepCopyVisited(v.Index(i), visited))
 		}

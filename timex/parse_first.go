@@ -21,7 +21,10 @@ import "time"
 //     （nil 指针 / 零值+ok / 错误包装），原语只承诺 (time.Time, bool)
 //     一种，包装留给调用方（故不做 MustParseFirst）；
 //   - 解析走 time.Parse 语义（layout 不含时区信息时结果为 UTC——与既有
-//     消费形态一致；带时区的变体见 ParseFirstInLocation）。
+//     消费形态一致；带时区的变体见 ParseFirstInLocation）。⚠️ 时区**缩写名**
+//     layout（CST/MST…）在 UTC 口径下与 time.Parse 差整数小时（缩写解析
+//     依赖 Location 的 zone 表，见 ParseFirstInLocation 的 #425 说明）——
+//     这类 layout 请用 ParseFirstInLocation 传产线时区。
 //
 // 用法：
 //
@@ -44,18 +47,25 @@ func ParseFirst(s string, layouts ...string) (time.Time, bool) {
 // 语义边界：
 //
 //   - 时区归属**逐 layout 独立判定**（time.ParseInLocation 语义）：layout
-//     自带时区信息（偏移如 RFC3339、或时区缩写名）时 loc 不参与——结果
-//     与 time.Parse 一致；layout 不含时区信息时按 loc 解释墙钟。混合
-//     layout 列表因此安全：带时区的条目照常精确，无时区的条目落 loc；
+//     自带时区**偏移**（如 RFC3339 的 +08:00）时 loc 不参与，解析结果确定；
+//     layout 不含时区信息时按 loc 解释墙钟。混合 layout 列表因此安全：
+//     带偏移的条目照常精确，无时区的条目落 loc；
+//   - ⚠️ **时区缩写名 layout（MST/CST/IST…）是已知陷阱**（#425）：缩写的
+//     解析依赖 Location 的 zone 表——`time.Parse` 用 Local（如
+//     TZ=Asia/Shanghai 时 CST 表项 → +0800），而本函数传 time.UTC 时按
+//     UTC 表解释（无 CST 表项 → 按墙钟落 UTC）⇒ 同一输入差出整数小时，
+//     且 CI（TZ=UTC）与开发机（Local=+8）行为不同、CI 恒绿生产偏移。
+//     缩写名 layout 必须传入与产线一致的 loc（如 Asia/Shanghai），并自行
+//     验证；本包不为此 panic（RFC3339 主流形不受影响，见 #425 拍板）；
 //   - loc 为 nil 时回退 time.UTC（与 ParseFirst 同口径）——nil 是显式
 //     回退默认值，不算非法（仓规总则②）；经 time.LoadLocation 取 loc
 //     失败的调用方应自行处理错误而不是传 nil 装作无事发生；
 //   - 其余边界（空输入/空 layout 列表/任一空 layout → (零值, false)、
 //     首命中即返回）与 ParseFirst 逐条一致。
 //
-// ParseFirst 等价于 ParseFirstInLocation(s, time.UTC, layouts...)（对
-// 无时区 layout 而言两者结果完全一致；带时区缩写名的 layout 下 Location
-// 命名有差异但时刻相同）。
+// ParseFirst 等价于 ParseFirstInLocation(s, time.UTC, layouts...)（无时区
+// layout 两者结果完全一致；带时区缩写名的 layout 下两者**时刻不同**——
+// 见上面的缩写名陷阱，#425 实测证伪了旧注释「时刻相同」的承诺）。
 //
 // 用法（Gitee due_on 三 layout，无时区条目按 CST 解析）：
 //

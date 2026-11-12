@@ -124,47 +124,66 @@ func Kv(err error) []any {
 //	}
 func KvFromChain(err error) []any {
 	var out []any
-	var walk func(e error)
-	walk = func(e error) {
-		for e != nil {
-			if c, ok := e.(KVCarrier); ok {
-				if kv := c.Kv(); len(kv) > 0 {
-					out = append(out, kv...)
-				}
+	var walk func(e error, depth int)
+	walk = func(e error, depth int) {
+		if e == nil || depth >= maxFlattenDepth {
+			// 深度上限对齐 biz_error.go 的 maxFlattenDepth 纪律（#420）：
+			// 成环链（Unwrap() error 自指、或 Unwrap() []error 互指回祖先
+			// ——biz_error.go 注释承认的重构/聚合形态）此前无上限：单分支
+			// 环是永久自旋（goroutine 卡死 + CPU 打满），多分支环是无限
+			// 递归 stack overflow **打崩进程**。kv 收集是日志辅助面，
+			// 超限宁缺勿崩——正常业务链远浅于 32。
+			return
+		}
+		if c, ok := e.(KVCarrier); ok {
+			if kv := c.Kv(); len(kv) > 0 {
+				out = append(out, kv...)
 			}
-			// 多分支链（Unwrap() []error，如 Errorf 的多 %w 形态）深度先序；
-			// stderrors.Unwrap 只认 Unwrap() error，多错误形态对它返回 nil，
-			// 必须先走类型断言分支。
-			if m, ok := e.(interface{ Unwrap() []error }); ok {
-				for _, sub := range m.Unwrap() {
-					walk(sub)
-				}
-				return
+		}
+		// 多分支链（Unwrap() []error，如 Errorf 的多 %w 形态）深度先序；
+		// stderrors.Unwrap 只认 Unwrap() error，多错误形态对它返回 nil，
+		// 必须先走类型断言分支。
+		if m, ok := e.(interface{ Unwrap() []error }); ok {
+			for _, sub := range m.Unwrap() {
+				walk(sub, depth+1)
 			}
-			u := stderrors.Unwrap(e)
-			if u == nil {
-				return
-			}
-			e = u
+			return
+		}
+		if u := stderrors.Unwrap(e); u != nil {
+			walk(u, depth+1)
 		}
 	}
-	walk(err)
+	walk(err, 0)
 	return out
 }
 
 // Cause 是 errors.Cause 的便捷版:返回 wrap 链最底层的 error。
 // 等价 errors.Unwrap 递归到 nil。
+//
+// 多分支链（Unwrap() []error，Go 1.20+ 多错误解包，如 Errorf 的多 %w 形态）
+// 取**首分支**继续下钻（#420）：单值语义的 Cause 在多分支形态没有「唯一
+// 最底层」，首分支与 KvFromChain 的深度先序口径一致。stdlib 语义优先——
+// 同时实现两种 Unwrap 的类型先走单分支（errors.Unwrap 的既有序）。
 func Cause(err error) error {
 	// 深度上限对齐 biz_error.go 的 maxFlattenDepth 纪律：成环 Unwrap 链
 	// （A 包 B、B 又包 A——biz_error.go 注释承认的重构/聚合形态）会让
 	// 无界 for 永久迭代（goroutine 卡死 + CPU 自旋，#298）。超限返回当前
 	// 已到达的最深节点并停止。
 	for range maxFlattenDepth {
-		u := stderrors.Unwrap(err)
-		if u == nil {
-			return err
+		if u := stderrors.Unwrap(err); u != nil {
+			err = u
+			continue
 		}
-		err = u
+		// 单分支到底：多分支链（含 Errorf 多 %w、Join 聚合）取首分支下钻。
+		if m, ok := err.(interface{ Unwrap() []error }); ok {
+			subs := m.Unwrap()
+			if len(subs) == 0 {
+				return err
+			}
+			err = subs[0]
+			continue
+		}
+		return err
 	}
 	return err
 }
