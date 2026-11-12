@@ -142,13 +142,18 @@ func (f *Filter) HashFuncs() int {
 // FNV-1a 低位的雪崩质量弱，而索引恰取低位掩码——实测不过 finalizer 时
 // 1% 目标误判的过滤器实测 6.6%，且出现被数千元素中十几个共同覆盖的
 // 热点位；过 finalizer 后实测 0.28%，接近理论值。
+//
+// 盐字节直接在 FNV-1a 的中间态上继续 mix（#385）：FNV-1a 是流式哈希，
+// Fnv1a64(b+salt) ≡ (Fnv1a64(b) ^ salt) × prime——此前为「拼盐」整段拷贝
+// 输入，Add/TestBytes 是逐查询热路径，每次分配 len(b)+1 的临时缓冲。
+// 等价改写后哈希值逐位不变、热路径零分配，且 h1/h2 共享一次遍历。
 func (f *Filter) hash(b []byte) (h1, h2 uint64) {
-	h1 = mix64(encoding.Fnv1a64(b))
-	// 拼盐走独立缓冲，避免 append 改写调用方切片的底层数组
-	buf := make([]byte, len(b)+1)
-	copy(buf, b)
-	buf[len(b)] = hashSalt
-	h2 = mix64(encoding.Fnv1a64(buf))
+	// FNV-1a 64 位参数（与 encoding.Fnv1a64 单点同值：offset basis 省略——
+	// 从 b 的完整一遍 FNV 得到的中间态出发，只补盐字节那一步）。
+	const fnvPrime = 1099511628211
+	h := encoding.Fnv1a64(b)
+	h1 = mix64(h)
+	h2 = mix64((h ^ uint64(hashSalt)) * fnvPrime)
 	h2 |= 1
 	return h1, h2
 }

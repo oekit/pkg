@@ -5,12 +5,30 @@ package jsonrepair
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+)
+
+// 终态错误哨兵（#384）：调用方此前只能对中文文案做前缀匹配分流——「空输入」
+// 是调用方自己的 bug（应 programmer error 上抛），「无法解析」是 LLM 输出质量
+// 问题（应回喂重试），两类语义完全不同。经 errors.Is 可编程区分，文案保持
+// 逐字兼容（哨兵文本即历史文案，包装只追加后缀）。
+var (
+	// ErrEmptyInput 输入为空串（剥围栏后无内容）——调用方侧的契约违反，
+	// 不是「解析失败」：空输入进修复链没有意义，直接上抛让调用方修自己的
+	// 取数/剥壳逻辑。
+	ErrEmptyInput = errors.New("jsonrepair: 空输入")
+
+	// ErrUnparseable 修复链全走完后仍无法得到合法 JSON——LLM 输出质量问题，
+	// 调用方按「可重试」分流（回喂上游重试/降级提示词），与 ErrEmptyInput
+	// 的 programmer-error 分流相对。宽松闭合失败（UnmarshalLenient）同归本
+	// 哨兵，文案带「宽松模式无法闭合出合法 JSON」后缀。
+	ErrUnparseable = errors.New("jsonrepair: 无法解析为 JSON")
 )
 
 // ExtractObject 提取文本中第一个平衡的 JSON 对象（字符串字面量感知；
@@ -436,7 +454,7 @@ func walkNormalize(m map[string]any, schema *Schema) {
 func ParseLenient(raw string, v any, schema *Schema) error {
 	candidate := stripCodeFence(raw)
 	if candidate == "" {
-		return fmt.Errorf("jsonrepair: 空输入")
+		return ErrEmptyInput
 	}
 	tryParse := func(c string) bool {
 		// 裸解析优先（#301）：合法输入零开销精确返回——Normalize 的
@@ -476,7 +494,7 @@ func ParseLenient(raw string, v any, schema *Schema) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("jsonrepair: 无法解析为 JSON")
+	return ErrUnparseable
 }
 
 // coerceString bool/数字 → 文本；字符串原样；其余（nil/对象/数组）不处理。

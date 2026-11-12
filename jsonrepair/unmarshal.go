@@ -100,7 +100,7 @@ func unmarshal(text string, v any, o unmarshalOpts) (bool, error) {
 			return true, nil
 		}
 	}
-	return false, fmt.Errorf("jsonrepair: 无法解析为 JSON（宽松模式无法闭合出合法 JSON）")
+	return false, fmt.Errorf("%w（宽松模式无法闭合出合法 JSON）", ErrUnparseable)
 }
 
 // closePartial 尽力闭合截断的 JSON 前缀。partial=true 表示原文在 EOF 处

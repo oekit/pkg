@@ -88,14 +88,18 @@ func StructToMap(v any) map[string]any {
 		}
 
 		key := field.Tag.Get("json")
-		// 剥离 tag 选项（如 omitempty/string），只取名字部分，
-		// 与 encoding/json 的键名语义一致
+		// 与 encoding/json 的键名语义一致（#391）：`json:"-"`（tag 整体恰为
+		// "-"，无逗号）显式排除——敏感字段防泄漏；而 `json:"-,"`（带逗号 =
+		// 显式空选项列表）在 encoding/json 里是**名为 "-" 的普通字段**，照常
+		// 序列化。此前先剥选项再判 "-"，两种形态都被排除 ⇒ 对带 json:"-,"
+		// 的字段 StructToMap 与 json.Marshal 悄悄分叉（敏感字段防泄漏场景下
+		// 少一个键且无信号）。判 "-" 必须在剥选项**之前**（同
+		// encoding/json typeFields：先整体比对 "-"，再 parseTag 拆名字）。
+		if key == "-" {
+			continue
+		}
 		if i := strings.Index(key, ","); i >= 0 {
 			key = key[:i]
-		}
-		if key == "-" {
-			// 与 encoding/json 一致：json:"-" 显式排除（敏感字段防泄漏）
-			continue
 		}
 		if key == "" {
 			key = field.Name

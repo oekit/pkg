@@ -40,6 +40,9 @@
 //   - panic 收编统一走 Recovered（见 panic.go）：error 身份、goroutine 栈、
 //     panic 值类型信息三样全保留，禁止 `fmt.Errorf("...: %v", recover())`。
 //
-// （原 Errorf 与 fmt.Errorf 同型且生产代码零引用，#378 收敛时删除——
-// 普通包装直接用 stdlib，本包只留 stdlib 没有的能力。）
+// （Errorf 的去留史：#378 以「零引用」为由删除，但该审计只扫了 org 内部
+// ——跨 org 消费方 go-git-platform 72 处 / go-gongfeng 4 处在 MVS 抬升后
+// 编译断裂，断裂沿依赖链中段组件传递（#401/#405 反证）。已按兼容层恢复
+// 为行为逐字一致的 Deprecated 函数并附迁移指引（见 Errorf）：新代码仍按
+// 上述仓规走 stdlib，跨 org 存量不强制迁移、编译与行为不变。）
 package errors

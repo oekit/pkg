@@ -91,7 +91,8 @@ func (sm *SafeMap[K, V]) Range(fn func(k K, v V) bool) {
 // 两个形态（有序 → []T，键值 → map[K]V）都有单调用原语；调用方不再手写
 // 「Range 构建副本」的样板循环——那段样板写错成边遍历边写活体会绕开容器
 // 纪律（Range 返回的是快照，正确但没有任何契约提示），Snapshot 把正确姿势
-// 收成编译期可调用的单点。
+// 收成编译期可调用的单点。sync.Map 背书的 [Map] 有同名原语（#393 对偶闭合：
+// 两个 Map 类型的内容出口形态一致）。
 //
 // 返回值永不为 nil（容器为空时返回空 map），可直接交给序列化/调试转储。
 func (sm *SafeMap[K, V]) Snapshot() map[K]V {

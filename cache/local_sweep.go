@@ -73,6 +73,10 @@ func (c *LocalCache[T]) cleanup() {
 //
 // StaleIfError 开启时，过期**真值**条目被跳过（保留给 stale 兜底）——
 // 见 retainForStale。
+//
+// 写锁阶段末尾附带 gens 墓碑压缩（#396）：高基数写失效场景下 Del 的墓碑
+// 集与历史 key 总量线性、此前仅 Clear 可回收——即使本轮没有过期条目也照常
+// 检查触发（write-invalidate 形态的 data 可能长期稳定，过期回收不走量）。
 func (c *LocalCache[T]) sweepExpired(now time.Time) int {
 	c.mu.RLock()
 	expired := make([]string, 0, 8)
@@ -85,10 +89,6 @@ func (c *LocalCache[T]) sweepExpired(now time.Time) int {
 		}
 	}
 	c.mu.RUnlock()
-
-	if len(expired) == 0 {
-		return 0
-	}
 
 	c.mu.Lock()
 	removed := 0
@@ -103,7 +103,44 @@ func (c *LocalCache[T]) sweepExpired(now time.Time) int {
 			removed++
 		}
 	}
+	c.compactGensLocked()
 	c.mu.Unlock()
 	c.expirations.Add(int64(removed))
 	return removed
+}
+
+// gensCompactMinSlack / gensCompactFactor 是墓碑压缩的触发判据：gens 超出
+// data 的因子倍数且绝对量超过滑差才做整表扫——正常形态 gens 与 data 同键
+// 空间，压缩不走；小缓存不因 3~5 个墓碑反复全表扫。滑差即压缩后的稳态
+// 墓碑上界：墓碑增长到 因子×data + 滑差 才触发，故界为 O(data) + 滑差
+// （#396 要的「有界」），而非此前的仅 Clear 可回收。
+const (
+	gensCompactMinSlack = 64
+	gensCompactFactor   = 2
+)
+
+// compactGensLocked 墓碑压缩（#396）：删除「不在 data 里的 gens 条目」。
+// 调用方需持写锁。
+//
+// 安全性：
+//   - 在途回源（loading > 0）整轮跳过——唯一危险形态「回源捕获 gen=0 →
+//     Del 造墓碑 → 压缩删墓碑 → 回填复查见 0 误判未失效」被闸死（回源在
+//     捕获世代前先登记在途，写锁内的读取 seq-cst 必能看见）；
+//   - 已捕获 gen>0 的回源若被删墓碑，复查只会按「世代已变」**保守放弃**
+//     回填（宁缺不错）——删除墓碑对正确性的影响是单向保守的；
+//   - 删除后该 key 的下次回源捕获 0 ⇒ 回填不受历史失效残留拖累——世代
+//     判据只为「Source 窗口内的写后失效」服务，窗口已过的墓碑无信息量；
+//   - 在 data 里的 key 的 gens 条目绝不删（活条目的世代是回填复查判据）。
+func (c *LocalCache[T]) compactGensLocked() {
+	if len(c.gens) <= len(c.data)*gensCompactFactor+gensCompactMinSlack {
+		return
+	}
+	if c.loading.Load() > 0 {
+		return // 有在途回源：本轮跳过（保守，下轮清扫再收）
+	}
+	for key := range c.gens {
+		if _, ok := c.data[key]; !ok {
+			delete(c.gens, key)
+		}
+	}
 }

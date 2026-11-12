@@ -428,7 +428,8 @@ func runAfterFlightReruns[T any](t *testing.T, f Flight[T]) {
 //
 // 契约套件里所有「等实现进入某个状态」的等待都必须有界：实现有缺陷时，
 // 正确表现是**干脆地失败**，而不是把 CI 挂到 go test 的 10 分钟超时。
-func waitFor(t *testing.T, msg string, cond func() bool) {
+// 参数放宽为 testing.TB（#394 元测试用假 TB 钉住超时路径的快速失败行为）。
+func waitFor(t testing.TB, msg string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for !cond() {

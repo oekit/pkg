@@ -48,6 +48,26 @@ func (m *Map[K, V]) Range(fn func(k K, v V) bool) {
 	})
 }
 
+// Snapshot 返回全部键值的整体拷贝（plain map，调用方持有独立副本，可安全
+// 修改/交给非并发安全代码）。副本与容器此后互不影响。
+//
+// 与 SafeMap.Snapshot 对偶（#393）：「容器内容出口」的键值形态有单调用
+// 原语，调用方不再手写「Range 构建副本」的样板循环——那段样板写错成边遍历
+// 边写活体会绕开容器纪律。两个类型的 godoc 互链，出口原语对偶闭合。
+//
+// sync.Map 的 Range 本身就是锁外遍历语义，收集不持有任何锁；遍历期间的
+// 并发写入可见性不保证（同 Range 的标准 sync.Map 语义）。
+//
+// 返回值永不为 nil（容器为空时返回空 map），可直接交给序列化/调试转储。
+func (m *Map[K, V]) Snapshot() map[K]V {
+	out := make(map[K]V)
+	m.m.Range(func(k, v any) bool {
+		out[k.(K)] = v.(V)
+		return true
+	})
+	return out
+}
+
 // Len 返回键值对数量（通过一次全量 Range 统计，O(n)；高频调用请自行缓存）。
 func (m *Map[K, V]) Len() int {
 	n := 0

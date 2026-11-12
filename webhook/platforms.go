@@ -114,7 +114,9 @@ func NewGitCodeSigner(secret []byte) *HMACSigner {
 // NewGiteeSigner Gitee 形态发出侧：X-Gitee-Timestamp（毫秒）+ X-Gitee-Token
 // （base64(HMAC-SHA256(key=secret, message=timestamp+"\n"+secret))）——与
 // NewGiteeValidator 的签名模式同款。opts 透传 SignerWithMessage /
-// SignerWithClock / SignerWithURLEncoded（须与收端同配）。
+// TimestampSignerWithClock / SignerWithURLEncoded（须与收端同配；#392：
+// 时钟选项实名是 TimestampSignerWithClock——SignerWithClock 是 HMACSigner
+// 家族的选项，传给本构造器类型错误，照旧文档写编译不过）。
 func NewGiteeSigner(secret []byte, opts ...TimestampSignerOption) *TimestampHMACSigner {
 	return NewTimestampHMACSigner(secret, crypto.SHA256,
 		headerGiteeTimestamp, headerGiteeSign, opts...)

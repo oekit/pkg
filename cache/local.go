@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/oekit/pkg/internal/logkv"
 )
 
 // cacheLogger 取当前默认 slog logger（带 component 标签）。
@@ -163,11 +165,22 @@ type LocalCache[T any] struct {
 	// 世代不与在途回源捕获过的旧值碰撞），gens 记录每个 key 的最新世代。
 	// 写路径推进、回源路径捕获/复查：Source 执行期间世代被推进 ⇒ 回填放弃。
 	//
-	// 内存口径：gens 与 data 同键空间；Del 不回收 gens 条目（墓碑语义——
-	// 首次加载期间被 Del 的 key 也需要可识别的世代推进），代价是被 Del 的
-	// key 各留一个 uint64。
+	// 内存口径：gens 与 data 同键空间；Del 不即时回收 gens 条目（墓碑语义
+	// ——首次加载期间被 Del 的 key 也需要可识别的世代推进）。高基数写失效
+	// 场景（write-invalidate 模式每次写先 Del）下墓碑集与历史 key 总量线性，
+	// 由清扫路径的墓碑压缩回收（compactGensLocked，#396）：无在途回源时把
+	// 不在 data 里的 gens 条目整批删除——在途回源已捕获的世代 > 0 时，删除
+	// 只会让复查按「世代已变」保守放弃回填（宁缺不错）；唯一危险形态是
+	// 「捕获 0 → Del 造墓碑 → 压缩删墓碑 → 复查见 0 误判未失效」，由 loading
+	// 在途计数闸住（捕获世代前登记，压缩在写锁内检查）。
 	genSeq atomic.Uint64
 	gens   map[string]uint64
+
+	// loading 是在途回源计数（#396 墓碑压缩的安全闸）：捕获世代前 Add(1)、
+	// 回填复查后 Add(-1)（load 的 defer 覆盖回源全程）。压缩在写锁内读它
+	// ——seq-cst 语义保证「捕获世代前必已在册」，压缩时 >0 即整轮跳过
+	// （保守：下轮清扫再收）。
+	loading atomic.Int64
 
 	// 观测计数（pkg#76）：读命中/读未命中、容量淘汰、TTL 过期回收。
 	// 原子计数——读路径无锁递增，不给热路径加锁竞争。
@@ -541,7 +554,7 @@ func (c *LocalCache[T]) Exists(ctx context.Context, key string) (bool, error) {
 // Refresh 刷新缓存（删除后重新从 Source 加载）。
 func (c *LocalCache[T]) Refresh(ctx context.Context, key string) (*T, error) {
 	if e := c.Del(ctx, key); e != nil {
-		cacheLogger().Warn("local cache refresh del failed", "key", key, "err", e)
+		cacheLogger().Warn("local cache refresh del failed", "key", key, logkv.ErrKey, e)
 	}
 	return c.GetOrLoad(ctx, key)
 }

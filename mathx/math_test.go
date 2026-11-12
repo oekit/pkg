@@ -3,6 +3,7 @@ package mathx
 import (
 	"math"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -298,5 +299,60 @@ func TestRoundFloorDivisionN_ProductOverflowGuard(t *testing.T) {
 				t.Errorf("%v = %v, want ~%v", c.name, c.got, c.exact)
 			}
 		})
+	}
+}
+
+// TestRandIntn_ConcurrentNoSharedLock 钉住 #386：迁移 math/rand/v2 后包级
+// 随机源不再有手搓 rngMu——并发调用 -race 下无数据竞争（v2 全局源每
+// goroutine 独立状态、无锁），同批调用的取值集合覆盖多个不同值（不是恒同
+// 一值的退化）。
+func TestRandIntn_ConcurrentNoSharedLock(t *testing.T) {
+	const workers, calls = 8, 500
+	var seen sync.Map
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for range calls {
+				v := RandIntn(1000)
+				seen.Store(v, true)
+			}
+		})
+	}
+	wg.Wait()
+	distinct := 0
+	seen.Range(func(_, _ any) bool {
+		distinct++
+		return true
+	})
+	if distinct < 100 {
+		t.Fatalf("并发 4000 次取值只出现 %d 个不同值——随机源疑似退化", distinct)
+	}
+}
+
+// TestRandSources_Unified 钉住 #386 的双轨制收敛：RangeRandFloat64 与
+// Unstable（此前 v1 全局源另一套）如今同源 rand/v2——两者输出都落在各自
+// 契约区间且分布非退化。
+func TestRandSources_Unified(t *testing.T) {
+	u := NewUnstable(0.5)
+	var sumF float64
+	distinctF, distinctA := map[float64]bool{}, map[int]bool{}
+	for range 200 {
+		f := RangeRandFloat64(10, 20)
+		if f < 10 || f >= 20 {
+			t.Fatalf("RangeRandFloat64 越界: %v", f)
+		}
+		a := u.Around(100)
+		if a < 50 || a > 150 {
+			t.Fatalf("Unstable.Around 越界: %v", a)
+		}
+		sumF += f
+		distinctF[f] = true
+		distinctA[a] = true
+	}
+	if sumF <= 10*200 {
+		t.Fatal("RangeRandFloat64 分布疑似退化（恒等于下界）")
+	}
+	if len(distinctF) < 50 || len(distinctA) < 50 {
+		t.Fatalf("分布疑似退化：distinct(F)=%d distinct(A)=%d", len(distinctF), len(distinctA))
 	}
 }

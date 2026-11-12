@@ -1,10 +1,13 @@
 package bloomx
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"sync"
 	"testing"
+
+	"github.com/oekit/pkg/encoding"
 )
 
 // TestNew_PinnedParams 钉住 m/k 公式：New(1024, 0.01) 按标准公式
@@ -176,4 +179,54 @@ func TestFilter_Concurrent(t *testing.T) {
 		bf.Reset()
 	})
 	wg.Wait()
+}
+
+// #385 回归：hash 热路径零分配 + 盐等价性。
+//
+// 等价口径：h2 = Fnv1a64(b+salt)——修后是「盐字节在 FNV 中间态上继续 mix」，
+// 修前是「整段拷贝拼盐再 FNV」，两者必须逐位一致（等价改写不是换算法，
+// 换了会改变全部已存位图）。
+func TestHash_SaltEquivalence(t *testing.T) {
+	// 逐步重算 Fnv1a64(b+salt)（对照实现：拷贝拼盐后走 encoding.Fnv1a64）。
+	salted := func(b []byte) uint64 {
+		buf := make([]byte, len(b)+1)
+		copy(buf, b)
+		buf[len(b)] = hashSalt
+		return encoding.Fnv1a64(buf)
+	}
+	f := New(1024, 0.01)
+	inputs := [][]byte{
+		[]byte(""), []byte("a"), []byte("hello"), bytes.Repeat([]byte("x"), 4096),
+		bytes.Repeat([]byte{0x00, 0xFF}, 1024),
+	}
+	for _, b := range inputs {
+		h1, h2 := f.hash(b)
+		if h1 == 0 || h2 == 0 {
+			t.Fatalf("hash(%q...) 出零哈希", b[:min(len(b), 8)])
+		}
+		if h2&1 != 1 {
+			t.Fatalf("h2 必须强制为奇数（Kirsch-Mitzenmacher 前提）")
+		}
+		// h2 = mix64(Fnv1a64(b+salt)) | 1；盐字节等价性：mix64 是纯函数，
+		// 比较 mix64(salted(b)) 与 h2 去掉 |1 位后的值。
+		want := mix64(salted(b)) | 1
+		if h2 != want {
+			t.Fatalf("盐等价性破坏: hash(%q...) h2=%d, want %d", b[:min(len(b), 8)], h2, want)
+		}
+		_ = h1
+	}
+}
+
+// TestTestBytes_HotPathZeroAllocs 钉住 #385 的目标：查询热路径（TestBytes）
+// 不再为拼盐分配临时缓冲。
+func TestTestBytes_HotPathZeroAllocs(t *testing.T) {
+	f := New(1024, 0.01)
+	f.AddBytes([]byte("warm"))
+	key := []byte("query-key-0001")
+	avg := testing.AllocsPerRun(200, func() {
+		f.TestBytes(key)
+	})
+	if avg != 0 {
+		t.Fatalf("TestBytes 热路径平均分配 %.2f 次/调用, want 0", avg)
+	}
 }

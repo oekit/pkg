@@ -108,3 +108,39 @@ func TestSentinels_ExemptionSuppressed(t *testing.T) {
 		t.Fatalf("allowDomains 下约定域应放行, got %v", err)
 	}
 }
+
+// TestSentinels_WriteFaceConfig 钉住 #390：写面（CheckURL/CheckHost/CheckIP
+// 层 1）剩余的三个可分流类别必须有哨兵——scheme 白名单（配置类）、非 ASCII
+// fail-closed（输入形态类）、精确白名单未命中（配置类）。调用方分流指标与
+// 告警面不再解析文案。
+func TestSentinels_WriteFaceConfig(t *testing.T) {
+	// scheme 白名单：配置类哨兵。
+	g := mustGuard(t)
+	if err := g.CheckURL("ftp://example.com/file"); !errors.Is(err, ErrSchemeNotAllowed) {
+		t.Fatalf("scheme 拒绝 err = %v, want ErrSchemeNotAllowed", err)
+	}
+	// 非 ASCII fail-closed：输入形态类哨兵。
+	if err := g.CheckURL("http://例え.jp/"); !errors.Is(err, ErrNonASCIIHost) {
+		t.Fatalf("非 ASCII 拒绝 err = %v, want ErrNonASCIIHost", err)
+	}
+	if err := g.CheckHost("例え.jp"); !errors.Is(err, ErrNonASCIIHost) {
+		t.Fatalf("CheckHost 非 ASCII err = %v, want ErrNonASCIIHost", err)
+	}
+	// 精确白名单未命中：配置类哨兵（命中面不出现）。
+	ge := mustGuard(t, WithExactHosts("api.example.com:8443"))
+	if err := ge.CheckURL("https://api.example.com:8443/hook"); err != nil {
+		t.Fatalf("白名单命中不应拒绝: %v", err)
+	}
+	if err := ge.CheckURL("https://other.example.com/hook"); !errors.Is(err, ErrNotInExactHosts) {
+		t.Fatalf("白名单未命中 err = %v, want ErrNotInExactHosts", err)
+	}
+	// 分流底线：配置类哨兵不得与防护拦截面互相命中。
+	for _, s := range []error{ErrBlockedRange, ErrBlockedDomain, ErrExoticLiteral} {
+		if err := g.CheckURL("ftp://example.com/file"); errors.Is(err, s) {
+			t.Fatalf("配置类拒绝不得命中防护哨兵 %v", s)
+		}
+	}
+	if err := g.CheckURL("http://例え.jp/"); errors.Is(err, ErrSchemeNotAllowed) || errors.Is(err, ErrNotInExactHosts) {
+		t.Fatal("非 ASCII 拒绝不得命中配置类哨兵")
+	}
+}
