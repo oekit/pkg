@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/oekit/pkg/internal/logkv"
 )
 
 // distlockLogger 取当前默认 slog logger（带 component 标签）。必须在调用
@@ -49,7 +51,7 @@ func WithLock(ctx context.Context, locker Locker, key string, ttl, timeout time.
 func ReleaseUncancelable(ctx context.Context, locker Locker, key, ownerID string) error {
 	err := locker.Unlock(context.WithoutCancel(ctx), key, ownerID)
 	if err != nil {
-		distlockLogger().Warn("distlock unlock failed", "key", key, "owner", ownerID, "err", err)
+		distlockLogger().Warn("distlock unlock failed", "key", key, "owner", ownerID, logkv.ErrKey, err)
 	}
 	return err
 }

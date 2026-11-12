@@ -2,7 +2,7 @@ package mathx
 
 import (
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"time"
 )
 

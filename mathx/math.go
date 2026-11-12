@@ -4,20 +4,15 @@ import (
 	"cmp"
 	"fmt"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"strconv"
-	"sync"
-	"time"
-)
-
-// rng 是包级随机数生成器，避免每次调用分配新实例。
-var (
-	rng   = rand.New(rand.NewSource(time.Now().UnixNano()))
-	rngMu sync.Mutex
 )
 
 // RandIntn 返回 [0, maxInt) 范围内的随机整数。
-// 并发安全，使用包级 rng 避免同纳秒碰撞。
+// 并发安全：math/rand/v2 的包级函数每 goroutine 持独立状态、无全局锁
+// （#386）——此前手搓包级 rng + rngMu，并发概率路由全部在同一把锁上排队；
+// 且 RangeRandFloat64 用的是另一套全局源，同包两套随机源行为不一致。
+// 统一收敛到 rand/v2 全局源后双轨制消除。
 //
 // maxInt <= 0 时 panic（带上下文的快速失败，#229）——不把 math/rand 的
 // 裸 panic（"invalid argument to Intn"）透传给调用方；与 ToFixed 对负
@@ -26,10 +21,7 @@ func RandIntn(maxInt int) int {
 	if maxInt <= 0 {
 		panic("mathx: RandIntn requires maxInt > 0, got " + fmt.Sprintf("%d", maxInt))
 	}
-	rngMu.Lock()
-	v := rng.Intn(maxInt)
-	rngMu.Unlock()
-	return v
+	return rand.IntN(maxInt)
 }
 
 // DivisionN 执行除法并保留 n 位小数（截断，非四舍五入）。
@@ -239,6 +231,8 @@ func toFixed(num float64, precise int) float64 {
 }
 
 // RangeRandFloat64 返回 [min, max) 范围内的随机浮点数。
+// 随机源与 RandIntn 同源（math/rand/v2 全局源，#386——此前是 v1 全局源的
+// 另一套，两族函数行为口径不一致）。
 func RangeRandFloat64(min, max float64) float64 {
 	if min > max {
 		min, max = max, min

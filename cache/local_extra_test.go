@@ -480,3 +480,120 @@ func TestLocalCache_SetNX_Concurrent(t *testing.T) {
 		t.Fatalf("并发同键 SetNX 应恰好一个成功，got %d", got)
 	}
 }
+
+// TestLocalCache_GensTombstoneCompaction 钉住 #396：高基数写失效场景下
+// Del 的 gens 墓碑不再无界——清扫路径在「gens 显著大于 data」时把不在
+// data 里的墓碑整批回收。此前墓碑集与历史 key 总量线性、仅 Clear 可回收。
+func TestLocalCache_GensTombstoneCompaction(t *testing.T) {
+	ctx := context.Background()
+	c := NewLocalCache(LocalConfig[string]{
+		TTL:               time.Minute, // 有 TTL ⇒ Sweep 有效
+		NoBackgroundSweep: true,        // 手动清扫，测试确定性
+		Source: func(context.Context, string) (*string, error) {
+			v := "v"
+			return &v, nil
+		},
+	})
+	defer c.Close(ctx)
+
+	// 写失效形态：每个 key 先 Set（bumpGen 写条目）再 Del（bumpGen 留墓碑）。
+	const highCardinality = 200
+	for i := range highCardinality {
+		key := fmt.Sprintf("k%d", i)
+		v := "x"
+		if err := c.Set(ctx, key, &v); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Del(ctx, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(c.gens); got != highCardinality {
+		t.Fatalf("Del 后墓碑数 = %d, want %d", got, highCardinality)
+	}
+
+	// 墓碑量远超判据（因子×0+滑差）⇒ Sweep 触发整批回收。
+	if n := c.Sweep(ctx); n != 0 {
+		t.Fatalf("无过期条目 Sweep = %d, want 0", n)
+	}
+	if got := len(c.gens); got != 0 {
+		t.Fatalf("压缩后墓碑数 = %d, want 0（#396：不再仅 Clear 可回收）", got)
+	}
+
+	// 压缩不伤活条目：活 key 的世代仍在、回填复查判据不受影响。
+	v := "live"
+	if err := c.Set(ctx, "live", &v); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if err := c.Del(ctx, "tomb1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.Sweep(ctx)
+	if _, ok := c.gens["live"]; !ok {
+		t.Fatal("活条目的世代条目被误删")
+	}
+	got, err := c.Get(ctx, "live")
+	if err != nil || got == nil || *got != "live" {
+		t.Fatalf("压缩后活条目读取 = (%v, %v)", got, err)
+	}
+}
+
+// TestLocalCache_CompactionSkipsWhileLoading 钉住压缩的安全闸：有在途回源
+// 时压缩整轮跳过——否则存在「捕获 0 → Del 造墓碑 → 压缩删墓碑 → 复查见 0
+// 误判未失效」窗口，写后失效会被在途回源用旧值击穿。
+func TestLocalCache_CompactionSkipsWhileLoading(t *testing.T) {
+	ctx := context.Background()
+	sourceEntered := make(chan struct{})
+	releaseSource := make(chan struct{})
+	c := NewLocalCache(LocalConfig[string]{
+		TTL:               time.Minute,
+		NoBackgroundSweep: true,
+		Source: func(context.Context, string) (*string, error) {
+			close(sourceEntered)
+			<-releaseSource
+			v := "stale-value"
+			return &v, nil
+		},
+	})
+	defer c.Close(ctx)
+
+	// 造一堆墓碑越过触发判据（test-only 直接 Del，不经 Set）。
+	for i := range 100 {
+		if err := c.Del(ctx, fmt.Sprintf("t%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 在途回源：GetOrLoad 卡在 Source 里（已捕获世代=0）。
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = c.GetOrLoad(ctx, "contested")
+	}()
+	<-sourceEntered
+
+	// Source 执行期间 Del 同一 key：世代推进，墓碑落成——正是危险形态。
+	if err := c.Del(ctx, "contested"); err != nil {
+		t.Fatal(err)
+	}
+	// 有在途回源 ⇒ 压缩必须跳过（墓碑保留）。
+	c.Sweep(ctx)
+	if got := len(c.gens); got < 100 {
+		t.Fatalf("在途回源期间墓碑被压缩（%d < 100）——安全闸失效", got)
+	}
+
+	// 放行回源：Del 已推进世代 ⇒ 复查不等 ⇒ 回填放弃（写后失效语义保持）。
+	close(releaseSource)
+	<-done
+	if _, ok := c.data["contested"]; ok {
+		t.Fatal("写后失效的回源把旧值灌回了缓存（世代复查被绕过）")
+	}
+
+	// 回源结束后再 Sweep：墓碑被压缩。
+	c.Sweep(ctx)
+	if got := len(c.gens); got > gensCompactFactor*len(c.data)+gensCompactMinSlack {
+		t.Fatalf("回源结束后墓碑未压缩: gens=%d data=%d", got, len(c.data))
+	}
+}

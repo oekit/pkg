@@ -93,12 +93,15 @@ type KVCarrier interface {
 // Kv 返回最外层 Wrap 附带的上下文 kv 对（#292）：无 kv 或 err 不携带 kv
 // （非本仓 Wrap 构造、已到链底）返回 nil。
 //
-// 要**全量**收集多层 Wrap 的上下文用 KvFromChain。logx 侧消费形态：
+// 要**全量**收集多层 Wrap 的上下文用 KvFromChain。logx 侧消费形态（#412：
+// 错误字段名示范用 logx.ErrKey 常量——消费方业务仓有 logx 依赖，禁止手写
+// "err" 字面量；pkg 自身零依赖底座引不了 logx，内部以 internal/logkv.ErrKey
+// 作上游镜像，值与 logx.ErrKey 逐字一致）：
 //
 //	err := errors.Wrap(err, "query user", "user_id", uid)
-//	logger.Error(ctx, "query failed", "err", err)   // err 字段保持文本
+//	logger.Error(ctx, "query failed", logx.ErrKey, err)   // err 字段保持文本
 //	// kv 升格为独立字段（检索/聚合/按 user_id 过滤全通）：
-//	logger.Error(ctx, append([]any{"err", err}, errors.Kv(err)...)...)
+//	logger.Error(ctx, append([]any{logx.ErrKey, err}, errors.Kv(err)...)...)
 func Kv(err error) []any {
 	if c, ok := err.(KVCarrier); ok {
 		return c.Kv()

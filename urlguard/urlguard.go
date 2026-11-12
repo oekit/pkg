@@ -58,6 +58,24 @@
 // 的策略闭合，不必在 urlguard 之外再叠一层自有端点判定。判定顺序：内置在前、
 // 自定义在后；构造态豁免只豁免内置判定，不再跳过自定义判定。
 //
+// # 错误分类表（#390；nil 返回 = 放行；哨兵全部 errors.Is 可判，链全程 %w 透传）
+//
+//   - ErrBlockedRange——地址命中缺省阻断网段（私网/loopback/链路本地/保留段）：
+//     防护拦截面；
+//   - ErrBlockedDomain——host 命中阻断域名后缀（localhost/.internal/.local 族）：
+//     防护拦截面；
+//   - ErrExoticLiteral——exotic IPv4 字面量形态（宽松解析器会当地址）：防护拦截
+//     面，无条件执行不受构造态豁免影响（pkg#236）；
+//   - ErrSchemeNotAllowed——scheme 不在白名单：配置类（出站配置写错），与防护
+//     拦截分流到不同告警/指标面；
+//   - ErrNotInExactHosts——未命中 WithExactHosts 精确白名单：配置类（清单维护
+//     遗漏/环境差异）；
+//   - ErrNonASCIIHost——非 ASCII host 无法确定性折叠（pkg#266 fail-closed）：
+//     输入形态类，调用方先自行做 IDNA（punycode）转换再传入。
+//
+// DialFunc 的拒绝以 "urlguard: dial ... blocked: <哨兵>" 包装透出，哨兵经
+// errors.Is 照旧可判。
+//
 // Guard 在 New 之后只读，可并发共享。仅依赖标准库（pkg 零第三方依赖红线）。
 //
 // # 已知边界
@@ -481,7 +499,8 @@ func (g *Guard) checkHostLiteral(host string) error {
 	}
 	folded, ok := foldHostForGuard(host)
 	if !ok {
-		return fmt.Errorf("urlguard: host %q contains non-ASCII characters that cannot be deterministically folded (IDN/全角形式 fail-closed)", host)
+		// 哨兵（#390）：输入形态类，调用方应先做 IDNA 转换再传入。
+		return fmt.Errorf("%w: host %q", ErrNonASCIIHost, host)
 	}
 	// 折叠产物再剥尾点（#413）：全角尾分隔符（。．｡ → .）的折叠发生在
 	// canonicalHost 的剥点**之后**——`127.0.0.1。` 归一后是 `127.0.0.1.`，
@@ -694,7 +713,8 @@ func (g *Guard) CheckURL(raw string) error {
 	}
 	scheme := strings.ToLower(u.Scheme)
 	if _, ok := g.schemes[scheme]; !ok {
-		return fmt.Errorf("urlguard: scheme %q not allowed", scheme)
+		// 哨兵（#390）：配置类拒绝，与 SSRF 尝试（ErrBlockedRange 等）分流。
+		return fmt.Errorf("%w: %q", ErrSchemeNotAllowed, scheme)
 	}
 	host := u.Hostname() // 去端口；IPv6 字面量为去括号形式
 	if g.exactEnabled {
@@ -948,7 +968,8 @@ func (g *Guard) checkExact(host, port string) error {
 		return fmt.Errorf("urlguard: %w", err)
 	}
 	if _, ok := g.exactHosts[exactHost{host: canon, port: p}]; !ok {
-		return fmt.Errorf("urlguard: host %q is not in the exact host allowlist", authorityString(canon, p))
+		// 哨兵（#390）：白名单未命中是配置类拒绝。
+		return fmt.Errorf("%w: %s", ErrNotInExactHosts, authorityString(canon, p))
 	}
 	return nil
 }

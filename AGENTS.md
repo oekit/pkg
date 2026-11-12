@@ -4,7 +4,7 @@
 > 当前版本：`v0.46.0` · module：`github.com/oekit/pkg` · org：[oekit = Open Easy Kit](https://oekit.github.io)
 
 ## 本仓包含
-`bloomx/`、`bufiox/`、`cache/`、`cache/cachetest/`、`cli/`、`container/`、`contextx/`、`convert/`、`ctxscope/`、`encoding/`、`enumx/`、`errors/`、`httpjson/`、`internal/singleflight/`、`jsonrepair/`、`mathx/`、`pack/`、`pagination/`、`pathx/`、`ptrx/`、`procx/`、`resumable/`、`singleflighttest/`、`slicex/`、`secretx/`、`stringx/`、`strmap/`、`tarx/`、`timex/`、`urlguard/`、`webhook/`、`timex/cron/`
+`bloomx/`、`bufiox/`、`cache/`、`cache/cachetest/`、`cli/`、`container/`、`contextx/`、`convert/`、`ctxscope/`、`encoding/`、`enumx/`、`errors/`、`httpjson/`、`internal/logkv/`、`internal/singleflight/`、`jsonrepair/`、`mathx/`、`pack/`、`pagination/`、`pathx/`、`ptrx/`、`procx/`、`resumable/`、`singleflighttest/`、`slicex/`、`secretx/`、`stringx/`、`strmap/`、`tarx/`、`timex/`、`urlguard/`、`webhook/`、`timex/cron/`
 
 ## 硬规则速览（全矩阵适用）
 

@@ -134,6 +134,14 @@ func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], 
 	// 2. 回源前捕获 key 世代（#200）：Source 执行期间该 key 被 Del / 覆盖
 	//    写入（写后失效）时世代推进，回填阶段据此放弃——在途回源不能把
 	//    失效前的旧值重新灌回缓存。
+	//
+	//    先登记在途（#396 墓碑压缩的安全闸）：gens 压缩只在「无在途回源」
+	//    时执行，捕获世代前必须已在册——否则存在「捕获 0 → Del 造墓碑 →
+	//    压缩删墓碑 → 复查见 0 误判未失效」的窗口。defer 保证覆盖回源全程
+	//    （含错误/stale 分支——那些分支不复查世代，更长的在途窗口只会让
+	//    压缩多等一轮，方向保守）。
+	c.loading.Add(1)
+	defer c.loading.Add(-1)
 	gen := c.generation(key)
 
 	// 回源（按调用注入优先于构造期；SourceWithTTL 优先于 Source）

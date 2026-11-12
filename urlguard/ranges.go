@@ -8,11 +8,11 @@ import (
 	"strings"
 )
 
-// 内置拒绝类别的哨兵（#380）：SSRF 防护原语的调用方需要用 errors.Is 区分
-// 「防护拦截」与网络故障——429/500 分流、告警路由都依赖这个判定。此前
-// 内置拒绝全是匿名错误，调用方只能解析文案。三类哨兵覆盖内置判定的三个
-// 拒绝面；经 CheckURL / CheckHost / CheckIP / DialFunc 冒出的错误链全部
-// 可判定（拨号面的包装错误同样 %w 透传，链不断）。
+// 内置拒绝类别的哨兵（#380 拨号面 / #390 写面）：SSRF 防护原语的调用方需要
+// 用 errors.Is 区分「防护拦截」与网络故障——429/500 分流、指标与告警路由都
+// 依赖这个判定。此前内置拒绝全是匿名错误，调用方只能解析文案。六类哨兵覆盖
+// 写面（CheckURL/CheckHost/CheckIP）与拨号面（DialFunc）的全部内置拒绝类别；
+// 错误链全程 %w 透传，链不断、errors.Is 跨包装可判。分类总表见包文档。
 var (
 	// ErrBlockedRange 目标地址落在缺省阻断网段（私网/loopback/链路本地/
 	// 保留段等，清单见 BlockedCIDRSpecs）。构造态豁免（WithAllowPrivate /
@@ -25,8 +25,25 @@ var (
 
 	// ErrExoticLiteral 目标 host 是「宽松解析器会当 IPv4 地址、net.ParseIP
 	// 不认」的 exotic 字面量形态（0x7f000001 / 0177.0.0.1 / 127.1 /
-	// 2130706433 等）。本闸门无条件执行，不随构造态豁免放开（pkg#236）。
+	// 2130706433 等，含含空段的 fail-closed 形态）。本闸门无条件执行，
+	// 不随构造态豁免放开（pkg#236）。
 	ErrExoticLiteral = errors.New("urlguard: exotic IPv4 literal")
+
+	// ErrSchemeNotAllowed 目标 URL 的 scheme 不在白名单（缺省 http/https，
+	// 可用 WithAllowedSchemes 调整）——「配置配错」类：消费方的出站配置
+	// 误写了 ftp:// 之类，与 SSRF 尝试（ErrBlockedRange 等）分流到不同
+	// 告警面（#390）。
+	ErrSchemeNotAllowed = errors.New("urlguard: scheme not allowed")
+
+	// ErrNonASCIIHost 目标 host 含无法确定性折叠的非 ASCII 码点（IDN/圈号
+	// 等，pkg#266 的 fail-closed 口径）——调用方应先自行做 IDNA（punycode）
+	// 转换再传入；这是输入形态问题，不是 SSRF 尝试（#390）。
+	ErrNonASCIIHost = errors.New("urlguard: host contains non-ASCII characters that cannot be deterministically folded (IDN/全角形式 fail-closed)")
+
+	// ErrNotInExactHosts 目标 authority 未命中 WithExactHosts 精确白名单
+	// ——「配置配错」类（白名单清单维护遗漏/环境差异），与防护拦截分流
+	// （#390）。
+	ErrNotInExactHosts = errors.New("urlguard: authority is not in the exact host allowlist")
 )
 
 // blockedCIDRSpecs 是缺省阻断网段的**字符串清单形态**——IANA 特殊用途地址
