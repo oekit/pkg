@@ -38,6 +38,14 @@ func WithLock(ctx context.Context, locker Locker, key string, ttl, timeout time.
 	return fn()
 }
 
+// releaseTimeout 是释放动作的缺省上界（#428）：etcdx v0.2.12 原实现是
+// WithTimeout(Background, 3s) 的独立短超时，v0.3.0 迁到本单源时裸
+// WithoutCancel 把上界一并剥了——Unlock 挂起（etcd 半开连接/慢盘）时调用方
+// goroutine 永久阻塞，且消费方（etcdx locker）先停安全网再 Unlock，挂起期
+// 没有任何兜底在管锁。恢复 3s 短超时兜底；超时错误走既有「释放失败只记
+// 日志、租约/TTL 到期兜底」路径。包内 var 而非 const：测试注入更短上界用。
+var releaseTimeout = 3 * time.Second
+
 // ReleaseUncancelable 用与 caller ctx 取消状态解耦的 context 释放锁并记录
 // 失败（WithLock 与后端包自组 WithLock 共用的释放纪律单源）。
 //
@@ -46,10 +54,17 @@ func WithLock(ctx context.Context, locker Locker, key string, ttl, timeout time.
 // 永不执行——锁变孤儿，其他实例阻塞到 TTL 过期。ctx 的取值（鉴权等）原样
 // 保留，只剥离取消信号（context.WithoutCancel，Go 1.21+）。
 //
+// ⚠️ 上界与不可取消不互斥（#428）：WithoutCancel 只剥取消信号，**deadline
+// 一并剥掉了**——裸 WithoutCancel 的 Unlock 永不超时。本函数在其上叠
+// WithTimeout(releaseTimeout) 补回释放动作的硬上界；超时返回可
+// errors.Is(err, context.DeadlineExceeded) 判定的错误。
+//
 // 释放失败记 Warn（component=distlock）并返回错误；调用方（WithLock）只记
 // 日志不覆盖 fn 结果，需要区分处理的场景可直接消费返回值。
 func ReleaseUncancelable(ctx context.Context, locker Locker, key, ownerID string) error {
-	err := locker.Unlock(context.WithoutCancel(ctx), key, ownerID)
+	uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer cancel()
+	err := locker.Unlock(uctx, key, ownerID)
 	if err != nil {
 		distlockLogger().Warn("distlock unlock failed", "key", key, "owner", ownerID, logkv.ErrKey, err)
 	}

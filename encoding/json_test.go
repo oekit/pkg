@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestMarshal(t *testing.T) {
@@ -342,5 +343,30 @@ func TestUnmarshalFromReader_SuccessDoesNotBufferWholeInput(t *testing.T) {
 	if limit := uint64(5 * pad); delta > limit {
 		t.Errorf("TotalAlloc delta = %.2f MiB, want <= %.2f MiB（成功路径不得把整份输入再攒一遍）",
 			float64(delta)/(1<<20), float64(limit)/(1<<20))
+	}
+}
+
+// TestFormatError_RuneSafeTruncation 钉住 #419：错误摘录截断必须在 rune
+// 边界回退——字节下标直切会把多字节字符腰斩，错误文案含非法 UTF-8（进
+// 日志/告警平台是乱码，按 rune 计数的采集器二次报错或丢行）。同仓 httpjson
+// 的错误摘录已立 rune 安全纪律，encoding 的摘录点同口径。
+func TestFormatError_RuneSafeTruncation(t *testing.T) {
+	// 中文 3 字节/字符：256 字节预算必然落在多字节字符中间。
+	long := `{"字段": "` + strings.Repeat("中文测试值", 60) + `", "尾": 坏}`
+	err := Unmarshal([]byte(long), &map[string]any{})
+	if err == nil {
+		t.Fatal("畸形中文报文应解析失败")
+	}
+	msg := err.Error()
+	if !utf8.ValidString(msg) {
+		t.Fatalf("错误文案含非法 UTF-8（截断腰斩多字节字符）: %q", msg[len(msg)-40:])
+	}
+	if !strings.Contains(msg, "...(truncated)") {
+		t.Fatalf("超长输入应带截断标记: %q", msg)
+	}
+	// 短输入不截断、无标记（既有行为保持）。
+	err2 := Unmarshal([]byte(`{"a": 1,}`), &map[string]any{})
+	if err2 == nil || strings.Contains(err2.Error(), "...(truncated)") {
+		t.Fatalf("短输入不应带截断标记: %v", err2)
 	}
 }

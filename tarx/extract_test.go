@@ -154,3 +154,107 @@ func strings_repeat(n int) string {
 	}
 	return string(b)
 }
+
+// ---- #417 回归：目标目录**既有** symlink 的写穿防线 ----
+//
+// 此前防线只拒归档**内**的链接条目（TypeSymlink 跳过）；root 里被其它路径
+// 种进来的预置 symlink（覆盖式升级/共享工作区最常见形态）让 OpenFile/
+// MkdirAll 沿链接解析，归档内容写到 root 之外而 Stats 报「全成功」。
+
+func TestExtract_RejectsPreExistingSymlinkFile(t *testing.T) {
+	base := t.TempDir()
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(outside, "victim.txt")
+	if err := os.WriteFile(victim, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "root")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 预置文件 symlink：root/link.txt → outside/victim.txt。
+	if err := os.Symlink(victim, filepath.Join(root, "link.txt")); err != nil {
+		t.Skip("环境不支持 symlink：", err)
+	}
+
+	buf := buildTar(t, []tarSpec{{name: "link.txt", typeflag: tar.TypeReg, body: "pwned-by-tarx"}})
+	st, err := Extract(bytes.NewReader(buf), root)
+	if err != nil {
+		t.Fatalf("Extract = %v", err)
+	}
+	if st.Skipped != 1 {
+		t.Fatalf("预置 symlink 目标应被拒收, Skipped=%d stats=%+v", st.Skipped, st)
+	}
+	if !containsSkipped(st, "link.txt") {
+		t.Fatalf("拒收条目应点名 link.txt, skippedNames=%v", st.SkippedNames)
+	}
+	got, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "original" {
+		t.Fatalf("root 之外的受害者文件被写穿: %q", got)
+	}
+}
+
+func TestExtract_RejectsPreExistingSymlinkDir(t *testing.T) {
+	base := t.TempDir()
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(outside, "passwd")
+	if err := os.WriteFile(victim, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "root")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 预置目录 symlink：root/conf → outside。
+	if err := os.Symlink(outside, filepath.Join(root, "conf")); err != nil {
+		t.Skip("环境不支持 symlink：", err)
+	}
+
+	buf := buildTar(t, []tarSpec{{name: "conf/passwd", typeflag: tar.TypeReg, body: "pwned-by-tarx"}})
+	st, err := Extract(bytes.NewReader(buf), root)
+	if err != nil {
+		t.Fatalf("Extract = %v", err)
+	}
+	if st.Skipped != 1 || st.Dirs != 0 || st.Files != 0 {
+		t.Fatalf("预置目录 symlink 之下的条目应被拒收, stats=%+v", st)
+	}
+	got, err := os.ReadFile(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "original" {
+		t.Fatalf("root 之外的受害者文件被写穿: %q", got)
+	}
+}
+
+func TestExtract_SystemLevelSymlinkAncestorsAllowed(t *testing.T) {
+	// root 自身经由系统级 symlink（macOS /tmp→/private/tmp）落在 root 之外
+	// 是合法部署形态：链检查只看 root 之下的段，不得误杀正常解包。
+	buf := buildTar(t, []tarSpec{{name: "ok.txt", typeflag: tar.TypeReg, body: "payload"}})
+	root := filepath.Join(t.TempDir(), "root") // TempDir 路径本身多经 symlink
+	st, err := Extract(bytes.NewReader(buf), root)
+	if err != nil {
+		t.Fatalf("Extract = %v", err)
+	}
+	if st.Files != 1 || st.Skipped != 0 {
+		t.Fatalf("正常解包不得被链检查误杀, stats=%+v", st)
+	}
+}
+
+func containsSkipped(st Stats, name string) bool {
+	for _, n := range st.SkippedNames {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}

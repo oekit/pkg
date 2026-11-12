@@ -23,10 +23,21 @@ import (
 //   - "node_modules/**" → 匹配 node_modules 下所有层级的文件
 //   - "test/*.txt"    → 匹配 test 目录下的 .txt 文件
 //
+// ⚠️ /** 的两条边界语义（#424，此前零声明——审计/跳过清单按直觉配置会漏面）：
+//
+//   - **裸父不匹配**："/api/**" 不匹配 "/api" 自身（前缀分支要求路径以
+//     "/api/" 起头）。要连根一起入面，显式并列两条：{"/api", "/api/**"}；
+//   - **`**` 仅在模式尾部位是 globstar**：中段 "/api/**/detail" 不是
+//     「跨任意层级」——`*` 不跨 `/`，中段 `**` 退化为两个单段 `*`，只匹配
+//     "/api/x/detail" 这类恰好两段的名字。跨层级子树只有后缀位 "/**" 一种
+//     写法；"**" 单独成段放在中间不会被识别为目录前缀分支。
+//
 // 用法:
 //
 //	pathx.MatchesPath([]string{"vendor/**", "*.test"}, "vendor/foo/bar.go") // true
 //	pathx.MatchesPath([]string{"*.go"}, "main.go")                          // true
+//	pathx.MatchesPath([]string{"/api/**"}, "/api")                          // false（裸父不匹配）
+//	pathx.MatchesPath([]string{"/api/**/detail"}, "/api/x/y/detail")        // false（中段非 globstar）
 func MatchesPath(patterns []string, path string) bool {
 	path = filepath.ToSlash(strings.TrimSpace(path))
 	if path == "" {

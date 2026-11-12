@@ -1,9 +1,11 @@
 package errors
 
 import (
+	stderrors "errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // #292：Wrap 的 kv 此前只有 Error() 文本一个出口——交给 slog/logx 时整串
@@ -89,5 +91,84 @@ func TestKVCarrier_AsTarget(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "user_id=42") {
 		t.Fatalf("Error() 文本出口保持不变, got %q", err.Error())
+	}
+}
+
+// ---- #420 回归：链遍历的成环防护与多分支 Cause ----
+
+// cycErr 单分支自指/互指环（A 包 B、B 包 A）。
+type cycErr struct {
+	next error
+	msg  string
+}
+
+func (e *cycErr) Error() string { return e.msg }
+func (e *cycErr) Unwrap() error { return e.next }
+
+// multiCycErr 多分支互指环（Unwrap() []error 分支指回祖先）。
+type multiCycErr struct {
+	subs []error
+	msg  string
+}
+
+func (e *multiCycErr) Error() string   { return e.msg }
+func (e *multiCycErr) Unwrap() []error { return e.subs }
+
+func TestKvFromChain_CycleTerminates(t *testing.T) {
+	// 单分支环：A → B → A。修复前 walk 的 for e != nil 永久自旋。
+	a := &cycErr{msg: "A"}
+	b := &cycErr{next: a, msg: "B"}
+	a.next = b
+
+	done := make(chan []any, 1)
+	go func() {
+		done <- KvFromChain(Wrap(a, "outer", "k", "v"))
+	}()
+	select {
+	case kv := <-done:
+		if len(kv) != 2 || kv[0] != "k" {
+			t.Fatalf("环链 kv 收集 = %v, want [k v]", kv)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("KvFromChain 成环自旋（深度上限失效）")
+	}
+
+	// 多分支互指环：修复前无限递归 stack overflow（fatal，进程崩——这里
+	// 只要函数能返回就证明防护成立）。
+	ma := &multiCycErr{msg: "MA"}
+	mb := &multiCycErr{subs: []error{ma, Wrap(a, "branch", "bk", "bv")}, msg: "MB"}
+	ma.subs = []error{mb}
+	done2 := make(chan []any, 1)
+	go func() {
+		done2 <- KvFromChain(ma)
+	}()
+	select {
+	case <-done2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("KvFromChain 多分支成环无限递归")
+	}
+}
+
+func TestCause_CycleTerminatesAndFollowsMultiBranch(t *testing.T) {
+	// 单分支环：修复前后都有上限（#298），基线保持。
+	a := &cycErr{msg: "A"}
+	b := &cycErr{next: a, msg: "B"}
+	a.next = b
+	if got := Cause(Wrap(b, "outer")); got == nil {
+		t.Fatal("成环链 Cause 必须返回（不得自旋）")
+	}
+
+	// 多分支链：Cause 此前只走单分支，到 Unwrap() []error 节点就停——
+	// 取不到多分支链的底层 cause。修后取首分支下钻。
+	leaf := stderrors.New("leaf-cause")
+	m := &multiCycErr{subs: []error{leaf, stderrors.New("second")}, msg: "multi"}
+	if got := Cause(Wrap(m, "outer")); !Is(got, leaf) {
+		t.Fatalf("Cause 多分支链应下钻到首分支底层, got %v", got)
+	}
+
+	// 空多分支链：原样返回。
+	empty := &multiCycErr{msg: "empty"}
+	if got := Cause(empty); got != error(empty) {
+		t.Fatalf("空多分支链 Cause = %v, want 原样返回", got)
 	}
 }

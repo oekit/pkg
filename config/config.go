@@ -161,13 +161,55 @@ func resolvePaths(t reflect.Type, paths []string) (map[string]bool, []error) {
 			set[p] = true
 			continue
 		}
+		// #416：内嵌层名拼进路径（如 "Base.Token"）的声明此前被双口径放行
+		// ——校验过检、walk/redactWalk 产出却恒带层名 ⇒ 集合键与产出路径
+		// 永不相交 ⇒ WithRequired 静默失效（服务带缺配置启动）、WithSensitive
+		// 明文泄密（拼对也漏，比拼错更糟）。路径产出侧已收口为「内嵌透明
+		// 短路径」，声明侧同口径 fail-fast 并给修正指引。
+		if embeddedLayerInPath(t, strings.Split(p, ".")) {
+			errs = append(errs, fmt.Errorf(
+				"config: 声明的字段路径不存在: %s（内嵌结构体的层名不进字段路径——路径对内嵌层透明，请写短路径 %q）",
+				p, lastPart(p)))
+			continue
+		}
 		errs = append(errs, fmt.Errorf("config: 声明的字段路径不存在: %s", p))
 	}
 	return set, errs
 }
 
+// embeddedLayerInPath 报告失败路径的某一段是否撞在**内嵌结构体**的层名上
+// （#416 的典型拼错形态 "Base.Token"——Base 是内嵌层）。
+func embeddedLayerInPath(t reflect.Type, parts []string) bool {
+	for i := range t.NumField() {
+		f := t.Field(i)
+		if !f.Anonymous || f.Type.Kind() != reflect.Struct {
+			continue
+		}
+		for _, part := range parts {
+			if part == f.Name {
+				return true
+			}
+		}
+		// 递归查内嵌套内嵌。
+		if embeddedLayerInPath(f.Type, parts) {
+			return true
+		}
+	}
+	return false
+}
+
+// lastPart 取点号路径的最后一段（错误提示里的短路径建议）。
+func lastPart(p string) string {
+	if i := strings.LastIndex(p, "."); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
 // pathExists 按点号路径在结构体类型上找字段；内嵌结构体透明（路径可穿过
-// 内嵌层，与 walk 的路径口径一致）。
+// 内嵌层，与 walk/redactWalk 的产出口径一致——#416：此前这里**同时**接受
+// "Token" 与 "Base.Token" 两种形态，而产出侧只产 "Base.Token"，
+// WithSensitive("Token") 过检但永不生效）。
 func pathExists(t reflect.Type, parts []string) bool {
 	if len(parts) == 0 {
 		return true
@@ -182,9 +224,7 @@ func pathExists(t reflect.Type, parts []string) bool {
 			continue
 		}
 		if f.Anonymous && f.Type.Kind() == reflect.Struct {
-			if f.Name == part && pathExists(f.Type, parts[1:]) {
-				return true
-			}
+			// 内嵌层名不进字段路径（#416）：只接受透明形态。
 			if pathExists(f.Type, parts) {
 				return true
 			}
@@ -219,9 +259,11 @@ func (s *loadState) walk(node reflect.Value, tree any, path string, errs *[]erro
 			fpath = path + "." + f.Name
 		}
 		if f.Anonymous && fv.Kind() == reflect.Struct {
-			// 内嵌结构体透明展开：路径不加层，同一棵 yaml 子树继续找。
+			// 内嵌结构体透明展开：字段路径**不加层**（#416——此前 fpath 恒带
+			// 层名，与 resolvePaths 校验过的短路径声明永不相交）；同一棵
+			// yaml 子树继续找。
 			if f.Tag.Get("env") != "-" && yamlKey(f) != "-" {
-				s.walk(fv, tree, fpath, errs)
+				s.walk(fv, tree, path, errs)
 			}
 			continue
 		}
@@ -584,7 +626,8 @@ func typeMismatch(fv reflect.Value, v any, hint string) error {
 }
 
 // redactWalk 渲染脱敏 dump：每行「路径=值」；敏感路径（含整棵命名子树）
-// 一个占位了结，不下钻。内嵌结构体透明展开，与 Load 的路径口径一致。
+// 一个占位了结，不下钻。内嵌结构体透明展开，与 Load 的路径口径一致
+// （#416：内嵌层不进字段路径，与声明校验同口径）。
 func redactWalk(node reflect.Value, path string, senSet map[string]bool, lines *[]string) {
 	t := node.Type()
 	for i := range t.NumField() {
@@ -598,7 +641,8 @@ func redactWalk(node reflect.Value, path string, senSet map[string]bool, lines *
 			fpath = path + "." + f.Name
 		}
 		if f.Anonymous && fv.Kind() == reflect.Struct {
-			redactWalk(fv, fpath, senSet, lines)
+			// 内嵌层名不进路径（#416）：子字段路径透明穿过内嵌层。
+			redactWalk(fv, path, senSet, lines)
 			continue
 		}
 		if pathSensitive(senSet, fpath) {

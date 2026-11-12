@@ -10,11 +10,14 @@ import (
 // fakeLocker 是行为可编程的内存 Locker：只用于验证契约层（WithLock 的
 // 获取/释放路径、ctx 取消场景、哨兵判定），不引任何真后端。
 type fakeLocker struct {
-	lockErr   error           // Lock 的返回错误
-	unlockErr error           // Unlock 的返回错误
-	unlockKey string          // Unlock 收到的 key
-	unlockOwn string          // Unlock 收到的 ownerID
-	unlockCtx context.Context // Unlock 收到的 ctx（验证 WithoutCancel 纪律）
+	lockErr            error           // Lock 的返回错误
+	unlockErr          error           // Unlock 的返回错误
+	unlockKey          string          // Unlock 收到的 key
+	unlockOwn          string          // Unlock 收到的 ownerID
+	unlockCtx          context.Context // Unlock 收到的 ctx（验证 WithoutCancel 纪律）
+	unlockCtxErrAtCall error           // Unlock **调用时**的 ctx 状态（#428：ReleaseUncancelable
+	// defer cancel 会取消 timeout ctx，事后查 Err() 恒为 Canceled——解耦纪律
+	// 的真值只在调用点成立，fake 在调用点采样）
 	lockCalls int
 	fnRan     bool
 }
@@ -36,6 +39,7 @@ func (f *fakeLocker) Lock(ctx context.Context, key string, ttl, timeout time.Dur
 
 func (f *fakeLocker) Unlock(ctx context.Context, key, ownerID string) error {
 	f.unlockCtx = ctx
+	f.unlockCtxErrAtCall = ctx.Err()
 	f.unlockKey = key
 	f.unlockOwn = ownerID
 	return f.unlockErr
@@ -127,8 +131,15 @@ func TestWithLock_ReleasedWithUncancelableContext(t *testing.T) {
 	if fl.unlockCtx == nil {
 		t.Fatal("Unlock 未被调用")
 	}
-	if err := fl.unlockCtx.Err(); err != nil {
-		t.Fatalf("释放用的 ctx 必须与 caller 取消状态解耦, got %v", err)
+	// #428：解耦纪律的判定点在 Unlock **调用时**（ReleaseUncancelable 的
+	// defer cancel 会让事后 Err() 恒为 Canceled——那是 timeout ctx 的正常
+	// 收尾，不是 caller 取消传染）。调用点状态必须干净，且必须带 deadline
+	// （释放有上界，裸 WithoutCancel 的「永不超时」已废除）。
+	if fl.unlockCtxErrAtCall != nil {
+		t.Fatalf("释放用的 ctx 在调用点必须与 caller 取消状态解耦, got %v", fl.unlockCtxErrAtCall)
+	}
+	if _, ok := fl.unlockCtx.Deadline(); !ok {
+		t.Fatal("释放 ctx 必须带 deadline（#428：释放动作有上界）")
 	}
 	// ctx 携带的取值保留（WithoutCancel 只剥离取消信号，不换 context 链）。
 	type ctxKey struct{}
@@ -152,8 +163,11 @@ func TestWithLock_ReleasedWithUncancelableContext_NoCallerCancel(t *testing.T) {
 	if err := WithLock(context.Background(), fl, "k", time.Second, 10*time.Millisecond, func() error { return nil }); err != nil {
 		t.Fatalf("WithLock 应成功, got %v", err)
 	}
-	if fl.unlockCtx.Err() != nil {
-		t.Fatalf("未取消场景释放 ctx 不应带错误, got %v", fl.unlockCtx.Err())
+	if fl.unlockCtxErrAtCall != nil {
+		t.Fatalf("未取消场景释放 ctx 调用点不应带错误, got %v", fl.unlockCtxErrAtCall)
+	}
+	if _, ok := fl.unlockCtx.Deadline(); !ok {
+		t.Fatal("释放 ctx 必须带 deadline（#428：释放动作有上界）")
 	}
 }
 
@@ -175,5 +189,67 @@ func TestSentinels_DistinctAndJudgable(t *testing.T) {
 	chain := errors.Join(errors.New("outer"), ErrLockNotHeld)
 	if !errors.Is(chain, ErrLockNotHeld) {
 		t.Fatal("包装/聚合链上的哨兵应可判定")
+	}
+}
+
+// hangingUnlocker 的 Unlock 挂到 ctx 完成为止——模拟 etcd 半开连接/慢盘
+// 场景（#428）：裸 WithoutCancel 时代 ctx 永不完成 ⇒ 调用方永久阻塞。
+type hangingUnlocker struct {
+	Locker
+}
+
+func (h hangingUnlocker) Unlock(ctx context.Context, key, ownerID string) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestReleaseUncancelable_Bounded 钉住 #428：释放动作必须有上界——裸
+// WithoutCancel 把 deadline 一并剥了，Unlock 挂起时调用方 goroutine 永久
+// 阻塞（etcdx v0.2.12 的 3s 短超时在迁单源时丢失）。修后 WithoutCancel
+// 之上叠 WithTimeout(releaseTimeout)，超时返回可
+// errors.Is(err, context.DeadlineExceeded) 判定的错误。
+func TestReleaseUncancelable_Bounded(t *testing.T) {
+	old := releaseTimeout
+	releaseTimeout = 100 * time.Millisecond
+	defer func() { releaseTimeout = old }()
+
+	ctx := context.Background()
+	start := time.Now()
+	err := ReleaseUncancelable(ctx, hangingUnlocker{}, "k", "owner")
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("挂起 Unlock 应以 DeadlineExceeded 收场, got %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("释放耗时 %v：上界未生效（应 ~releaseTimeout）", elapsed)
+	}
+}
+
+// funcUnlocker 只重写 Unlock 的可编程桩（其余方法不注入——
+// ReleaseUncancelable 只调 Unlock）。
+type funcUnlocker struct {
+	Locker
+	unlock func(ctx context.Context, key, ownerID string) error
+}
+
+func (f funcUnlocker) Unlock(ctx context.Context, key, ownerID string) error {
+	return f.unlock(ctx, key, ownerID)
+}
+
+// TestReleaseUncancelable_NormalPath 契约基线：正常释放不受上界改动影响。
+func TestReleaseUncancelable_NormalPath(t *testing.T) {
+	calls := 0
+	normal := funcUnlocker{unlock: func(ctx context.Context, key, ownerID string) error {
+		calls++
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return nil
+	}}
+	if err := ReleaseUncancelable(context.Background(), normal, "k", "owner"); err != nil {
+		t.Fatalf("正常释放不应报错: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("Unlock 调用次数 = %d, want 1", calls)
 	}
 }

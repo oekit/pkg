@@ -91,3 +91,39 @@ func TestMatchGlob_ExcludeAllPattern(t *testing.T) {
 		t.Errorf("MatchGlob(\"*\", %q) 应为 true：这是「排除全部」配置依赖的语义", repoFullName)
 	}
 }
+
+// TestMatchesPath_GlobstarBoundaries 钉住 #424 的两条 /** 边界（此前零声明，
+// 审计/跳过清单按直觉配置会漏面）：
+//  1. 裸父不匹配——"/api/**" 不含 "/api" 自身（前缀分支要求以 "/api/" 起头）；
+//  2. 中段 "**" 不是 globstar——"*" 不跨 "/"，中段 ** 退化为两个单段 *，
+//     只碰巧匹配单段；跨层级子树只有后缀位 "/**" 一种写法。
+func TestMatchesPath_GlobstarBoundaries(t *testing.T) {
+	cases := []struct {
+		pattern, path string
+		want          bool
+	}{
+		// 裸父边界
+		{"/api/**", "/api", false},
+		{"/api/**", "/api/", true},
+		{"/api/**", "/api/users", true},
+		{"/api/**", "/api/users/42/detail", true},
+		// 要连根入面必须显式并列两条
+		{"/api", "/api", true},
+		{"/api", "/api/users", false},
+		// 中段 ** 语义（filepath.Match 原样：* 不跨 /）
+		{"/api/**/detail", "/api/x/detail", true},    // 恰好单段（两段 * 各吃一段）
+		{"/api/**/detail", "/api/x/y/detail", false}, // 不跨层级
+		// 后缀 globstar 跨层级（对照正例）
+		{"/api/**", "/api/x/y/detail", true},
+	}
+	for _, c := range cases {
+		if got := MatchesPath([]string{c.pattern}, c.path); got != c.want {
+			t.Errorf("MatchesPath(%q, %q) = %v, want %v", c.pattern, c.path, got, c.want)
+		}
+		// 严格档与宽松档同口径。
+		gotStrict, err := MatchesPathStrict([]string{c.pattern}, c.path)
+		if err != nil || gotStrict != c.want {
+			t.Errorf("MatchesPathStrict(%q, %q) = (%v, %v), want (%v, nil)", c.pattern, c.path, gotStrict, err, c.want)
+		}
+	}
+}
