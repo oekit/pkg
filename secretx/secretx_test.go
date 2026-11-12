@@ -167,10 +167,8 @@ func TestAADBinding(t *testing.T) {
 func TestConcurrent(t *testing.T) {
 	box, _ := NewBox(mustKey(t, 32))
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 20 {
+		wg.Go(func() {
 			sealed, err := box.Seal([]byte("concurrent"))
 			if err != nil {
 				t.Error(err)
@@ -180,7 +178,7 @@ func TestConcurrent(t *testing.T) {
 			if err != nil || !bytes.Equal(got, []byte("concurrent")) {
 				t.Errorf("concurrent round trip: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

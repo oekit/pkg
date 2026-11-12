@@ -54,10 +54,8 @@ func TestSingleValue_ConcurrentGetSingleFlight(t *testing.T) {
 
 	const n = 16
 	var wg sync.WaitGroup
-	wg.Add(n)
-	for i := 0; i < n; i++ {
-		go func() {
-			defer wg.Done()
+	for range n {
+		wg.Go(func() {
 			v, err := sv.Get(context.Background())
 			if err != nil {
 				t.Errorf("Get: %v", err)
@@ -66,7 +64,7 @@ func TestSingleValue_ConcurrentGetSingleFlight(t *testing.T) {
 			if v == nil || *v != "flag" {
 				t.Errorf("Get 应返回 flag, got %v", v)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

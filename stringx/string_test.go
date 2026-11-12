@@ -312,7 +312,7 @@ func TestUnion_OrderStable(t *testing.T) {
 	first := []string{"b", "a", "c"}
 	second := []string{"a", "d"}
 	want := []string{"b", "a", "c", "d"}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		got := Union(first, second)
 		if strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Fatalf("run %d: got %v want %v（顺序应稳定）", i, got, want)

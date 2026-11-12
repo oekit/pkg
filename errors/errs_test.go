@@ -111,15 +111,13 @@ func TestAppend_ConcurrentSameMultiError(t *testing.T) {
 	results := make([]error, goroutines)
 	var wg sync.WaitGroup
 	for i := range results {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		wg.Go(func() {
 			acc := error(base)
-			for j := 0; j < each; j++ {
+			for j := range each {
 				acc = Append(acc, fmt.Errorf("g%d-e%d", i, j))
 			}
 			results[i] = acc
-		}(i)
+		})
 	}
 	wg.Wait()
 

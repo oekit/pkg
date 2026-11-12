@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -124,7 +124,7 @@ func Redact(cfg any, opts ...LoadOption) string {
 	}
 	var lines []string
 	redactWalk(v, "", senSet, &lines)
-	sort.Strings(lines)
+	slices.Sort(lines)
 	return strings.Join(lines, "\n")
 }
 
@@ -176,7 +176,7 @@ func pathExists(t reflect.Type, parts []string) bool {
 		return false
 	}
 	part := parts[0]
-	for i := 0; i < t.NumField(); i++ {
+	for i := range t.NumField() {
 		f := t.Field(i)
 		if !f.IsExported() {
 			continue
@@ -208,7 +208,7 @@ type loadState struct {
 // errs 累积所有问题（含不受 yaml 解析失败影响的 env/校验错误）。
 func (s *loadState) walk(node reflect.Value, tree any, path string, errs *[]error) {
 	t := node.Type()
-	for i := 0; i < t.NumField(); i++ {
+	for i := range t.NumField() {
 		f := t.Field(i)
 		if !f.IsExported() {
 			continue
@@ -587,7 +587,7 @@ func typeMismatch(fv reflect.Value, v any, hint string) error {
 // 一个占位了结，不下钻。内嵌结构体透明展开，与 Load 的路径口径一致。
 func redactWalk(node reflect.Value, path string, senSet map[string]bool, lines *[]string) {
 	t := node.Type()
-	for i := 0; i < t.NumField(); i++ {
+	for i := range t.NumField() {
 		f := t.Field(i)
 		if !f.IsExported() {
 			continue

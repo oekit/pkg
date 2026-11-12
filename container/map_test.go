@@ -44,7 +44,7 @@ func TestMapBasic(t *testing.T) {
 
 func TestMapRangeEarlyStop(t *testing.T) {
 	m := NewMap[int, int]()
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		m.Store(i, i)
 	}
 	visited := 0
@@ -60,17 +60,15 @@ func TestMapRangeEarlyStop(t *testing.T) {
 func TestMapConcurrent(t *testing.T) {
 	m := NewMap[int, int]()
 	var wg sync.WaitGroup
-	for g := 0; g < 8; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 200; i++ {
+	for range 8 {
+		wg.Go(func() {
+			for i := range 200 {
 				m.Store(i, i)
 				m.Load(i)
 				m.LoadOrStore(i+1000, i)
 				m.Len()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if m.Len() != 400 { // 0..199 + LoadOrStore 去重后的 1000..1199

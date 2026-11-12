@@ -210,11 +210,9 @@ func TestPathClassifier_Concurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 200; j++ {
+	for range 8 {
+		wg.Go(func() {
+			for range 200 {
 				if got := c.Classify("/repos/o/commits/deadbeef1234567"); got != "/repos/o/commits/{id}" {
 					t.Errorf("concurrent Classify = %q", got)
 					return
@@ -224,7 +222,7 @@ func TestPathClassifier_Concurrent(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

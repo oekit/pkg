@@ -50,7 +50,7 @@ func ConvertStruct(src, dst any) error {
 	}
 
 	srcType := srcVal.Type()
-	for i := 0; i < srcVal.NumField(); i++ {
+	for i := range srcVal.NumField() {
 		srcField := srcVal.Field(i)
 		srcFieldName := srcType.Field(i).Name
 
@@ -79,7 +79,7 @@ func StructToMap(v any) map[string]any {
 	}
 
 	typ := val.Type()
-	for i := 0; i < val.NumField(); i++ {
+	for i := range val.NumField() {
 		field := typ.Field(i)
 		fieldVal := val.Field(i)
 

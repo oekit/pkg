@@ -198,13 +198,13 @@ func RunReadPromotion[T any](t *testing.T, c Contract[T], capacity int, factory 
 	ctx := context.Background()
 
 	key := func(i int) string { return fmt.Sprintf("promote-%d", i) }
-	for i := 0; i < capacity; i++ {
+	for i := range capacity {
 		if err := cc.Set(ctx, key(i), c.NewValue(i)); err != nil {
 			t.Fatalf("Set: %v", err)
 		}
 	}
 	// 读命中最旧的 key（提升顺序）
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := cc.Get(ctx, key(0)); err != nil {
 			t.Fatalf("Get: %v", err)
 		}
@@ -218,7 +218,7 @@ func RunReadPromotion[T any](t *testing.T, c Contract[T], capacity int, factory 
 		t.Fatalf("读命中的热点 key 不应被淘汰，got (%v, %v)", v, err)
 	}
 	alive := 0
-	for i := 0; i < capacity; i++ {
+	for i := range capacity {
 		if ok, err := cc.Exists(ctx, key(i)); err == nil && ok {
 			alive++
 		}

@@ -85,7 +85,7 @@ func TestDefaultReader_StickyTerminalError(t *testing.T) {
 	callsAfterTerminal := src.calls
 
 	// 后续操作不得再碰底层。
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := r.Next(1); err == nil {
 			t.Fatal("终态后 Next 应返回错误")
 		}

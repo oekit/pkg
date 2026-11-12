@@ -42,7 +42,7 @@ func TestUnstable_ZeroDeviationIdentity(t *testing.T) {
 // [50,150]。rand.Float64 不取到上界，此处用闭区间断言保持稳健。
 func TestUnstable_Bounds(t *testing.T) {
 	u := NewUnstable(0.5)
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		if got := u.Around(100); got < 50 || got > 150 {
 			t.Fatalf("Around(100) = %d, out of [50,150]", got)
 		}
@@ -56,7 +56,7 @@ func TestUnstable_AroundDuration(t *testing.T) {
 	u := NewUnstable(0.2)
 	base := 30 * time.Minute
 	lo, hi := time.Duration(0.8*float64(base)), time.Duration(1.2*float64(base))
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		got := u.AroundDuration(base)
 		if got < lo || got > hi {
 			t.Fatalf("AroundDuration(30m) = %v, out of [%v, %v]", got, lo, hi)
@@ -70,7 +70,7 @@ func TestUnstable_AroundDuration(t *testing.T) {
 func TestUnstable_Spread(t *testing.T) {
 	u := NewUnstable(0.5)
 	seen := map[float64]bool{}
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		seen[u.AroundFloat64(100)] = true
 	}
 	if len(seen) < 90 {
@@ -95,7 +95,7 @@ func TestUnstable_UpwardZeroDeviationIdentity(t *testing.T) {
 // 落在 [100,150]——下界恒为基准（「不得早于基准」是本变体的存在理由）。
 func TestUnstable_UpwardBounds(t *testing.T) {
 	u := NewUnstable(0.5)
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		if got := u.Upward(100); got < 100 || got > 150 {
 			t.Fatalf("Upward(100) = %d, out of [100,150]", got)
 		}
@@ -109,7 +109,7 @@ func TestUnstable_UpwardDuration(t *testing.T) {
 	u := NewUnstable(0.2)
 	base := 30 * time.Minute
 	lo, hi := base, time.Duration(1.2*float64(base))
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		got := u.UpwardDuration(base)
 		if got < lo || got > hi {
 			t.Fatalf("UpwardDuration(30m) = %v, out of [%v,%v]", got, lo, hi)
@@ -123,7 +123,7 @@ func TestUnstable_UpwardDuration(t *testing.T) {
 func TestUnstable_UpwardSpread(t *testing.T) {
 	u := NewUnstable(0.5)
 	seen := make(map[int]bool)
-	for i := 0; i < 5000; i++ {
+	for range 5000 {
 		seen[u.Upward(100)/5] = true // 100..149 → 桶 20..29
 	}
 	for bucket := 20; bucket <= 29; bucket++ {

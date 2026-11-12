@@ -63,7 +63,7 @@ func TestStrMap_Item(t *testing.T) {
 	want := map[string]int{"k1": 10, "k2": 20, "k3": 30}
 	m := NewFromMap(want)
 	seen := map[string]int{}
-	for i := 0; i < m.Len(); i++ {
+	for i := range m.Len() {
 		k, v := m.Item(i)
 		seen[k] = v
 	}
@@ -86,7 +86,7 @@ func TestStrMap_KeyViewStability(t *testing.T) {
 		vv[i] = i
 	}
 	m := NewFromSlice(kk, vv)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		got, ok := m.Get(kk[i])
 		if !ok || got != i {
 			t.Fatalf("Get(%q) = (%v, %v), want (%d, true)", kk[i], got, ok, i)
@@ -94,7 +94,7 @@ func TestStrMap_KeyViewStability(t *testing.T) {
 	}
 	// 全量 Item 重建映射比对
 	seen := map[string]int{}
-	for i := 0; i < m.Len(); i++ {
+	for i := range m.Len() {
 		k, v := m.Item(i)
 		seen[k] = v
 	}
@@ -252,7 +252,7 @@ func BenchmarkStrMap_Get(b *testing.B) {
 
 	b.Run("strmap", func(b *testing.B) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for i := range b.N {
 			if _, ok := sm.Get(kk[i%n]); !ok {
 				b.Fatal("miss")
 			}
@@ -260,7 +260,7 @@ func BenchmarkStrMap_Get(b *testing.B) {
 	})
 	b.Run("stdmap", func(b *testing.B) {
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for i := range b.N {
 			if _, ok := std[kk[i%n]]; !ok {
 				b.Fatal("miss")
 			}

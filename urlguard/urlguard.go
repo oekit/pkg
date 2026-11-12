@@ -585,7 +585,7 @@ func foldHostForGuard(host string) (string, bool) {
 
 // isASCII 判断 s 是否纯 ASCII。
 func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] >= 0x80 {
 			return false
 		}
@@ -643,7 +643,7 @@ func parseIPv4Part(part string) (ipv4PartKind, bool) {
 		}
 		return ipv4PartHex, true
 	}
-	for i := 0; i < len(part); i++ {
+	for i := range len(part) {
 		if part[i] < '0' || part[i] > '9' {
 			return 0, false
 		}

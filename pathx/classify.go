@@ -222,7 +222,7 @@ func isASCIIDigits(s string) bool {
 	if s == "" {
 		return false
 	}
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] < '0' || s[i] > '9' {
 			return false
 		}
@@ -235,7 +235,7 @@ func isHexRun(s string) bool {
 	if s == "" {
 		return false
 	}
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if !isHexByte(s[i]) {
 			return false
 		}
@@ -250,7 +250,7 @@ func isUUIDShape(s string) bool {
 	if len(s) != 36 {
 		return false
 	}
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		switch i {
 		case 8, 13, 18, 23:
 			if s[i] != '-' {

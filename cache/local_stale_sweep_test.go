@@ -41,7 +41,7 @@ func TestLocalCache_StaleIfError_SurvivesBackgroundSweep(t *testing.T) {
 	}
 
 	// 反复兜底：上游没恢复前，每次都该拿到 stale 值。
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		time.Sleep(120 * time.Millisecond)
 		got, err := c.GetOrLoad(ctx, "k")
 		if err != nil {
@@ -108,7 +108,7 @@ func TestLocalCache_SweepNeeded_NullTTLWithoutTTL(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = c.Close(ctx) })
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		if _, err := c.GetOrLoad(ctx, "miss-"+string(rune('a'+i))); err != nil {
 			t.Fatalf("GetOrLoad: %v", err)
 		}

@@ -57,10 +57,10 @@ func runParity(t *testing.T, name string, ops int, call loader) {
 	t.Cleanup(func() { _ = inner.Close(context.Background()) })
 	decorated := NewSingleFlightCache[string](inner)
 
-	for i := 0; i < ops; i++ {
+	for range ops {
 		call(t, direct, "k")
 	}
-	for i := 0; i < ops; i++ {
+	for range ops {
 		call(t, decorated, "k")
 	}
 
@@ -140,7 +140,7 @@ func TestSingleFlightCache_Stats_HitRateNotDistorted(t *testing.T) {
 		return &v, nil
 	}
 	ctx := context.Background()
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		if _, err := sf.GetOrLoadWithSource(ctx, "k", src); err != nil {
 			t.Fatalf("GetOrLoadWithSource: %v", err)
 		}
@@ -249,7 +249,7 @@ func TestSingleFlightCache_Stats_NilValueHitCountedOnce(t *testing.T) {
 	}
 
 	const reads = 5
-	for i := 0; i < reads; i++ {
+	for range reads {
 		v, err := sf.GetOrLoad(context.Background(), "nil")
 		if err != nil {
 			t.Fatalf("GetOrLoad: %v", err)
@@ -283,7 +283,7 @@ func TestSingleFlightCache_Stats_NilValueHitCountParity(t *testing.T) {
 		if err := c.Set(ctx, "nil", nil); err != nil {
 			t.Fatalf("Set: %v", err)
 		}
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			if _, err := c.GetOrLoad(ctx, "nil"); err != nil {
 				t.Fatalf("GetOrLoad: %v", err)
 			}
@@ -322,14 +322,12 @@ func TestSingleFlightCache_Stats_ConcurrentMissCounted(t *testing.T) {
 
 	const n = 20
 	var wg sync.WaitGroup
-	wg.Add(n)
-	for i := 0; i < n; i++ {
-		go func() {
-			defer wg.Done()
+	for range n {
+		wg.Go(func() {
 			if _, err := sf.GetOrLoad(context.Background(), "k"); err != nil {
 				t.Errorf("GetOrLoad: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -408,9 +406,7 @@ func TestSingleFlightCache_Stats_ConcurrentWriteStress(t *testing.T) {
 	ctx := context.Background()
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		i := 0
 		for {
 			select {
@@ -422,10 +418,10 @@ func TestSingleFlightCache_Stats_ConcurrentWriteStress(t *testing.T) {
 			w := "w"
 			_ = inner.Set(ctx, "k", &w)
 		}
-	}()
+	})
 
 	violations := 0
-	for round := 0; round < 400; round++ {
+	for range 400 {
 		_ = inner.Del(ctx, "k")
 		before := inner.Stats()
 		if _, err := sf.GetOrLoadWithSource(ctx, "k", func(context.Context, string) (*string, error) {

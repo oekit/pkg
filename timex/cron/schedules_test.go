@@ -60,7 +60,7 @@ func TestRandomDelaySchedule_Next_WithinRange(t *testing.T) {
 	r := NewRandomDelaySchedule(min, max)
 	now := time.Now()
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		got := r.Next(now)
 		delay := got.Sub(now)
 		if delay < min || delay > max {

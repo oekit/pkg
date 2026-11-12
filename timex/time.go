@@ -134,7 +134,7 @@ func NDateBefore(n int, isMulti bool, format string) []string {
 
 	if isMulti {
 		j := -1
-		for i := 0; i < n; i++ {
+		for range n {
 			yesTime := nTime.AddDate(0, 0, j)
 			j--
 			logDay := yesTime.Format(format)

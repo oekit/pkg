@@ -75,7 +75,7 @@ func dayStart(y int, m time.Month, d int, loc *time.Location) time.Time {
 	// 先把 (y,m,d) 归一到真实日期——用 UTC 正午构造，避免边界歧义。
 	norm := time.Date(y, m, d, 12, 0, 0, 0, time.UTC)
 	ny, nm, nd := norm.Date()
-	for h := 0; h < 24; h++ {
+	for h := range 24 {
 		c := time.Date(ny, nm, nd, h, 0, 0, 0, loc)
 		if cy, cm, cd := c.Date(); cy == ny && cm == nm && cd == nd {
 			return c

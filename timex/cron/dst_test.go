@@ -107,7 +107,7 @@ func TestNext_DSTFallBack_NeverStalls(t *testing.T) {
 
 	cur := time.Date(2026, 11, 1, 1, 30, 0, 0, sched.Location)
 	seen := map[int64]bool{cur.Unix(): true}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		next := sched.Next(cur)
 		if next.IsZero() {
 			t.Fatalf("第 %d 次迭代返回零值", i)
@@ -205,7 +205,7 @@ func TestNext_MonotonicAcrossTransitions(t *testing.T) {
 		t.Run(c.spec+"@"+c.loc, func(t *testing.T) {
 			sched := mustSpec(t, c.spec, c.loc)
 			cur := c.start.In(sched.Location)
-			for i := 0; i < 500; i++ {
+			for i := range 500 {
 				next := sched.Next(cur)
 				if next.IsZero() {
 					t.Fatalf("第 %d 次迭代返回零值（起点 %v）", i, cur)

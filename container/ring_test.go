@@ -43,7 +43,7 @@ func TestRing_OverwriteOldest(t *testing.T) {
 
 func TestRing_WrapAround(t *testing.T) {
 	r := NewRing[string](2)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		r.Add("v")
 		if r.Len() > 2 {
 			t.Fatalf("len should never exceed capacity, got %d", r.Len())

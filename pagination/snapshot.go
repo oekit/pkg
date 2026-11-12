@@ -33,7 +33,7 @@ func typeContainsRef(t reflect.Type) bool {
 	case reflect.Array:
 		r = typeContainsRef(t.Elem())
 	case reflect.Struct:
-		for i := 0; i < t.NumField(); i++ {
+		for i := range t.NumField() {
 			if typeContainsRef(t.Field(i).Type) {
 				r = true
 				break

@@ -6,8 +6,9 @@ package webhook
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
-	"sort"
+	"slices"
 
 	"github.com/oekit/pkg/container"
 )
@@ -57,11 +58,5 @@ func (rg *Registry) Validate(platform string, r *http.Request, body []byte) erro
 // Platforms 已注册平台名的有序快照（整体拷贝出口，经 SafeMap.Snapshot
 // 锁内拷贝、锁外交付；调试转储「现在注册了哪些平台」一行完成）。
 func (rg *Registry) Platforms() []string {
-	snap := rg.m.Snapshot()
-	names := make([]string, 0, len(snap))
-	for name := range snap {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(rg.m.Snapshot()))
 }

@@ -143,7 +143,7 @@ func TestDoRawConnectionReused(t *testing.T) {
 	defer srv.Close()
 
 	client := srv.Client()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		res, err := DoRaw(context.Background(), client, Request{URL: srv.URL}, 1024)
 		if err != nil {
 			t.Fatalf("DoRaw #%d: %v", i, err)

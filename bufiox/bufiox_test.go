@@ -377,7 +377,7 @@ func TestDefaultWriter_OrderAcrossMalloc(t *testing.T) {
 func TestDefaultWriter_MultipleFlush(t *testing.T) {
 	var out bytes.Buffer
 	w := NewDefaultWriter(&out)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := w.WriteBinary([]byte("x")); err != nil {
 			t.Fatalf("round %d: %v", i, err)
 		}

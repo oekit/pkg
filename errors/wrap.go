@@ -156,7 +156,7 @@ func Cause(err error) error {
 	// （A 包 B、B 又包 A——biz_error.go 注释承认的重构/聚合形态）会让
 	// 无界 for 永久迭代（goroutine 卡死 + CPU 自旋，#298）。超限返回当前
 	// 已到达的最深节点并停止。
-	for i := 0; i < maxFlattenDepth; i++ {
+	for range maxFlattenDepth {
 		u := stderrors.Unwrap(err)
 		if u == nil {
 			return err

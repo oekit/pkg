@@ -1,13 +1,14 @@
 package strmap
 
 import (
+	"cmp"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/maphash"
 	"math"
 	"math/bits"
-	"sort"
+	"slices"
 	"strings"
 	"unsafe"
 )
@@ -193,7 +194,7 @@ func (m *StrMap[V]) makeHashtable() {
 	}
 
 	// 同槽条目连续存放（利于 CPU cache），冲突时 Get 沿 items 顺位扫描
-	sort.Slice(m.items, func(i, j int) bool { return m.items[i].slot < m.items[j].slot })
+	slices.SortFunc(m.items, func(a, b mapItem[V]) int { return cmp.Compare(a.slot, b.slot) })
 
 	for i := range m.hashtable {
 		m.hashtable[i] = -1

@@ -28,7 +28,7 @@ func TestLocalCache_NullTTL_Disabled(t *testing.T) {
 	ctx := context.Background()
 	defer func() { _ = c.Close(ctx) }()
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if _, err := c.GetOrLoad(ctx, "missing"); err != nil {
 			t.Fatal(err)
 		}
@@ -80,16 +80,14 @@ func TestLocalCache_NullMarker_ConcurrentGetOrLoad(t *testing.T) {
 	defer func() { _ = c.Close(ctx) }()
 
 	var wg sync.WaitGroup
-	for g := 0; g < 20; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 20; i++ {
+	for range 20 {
+		wg.Go(func() {
+			for range 20 {
 				_, _ = c.GetOrLoad(ctx, "null-key")
 				_, _ = c.Get(ctx, "null-key")
 				_ = c.SetWithTTL(ctx, "null-key", nil, time.Minute) // 与 null marker 并发写
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

@@ -78,23 +78,19 @@ func TestSafeMap_Snapshot_ZeroValueCopy(t *testing.T) {
 func TestSafeMap_Snapshot_Concurrent(t *testing.T) {
 	sm := NewSafeMap[int, int]()
 	var wg sync.WaitGroup
-	for w := 0; w < 4; w++ {
-		wg.Add(1)
-		go func(w int) {
-			defer wg.Done()
-			for i := 0; i < 500; i++ {
+	for w := range 4 {
+		wg.Go(func() {
+			for i := range 500 {
 				sm.Set(w*1000+i, i)
 			}
-		}(w)
+		})
 	}
-	for r := 0; r < 4; r++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 200; i++ {
+	for range 4 {
+		wg.Go(func() {
+			for range 200 {
 				_ = sm.Snapshot()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if sm.Len() != 2000 {

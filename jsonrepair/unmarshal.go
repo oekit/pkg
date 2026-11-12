@@ -120,7 +120,7 @@ func closePartial(s string) (string, bool) {
 	keyPos := false       // 当前未闭合字符串是否键位（{"Host 截断形态）
 	expectColon := false  // 键位字符串已闭合但冒号未出现（{"a":"b","c" 截断形态）
 	lastStruct := byte(0) // 字符串外最后一个非空白字节（尾逗号/尾冒号判定）
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		c := s[i]
 		if inStr {
 			switch {

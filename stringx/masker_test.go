@@ -109,7 +109,7 @@ func TestMaskerDeterministic(t *testing.T) {
 	}
 	in := "login password=hunter2 via postgres://u:p@host/db"
 	first := m.Mask(in)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		if got := m.Mask(in); got != first {
 			t.Fatalf("第 %d 次 Mask 输出不稳定: %q vs %q", i, got, first)
 		}
@@ -409,17 +409,15 @@ func TestMaskerConcurrency(t *testing.T) {
 	const in = "login password=hunter2 via postgres://u:p@host/db"
 	const want = "login pa«kv-secret:****»r2 via postgres«url-userinfo:****»host/db"
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 200; j++ {
+	for range 8 {
+		wg.Go(func() {
+			for range 200 {
 				if got := m.Mask(in); got != want {
 					t.Errorf("并发 Mask = %q, want %q", got, want)
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

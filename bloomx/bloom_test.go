@@ -126,13 +126,13 @@ func TestFilter_AddMatchesAddBytes(t *testing.T) {
 func TestFilter_FalsePositiveRate(t *testing.T) {
 	const n = 5000
 	bf := New(n, 0.01)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		bf.Add(fmt.Sprintf("member-%d", i))
 	}
 
 	fp := 0
 	const probes = 10000
-	for i := 0; i < probes; i++ {
+	for i := range probes {
 		if bf.Test(fmt.Sprintf("probe-%d", i)) {
 			fp++
 		}
@@ -163,21 +163,17 @@ func TestFilter_Reset(t *testing.T) {
 func TestFilter_Concurrent(t *testing.T) {
 	bf := New(1024, 0.01)
 	var wg sync.WaitGroup
-	for w := 0; w < 8; w++ {
-		wg.Add(1)
-		go func(w int) {
-			defer wg.Done()
-			for i := 0; i < 500; i++ {
+	for w := range 8 {
+		wg.Go(func() {
+			for i := range 500 {
 				key := fmt.Sprintf("w%d-k%d", w, i)
 				bf.Add(key)
 				_ = bf.Test(key)
 			}
-		}(w)
+		})
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		bf.Reset()
-	}()
+	})
 	wg.Wait()
 }

@@ -7,7 +7,7 @@ import (
 )
 
 func TestRandIntn(t *testing.T) {
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		v := RandIntn(10)
 		if v < 0 || v >= 10 {
 			t.Errorf("RandIntn(10) = %v, want [0, 10)", v)
@@ -69,7 +69,7 @@ func TestToFixed(t *testing.T) {
 }
 
 func TestRangeRandFloat64(t *testing.T) {
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		v := RangeRandFloat64(1.0, 2.0)
 		if v < 1.0 || v >= 2.0 {
 			t.Errorf("RangeRandFloat64(1.0, 2.0) = %v, want [1.0, 2.0)", v)
@@ -209,7 +209,7 @@ func TestRandIntn_InvalidMaxPanics(t *testing.T) {
 			_ = RandIntn(c.maxInt)
 		})
 	}
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		if v := RandIntn(1); v != 0 {
 			t.Fatalf("RandIntn(1) = %d, want 0（最小合法入参不得被校验误伤）", v)
 		}

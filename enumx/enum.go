@@ -1,8 +1,10 @@
 package enumx
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 )
 
 // Enum 是枚举接口。
@@ -73,20 +75,15 @@ func (r *Registry[T]) All() []T {
 	for _, e := range r.enums {
 		result = append(result, e)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Value() < result[j].Value()
+	slices.SortFunc(result, func(a, b T) int {
+		return cmp.Compare(a.Value(), b.Value())
 	})
 	return result
 }
 
 // Values 获取所有有效的枚举整数值（升序排列）。
 func (r *Registry[T]) Values() []int {
-	result := make([]int, 0, len(r.enums))
-	for v := range r.enums {
-		result = append(result, v)
-	}
-	sort.Ints(result)
-	return result
+	return slices.Sorted(maps.Keys(r.enums))
 }
 
 // IsValid 检查整数值是否是有效的枚举。
