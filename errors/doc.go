@@ -40,9 +40,8 @@
 //   - panic 收编统一走 Recovered（见 panic.go）：error 身份、goroutine 栈、
 //     panic 值类型信息三样全保留，禁止 `fmt.Errorf("...: %v", recover())`。
 //
-// （Errorf 的去留史：#378 以「零引用」为由删除，但该审计只扫了 org 内部
-// ——跨 org 消费方 go-git-platform 72 处 / go-gongfeng 4 处在 MVS 抬升后
-// 编译断裂，断裂沿依赖链中段组件传递（#401/#405 反证）。已按兼容层恢复
-// 为行为逐字一致的 Deprecated 函数并附迁移指引（见 Errorf）：新代码仍按
-// 上述仓规走 stdlib，跨 org 存量不强制迁移、编译与行为不变。）
+// （Errorf 的去留史，终局：#378 以「零引用」为由删除，审计只扫了 org 内部；
+// #401/#405 曾按兼容层恢复为 Deprecated 函数。v0.48.0 起彻底删除——跨 org
+// 消费方（go-git-platform / go-gongfeng / guardx 等）已同步迁移 fmt.Errorf，
+// 兼容层完成历史使命退役。普通格式化包装一律 fmt.Errorf("...: %w", err)。）
 package errors

@@ -113,7 +113,7 @@ func Kv(err error) []any {
 // 上下文全量展开，外层在前、内层在后（同名 key 由日志端的后写覆盖语义决定
 // 最终值——与 slog Attrs 的重复 key 行为一致）。链上多层 kv 不做去重：
 // 去重会掩盖「两层都带了 user_id 但值不同」的异常现场。多分支链
-// （Unwrap() []error，如 Errorf 的多 %w 形态）按深度先序遍历。
+// （Unwrap() []error，如 fmt.Errorf 的多 %w 形态）按深度先序遍历。
 // err 为 nil 或整条链都不携带 kv 时返回 nil。
 //
 // 典型消费（logx 侧 ErrAttrs 形态）：
@@ -140,7 +140,7 @@ func KvFromChain(err error) []any {
 				out = append(out, kv...)
 			}
 		}
-		// 多分支链（Unwrap() []error，如 Errorf 的多 %w 形态）深度先序；
+		// 多分支链（Unwrap() []error，如 fmt.Errorf 的多 %w 形态）深度先序；
 		// stderrors.Unwrap 只认 Unwrap() error，多错误形态对它返回 nil，
 		// 必须先走类型断言分支。
 		if m, ok := e.(interface{ Unwrap() []error }); ok {
@@ -160,7 +160,7 @@ func KvFromChain(err error) []any {
 // Cause 是 errors.Cause 的便捷版:返回 wrap 链最底层的 error。
 // 等价 errors.Unwrap 递归到 nil。
 //
-// 多分支链（Unwrap() []error，Go 1.20+ 多错误解包，如 Errorf 的多 %w 形态）
+// 多分支链（Unwrap() []error，Go 1.20+ 多错误解包，如 fmt.Errorf 的多 %w 形态）
 // 取**首分支**继续下钻（#420）：单值语义的 Cause 在多分支形态没有「唯一
 // 最底层」，首分支与 KvFromChain 的深度先序口径一致。stdlib 语义优先——
 // 同时实现两种 Unwrap 的类型先走单分支（errors.Unwrap 的既有序）。
@@ -174,7 +174,7 @@ func Cause(err error) error {
 			err = u
 			continue
 		}
-		// 单分支到底：多分支链（含 Errorf 多 %w、Join 聚合）取首分支下钻。
+		// 单分支到底：多分支链（含 fmt.Errorf 多 %w、Join 聚合）取首分支下钻。
 		if m, ok := err.(interface{ Unwrap() []error }); ok {
 			subs := m.Unwrap()
 			if len(subs) == 0 {
