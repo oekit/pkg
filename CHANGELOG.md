@@ -2,6 +2,10 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.48.0] — 2026-11-13
+
+- **BREAKING**：删除 errors.Errorf Deprecated 兼容层（#401/#405 恢复件的终局退役）。下游迁移：普通格式化包装 fmt.Errorf("...: %w", err)；kv 结构化上下文 errors.Wrap。跨 org 消费方（go-git-platform/go-gongfeng/guardx）已同列车迁移。wrap.go/doc.go 注释同步去 Errorf 化。
+
 ## [v0.47.1] — 2026-11-13
 
 - fix(timex): EndOfMinute/EndOfHour 改「下一周期起点 −1ns」——非整小时 DST 位移时区（Lord Howe/Macquarie 30 分钟回拨）不再与相邻周期重叠（#418）。头注释不变量新增第三条（不重叠），适用域扩至全部 DST 时区。
