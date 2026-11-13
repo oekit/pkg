@@ -34,8 +34,8 @@ import (
 // 因此从 fmt.Errorf 迁过来时日志与告警的文案不会变。
 //
 // Deprecated: 兼容恢复（#401/#405）。#378 曾以「零引用」为由删除本函数，
-// 但该判定只扫了 oekit org 内部——跨 org 消费方（yi-nology/go-git-platform
-// 72 处、yi-nology/go-gongfeng 4 处）在 MVS 把 pkg 抬到 v0.45.0 时全部
+// 但该判定只扫了 oekit org 内部——跨 org 消费方（另一 org 的 go-git-platform
+// 72 处、go-gongfeng 4 处）在 MVS 把 pkg 抬到 v0.45.0 时全部
 // 编译断裂，且断裂会沿依赖链中段组件（SDK/库）传递给全部下游。本恢复是
 // **行为逐字一致的兼容层**（语义三样 stdlib 没有：nil-safe %w、空格式串返
 // nil、非 error 的 %w 实参按 %v 渲染不产 %!w 噪声），不是回退收敛方向：
