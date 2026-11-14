@@ -67,8 +67,8 @@ func NewMemGroup(limitBytes int64) (*MemGroup, error) {
 	if limitBytes > 1<<62 {
 		return nil, fmt.Errorf("procx: NewMemGroup: 上限 %d 超防呆上限 %d", limitBytes, int64(1<<62))
 	}
-	dir, limit, err := createMemGroup(limitBytes)
-	if err != nil {
+	dir, limit, err := createMemGroup(limitBytes) //nolint:staticcheck // SA4023 伪阳性根因在下行注释
+	if err != nil {                               //nolint:staticcheck // 非 Linux 桩（memlimit_other.go）恒返回错误，SA4023 仅在跨平台分析下伪阳性；Linux 正常路径 err 可 nil（CI 在 ubuntu 实测绿）
 		return nil, err
 	}
 	return &MemGroup{dir: dir, limit: limit}, nil

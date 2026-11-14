@@ -102,7 +102,13 @@ func (q *Queue[T]) popLocked() (T, bool) {
 		q.items = q.items[:0]
 		q.head = 0
 	} else if q.head > len(q.items)/2 {
-		q.items = append(q.items[:0], q.items[q.head:]...)
+		moved := copy(q.items, q.items[q.head:])
+		// 搬移后旧尾部槽位仍持有已出队元素的引用（#474）：append 到 [:0]
+		// 路径靠缩短 len 隐藏尾部、不清内容，旧引用滞留正是行 99 注释要防
+		// 的场景——压缩即补尾清零（同包 Slice.Delete/RemoveIf/Clear 纪律），
+		// 再缩到 moved 与原 append 语义一致。
+		clear(q.items[moved:])
+		q.items = q.items[:moved]
 		q.head = 0
 	}
 	return v, true

@@ -54,7 +54,9 @@ func (s Set[T]) Range(fn func(v T) bool) {
 	}
 }
 
-// Clone 深拷贝出一个新集合。
+// Clone 拷贝出一个新集合：集合结构独立（增删互不影响），元素按值复制
+// ——元素本身是指针/含指针结构时不递归克隆，两集合共享底层对象（#492，
+// 「深拷贝」措辞此前超出实现，按深拷贝假设使用会发生跨集合共享写）。
 func (s Set[T]) Clone() Set[T] {
 	out := make(Set[T], len(s))
 	for v := range s {
