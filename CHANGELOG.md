@@ -2,6 +2,12 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.50.0] — 2026-11-15
+
+- feat: 下沉 sse 游标回放应答器（订阅先于回放去重+心跳注释帧+游标窗口，#483）与 canon 策略面规范形指纹（canonical→版本哈希+facet diff，#484）。BREAKING：摘除产品域两件 licensx(#486)/webhook IM 载荷(#485)——v0.49.0 曾随 tag 发出，现改道 yi-nology/gopkg（revert #508），0.x 阶段直接摘除，依赖方改接 yi-nology/gopkg。
+
+关联问题单：pkg#483、pkg#484、pkg#485、pkg#486。
+
 ## [v0.49.0] — 2026-11-15
 
 - fix: 审计单批量收口——cron 契约四单：ConstantDelay/Delay/RandomSchedule 直构兜底「严格晚于入参」+构造器拒非正延迟(#468,#469)、RoundDuration 负精度 panic+整数算术防 float64 丢精度(#470)、WrapSchedule 补 NewWrapSchedule(#471)；timex：NDateBefore 负 n 拒绝(#472)、ConvertTimezone 对齐 Date2Stamp 的 DST 前跳锚定口径(#473)、三函数补本机时区声明(#493)、SpecSchedule 零值 Location 回落 time.Local(#494)；container：Queue 压缩分支/Ring.Take 补清零(#474,#475)、Map/Slice 零值声明与实现对齐(#476)、Set.Clone 措辞(#492)；strmap 包文档拉链式措辞(#477)；config：yaml \\u 代理对合并+孤立拒绝(#478)、required 切片 len==0 同裁决(#479)、yaml float 补 OverflowFloat(#480)、parseEnvTag default 吞段显式报错(#488)；mathx Unstable 零值声明(#490)；slicex ToMap 语义声明+ToMapStrict(#491)；procx Windows keep/literal 归一(#489)；httpjson 新增 ClearRetryAfter 按尝试作废原语(#496)。feat: 下沉提案两单——auditchain append-only 审计哈希链(#481)、webhook Forwarder 游标外发+RFC5424(#482)（sse/canon(#483,#484) 实际随 v0.50.0 发出，勘误；licensx/IM 载荷(#485,#486) 与 tokenx(#487) 改道 yi-nology/gopkg）
