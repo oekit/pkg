@@ -356,3 +356,14 @@ func TestRandSources_Unified(t *testing.T) {
 		t.Fatalf("分布疑似退化：distinct(F)=%d distinct(A)=%d", len(distinctF), len(distinctA))
 	}
 }
+
+func TestDivisionN_NegativePrecisionPanics(t *testing.T) {
+	// #467：负精度与 toFixed 同口径 fail-fast——此前静默按负位数计算，
+	// n≤-308 时 Pow10 下溢为 0 ⇒ NaN。
+	defer func() {
+		if recover() == nil {
+			t.Fatal("n<0 应 panic(与 toFixed 同口径)")
+		}
+	}()
+	DivisionN(1, 3, -1)
+}
