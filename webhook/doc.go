@@ -71,7 +71,31 @@
 // 这类联调事故挡在构造期）；SignerWith* 是发侧选项前缀，与收侧 With*
 // 一一对应成对。
 //
-// 本包只做「签」与「验」，不读请求体/不判 IP 白名单/不解析事件类型/不发
-// 请求——时间戳防重放窗的判定在收端，发出端只负责按约定打出时间戳与
-// 幂等 ID（消费端按 DefaultDeliveryHeader 去重）。
+// # 转发面（游标式 at-least-once 批量转发器，#482）
+//
+// 审计/事件外发到 SIEM 的「取批 → 全 sink 投递 → 推进游标」不变量单源：
+// Forwarder 机制只收不变量，游标存储（CursorStore，宿主的设置表/持久
+// KV）与批源（BatchSource，如 WHERE seq > ? ORDER BY seq LIMIT ?）由宿主
+// 注入，本包不假设任何存储形态；内置 MemoryCursorStore（契约测试与骨架
+// 用）与两个 sink——WebhookSink（整批一个 POST，body 为载荷 JSON 数组，
+// 可选 HMAC 签名，复用发侧 Signer——签的就是发出的 body 字节）与
+// SyslogSink（RFC5424 一事件一帧，逐轮连接断链下轮重试）。
+//
+// at-least-once 语义（宁重不丢）：游标只在**全部 sink 成功且游标落库
+// 成功**后推进到本批最大 Seq；任一失败游标不动、下轮重取同窗重发**整批**
+// ——重投的最小单位是一整批（sink A 成功 B 失败的那轮，A 下轮收到重复
+// 事件是有意为之）；先投递后记账的顺序保证「丢」只可能表现为「重」。
+// 接收端必须幂等：按载荷内稳定事件 ID（推荐 EventEnvelope.ID / 载荷自有
+// id，或签名头的 DefaultDeliveryHeader 投递 ID）在解包/落库之前去重；
+// 重投只重复不乱序，不得依赖「恰好一次」。毒批（非法 payload/坏批序）
+// fail-loud 卡住游标——跳过=有意丢数据，是宿主的决策不是转发器的。
+//
+// RFC5424 首版承诺：PRI + 版本 1 + 时间戳（UTC 毫秒）+ 主机 + APP-NAME +
+// MSG，STRUCTURED-DATA 恒 NILVALUE；分帧用非透明式（行=一帧，MSG 内换行
+// 净化为空格），octet-counting/TLS 不在首版。
+//
+// 本包做「签」「验」「转发」三面的字段约定单源；不读请求体/不判 IP 白名单
+// /不解析事件类型/不做重试退避——时间戳防重放窗的判定在收端（发出端只按
+// 约定打时间戳与幂等 ID，消费端按 DefaultDeliveryHeader 去重），转发面的
+// 轮询节奏与告警归宿主。
 package webhook
