@@ -2,6 +2,12 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.49.0] — 2026-11-15
+
+- fix: 审计单批量收口——cron 契约四单：ConstantDelay/Delay/RandomSchedule 直构兜底「严格晚于入参」+构造器拒非正延迟(#468,#469)、RoundDuration 负精度 panic+整数算术防 float64 丢精度(#470)、WrapSchedule 补 NewWrapSchedule(#471)；timex：NDateBefore 负 n 拒绝(#472)、ConvertTimezone 对齐 Date2Stamp 的 DST 前跳锚定口径(#473)、三函数补本机时区声明(#493)、SpecSchedule 零值 Location 回落 time.Local(#494)；container：Queue 压缩分支/Ring.Take 补清零(#474,#475)、Map/Slice 零值声明与实现对齐(#476)、Set.Clone 措辞(#492)；strmap 包文档拉链式措辞(#477)；config：yaml \\u 代理对合并+孤立拒绝(#478)、required 切片 len==0 同裁决(#479)、yaml float 补 OverflowFloat(#480)、parseEnvTag default 吞段显式报错(#488)；mathx Unstable 零值声明(#490)；slicex ToMap 语义声明+ToMapStrict(#491)；procx Windows keep/literal 归一(#489)；httpjson 新增 ClearRetryAfter 按尝试作废原语(#496)。feat: 下沉提案七单——auditchain append-only 审计哈希链(#481)、webhook Forwarder 游标外发+RFC5424(#482)、sse 游标回放应答器(#483)、canon 策略面规范形指纹(#484)、webhook IM 载荷构造器（企微/钉钉/飞书）(#485)、licensx Ed25519 license 签发/验签(#486)、tokenx HMAC 签名能力令牌(#487)
+
+关联问题单：pkg#468、pkg#469、pkg#470、pkg#471、pkg#472、pkg#473、pkg#474、pkg#475、pkg#476、pkg#477、pkg#478、pkg#479、pkg#480、pkg#488、pkg#489、pkg#490、pkg#491、pkg#492、pkg#493、pkg#494、pkg#496、pkg#481、pkg#482、pkg#483、pkg#484、pkg#485、pkg#486、pkg#487。
+
 ## [v0.48.0] — 2026-11-13
 
 - **BREAKING**：删除 errors.Errorf Deprecated 兼容层（#401/#405 恢复件的终局退役）。下游迁移：普通格式化包装 fmt.Errorf("...: %w", err)；kv 结构化上下文 errors.Wrap。跨 org 消费方（go-git-platform/go-gongfeng/guardx）已同列车迁移。wrap.go/doc.go 注释同步去 Errorf 化。
