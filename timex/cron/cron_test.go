@@ -182,3 +182,31 @@ func TestParseField_NSlashStep(t *testing.T) {
 		t.Error("step 0 should be rejected")
 	}
 }
+
+func TestSpecScheduleNilLocation(t *testing.T) {
+	parsed, err := Parse("0 30 10 * * *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule, ok := parsed.(*SpecSchedule)
+	if !ok {
+		t.Fatal("expected SpecSchedule")
+	}
+	from := time.Date(2026, time.November, 14, 9, 0, 0, 0, time.Local)
+	want := time.Date(2026, time.November, 14, 10, 30, 0, 0, time.Local)
+	schedule.Location = nil
+	got := schedule.Next(from)
+	if !got.Equal(want) || got.Location() != time.Local {
+		t.Fatalf("Next() = %v (%v), want %v (%v)", got, got.Location(), want, time.Local)
+	}
+	if schedule.Location != nil {
+		t.Fatal("Next must not mutate the schedule")
+	}
+}
+
+func TestSpecScheduleZeroValue(t *testing.T) {
+	var schedule SpecSchedule
+	if got := schedule.Next(time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)); !got.IsZero() {
+		t.Fatalf("zero schedule has no matching months, got %v", got)
+	}
+}
