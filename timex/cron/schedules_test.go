@@ -116,8 +116,11 @@ func TestNewRandomDelaySchedule_RejectsInvalidRange(t *testing.T) {
 		{name: "min大于max", min: 500 * time.Millisecond, max: 100 * time.Millisecond, wantPanic: true, wantInPanic: "0 <= min <= max"},
 		{name: "min为负", min: -1 * time.Second, max: 100 * time.Millisecond, wantPanic: true, wantInPanic: "0 <= min <= max"},
 		{name: "max为负", min: -2 * time.Second, max: -1 * time.Second, wantPanic: true, wantInPanic: "0 <= min <= max"},
-		{name: "零区间合法", min: 0, max: 0, wantPanic: false},
+		// #469：(0,0) 曾被放行而 Next 恒等于入参——「不晚于当前时间」的
+		// 危险判据恰被 0 穿透，构造期一并拒绝。
+		{name: "零区间非法", min: 0, max: 0, wantPanic: true, wantInPanic: "0 <= min <= max"},
 		{name: "正常区间合法", min: 100 * time.Millisecond, max: 500 * time.Millisecond, wantPanic: false},
+		{name: "min为0区间合法", min: 0, max: 100 * time.Millisecond, wantPanic: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -141,18 +144,23 @@ func TestNewRandomDelaySchedule_RejectsInvalidRange(t *testing.T) {
 	}
 }
 
-// TestNewDelaySchedule_RejectsNegative 钉住 #227：负延迟（Next 会产生
-// 过去时刻）在构造期 panic。
+// TestNewDelaySchedule_RejectsNegative 钉住 #227/#469：负延迟（Next 会产生
+// 过去时刻）与零延迟（Next 返回入参本身，落在「不晚于当前时间」判据内）
+// 都在构造期 panic。
 func TestNewDelaySchedule_RejectsNegative(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("NewDelaySchedule(-1s) 应 panic")
-		}
-		msg, ok := r.(string)
-		if !ok || !strings.Contains(msg, "不能为负") {
-			t.Fatalf("panic 信息应说明负延迟非法, got %v", r)
-		}
-	}()
-	_ = NewDelaySchedule(-1 * time.Second)
+	for _, d := range []time.Duration{-1 * time.Second, 0} {
+		func() {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("NewDelaySchedule(%v) 应 panic", d)
+				}
+				msg, ok := r.(string)
+				if !ok || !strings.Contains(msg, "必须为正") {
+					t.Fatalf("panic 信息应说明延迟非法, got %v", r)
+				}
+			}()
+			_ = NewDelaySchedule(d)
+		}()
+	}
 }

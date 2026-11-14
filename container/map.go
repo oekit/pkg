@@ -4,7 +4,8 @@ import "sync"
 
 // Map 并发安全的泛型映射（sync.Map 背书，对标 go-kratos/kit container/maps）。
 // 读多写少、key 集合趋于稳定时性能优于 SafeMap；写冲突频繁或需要 GetOrSet
-// 语义时用 SafeMap。零值不可直接使用，须经 NewMap 创建。
+// 语义时用 SafeMap。零值即可用（底层 sync.Map 的零值语义，#476——此前
+// 「零值不可直接使用」与构造器返回零值自相矛盾），NewMap 仅是可读性糖。
 type Map[K comparable, V any] struct {
 	m sync.Map
 }

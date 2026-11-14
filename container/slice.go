@@ -3,7 +3,8 @@ package container
 import "sync"
 
 // Slice 并发安全的泛型切片（RWMutex 保护，对标 go-kratos/kit container/slices）。
-// 零值不可直接使用，须经 NewSlice 创建。
+// 零值即可用（nil 切片 append 语义，#476——此前「零值不可直接使用」与
+// 构造器返回零值自相矛盾），NewSlice 仅是可读性糖。
 type Slice[T any] struct {
 	mu sync.RWMutex
 	s  []T

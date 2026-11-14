@@ -303,8 +303,29 @@ func parseQuoted(text string, num int) (string, string, error) {
 				if perr != nil {
 					return "", "", fmt.Errorf("config yaml: 第 %d 行非法 \\u 转义: %q", num, text)
 				}
-				b.WriteRune(rune(r))
 				i += 4
+				if r >= 0xD800 && r <= 0xDFFF {
+					// 代理区码点（#478）：直接 WriteRune 会静默写成 U+FFFD 且
+					// 不组合代理对（\ud83d\ude00 → 两个替换符），违背包头
+					// 「不支持的结构显式报错，不做静默猜测」原则。成对出现时
+					// 组合成增补平面码点（与 encoding/json 同口径）；孤立代理
+					// 显式报错。
+					hi := rune(r)
+					if hi >= 0xDC00 {
+						return "", "", fmt.Errorf("config yaml: 第 %d 行孤立低代理 \\u%04X: %q", num, r, text)
+					}
+					if i+7 > len(text) || text[i+1] != '\\' || text[i+2] != 'u' {
+						return "", "", fmt.Errorf("config yaml: 第 %d 行孤立高代理 \\u%04X（缺 \\uXXXX 低代理配对）: %q", num, r, text)
+					}
+					lo, perr := strconv.ParseUint(text[i+3:i+7], 16, 32)
+					if perr != nil || lo < 0xDC00 || lo > 0xDFFF {
+						return "", "", fmt.Errorf("config yaml: 第 %d 行非法低代理转义: %q", num, text)
+					}
+					b.WriteRune(0x10000 + (hi-0xD800)<<10 + (rune(lo) - 0xDC00))
+					i += 6
+					continue
+				}
+				b.WriteRune(rune(r))
 			default:
 				return "", "", fmt.Errorf("config yaml: 第 %d 行不支持的转义 \\%c", num, text[i])
 			}

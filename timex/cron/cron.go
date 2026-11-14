@@ -2,7 +2,6 @@ package cron
 
 import (
 	"fmt"
-	"math"
 	"math/rand"
 	"slices"
 	"strconv"
@@ -127,9 +126,35 @@ func Every(duration time.Duration) ConstantDelaySchedule {
 	return ConstantDelaySchedule{Delay: duration - time.Duration(duration.Nanoseconds())%time.Second}
 }
 
+// NewConstantDelaySchedule 创建固定间隔调度器。d <= 0 panic（#468，对齐
+// NewDelaySchedule #227 的 fail-fast 口径）：零延迟让 Next 返回**等于**入参
+// 的时刻，亚秒延迟在秒对齐公式下会返回**更早**时刻——都落在包级「严格晚于
+// 入参」契约（doc.go）禁止的范围，轮询循环原地热转。亚秒级高频节奏不用
+// cron，直接 timer/loop（同 Every 的口径）。
+func NewConstantDelaySchedule(d time.Duration) ConstantDelaySchedule {
+	if d <= 0 {
+		panic(fmt.Sprintf("cron: NewConstantDelaySchedule 参数非法: delay 必须为正, got %v", d))
+	}
+	return ConstantDelaySchedule{Delay: d}
+}
+
 // Next 返回下一个调度时间。
+//
+// 直构兜底（#468）：ConstantDelaySchedule 是导出结构体，零值或亚秒 Delay 的
+// 字面量绕过构造器时，秒对齐公式会产出**不晚于入参**的时刻（Delay=0 返回
+// 入参本身；Delay=500ms 且入参纳秒位 >500ms 时返回更早时刻）——包级契约
+// 「严格晚于入参」（doc.go）被打破，调度器原地热转。这里兜底钳制：公式
+// 结果不晚于入参时退回「入参 + Delay」；仍不晚于（Delay<=0）时前进到下一
+// 个整秒界。构造器路径（Every/NewConstantDelaySchedule）不会触发。
 func (s ConstantDelaySchedule) Next(t time.Time) time.Time {
-	return t.Add(s.Delay - time.Duration(t.Nanosecond())*time.Nanosecond)
+	next := t.Add(s.Delay - time.Duration(t.Nanosecond())*time.Nanosecond)
+	if !next.After(t) {
+		next = t.Add(s.Delay)
+		if !next.After(t) {
+			next = t.Add(time.Second - time.Duration(t.Nanosecond())*time.Nanosecond)
+		}
+	}
+	return next
 }
 
 // Next 返回下一个调度时间。
@@ -463,9 +488,23 @@ func parseUint(s string) (uint64, error) {
 }
 
 // WrapSchedule 包装一个 Schedule，在每次触发后添加延迟。
+// 零值不可直接使用（Schedule 为 nil 时 Next panic）；经 NewWrapSchedule
+// 创建（Delay<0 fail-fast，#471）。
 type WrapSchedule struct {
 	Schedule Schedule
 	Delay    time.Duration
+}
+
+// NewWrapSchedule 创建带延迟包装的调度器。d < 0 panic（#471，对齐
+// NewDelaySchedule #227 的 fail-fast 口径）：负延迟让 Next 返回**过去**
+// 时刻——即便内层 Next 严格晚于入参，减掉更大的负 Delay 后仍可 ≤t，调度
+// 器热转或跳过。同一 package 对「负延迟」一处构造期 panic、一处裸字段
+// 放行的两套哲学就此收敛。字面量直构绕过校验属自担行为。
+func NewWrapSchedule(s Schedule, d time.Duration) WrapSchedule {
+	if d < 0 {
+		panic(fmt.Sprintf("cron: NewWrapSchedule 参数非法: delay 不能为负, got %v", d))
+	}
+	return WrapSchedule{Schedule: s, Delay: d}
 }
 
 // Next 返回内层 Schedule 的下一次触发时间加 Delay。
@@ -491,38 +530,48 @@ type DelaySchedule struct {
 }
 
 // Next 返回当前时间加上延迟后的时间。
+//
+// 直构兜底（#469）：Delay<=0 的字面量绕过构造器校验时返回**不晚于入参**的
+// 时刻——退回下一整秒界，维持包级「严格晚于」契约（doc.go）。
 func (d DelaySchedule) Next(t time.Time) time.Time {
-	return t.Add(d.Delay)
+	next := t.Add(d.Delay)
+	if !next.After(t) {
+		next = t.Add(time.Second - time.Duration(t.Nanosecond())*time.Nanosecond)
+	}
+	return next
 }
 
 // NewDelaySchedule 创建一个延迟调度器。
 //
-// delay < 0 panic（#227）：负延迟让 Next 返回**过去**时刻——调度器收到
-// 不晚于当前时间的触发点，可能原地热转或跳过任务，是非法配置而非可钳制
-// 的边界（对比 Every 对 <1s 的静默钳制：亚秒只是精度损失，负值是语义
-// 错误）。fail-fast 在构造期，不静默。
+// delay <= 0 panic（#227/#469）：负延迟让 Next 返回**过去**时刻；零延迟让
+// Next 返回**等于**入参的时刻——调度器收到不晚于当前时间的触发点（自家
+// 注释的危险判据本就包含「等于」），可能原地热转或跳过任务，是非法配置
+// 而非可钳制的边界（对比 Every 对 <1s 的静默钳制：亚秒只是精度损失，非正
+// 值是语义错误）。fail-fast 在构造期，不静默。
 func NewDelaySchedule(delay time.Duration) DelaySchedule {
-	if delay < 0 {
-		panic(fmt.Sprintf("cron: NewDelaySchedule 参数非法: delay 不能为负, got %v", delay))
+	if delay <= 0 {
+		panic(fmt.Sprintf("cron: NewDelaySchedule 参数非法: delay 必须为正, got %v", delay))
 	}
 	return DelaySchedule{Delay: delay}
 }
 
 // NewRandomDelaySchedule 创建一个随机延迟调度器。
 //
-// 构造期校验 0 <= min <= max，非法 panic（#227，fail-fast）：
+// 构造期校验 0 <= min <= max 且区间非 (0,0)，非法 panic（#227/#469，fail-fast）：
 //
 //   - min > max：delta 为负会命中 Next 的 delta<=0 分支，随机延迟**静默
 //     退化**为固定延迟 min——配置错误无任何信号；
 //   - min < 0 或 max < 0：Next 产生负值延迟 ⇒ 返回过去时刻——调度器
-//     收到不晚于当前时间的触发点，可能原地热转或跳过任务。
+//     收到不晚于当前时间的触发点，可能原地热转或跳过任务；
+//   - min == max == 0：Next 恒返回入参本身（delta=0 走固定延迟 min=0），
+//     恰落在「不晚于当前时间」的危险判据里——构造合法但契约被打破。
 //
 // 签名不返回 error：非法区间是调用方的常量配置错误（同 NewDelaySchedule
 // 的 panic 口径；直接构造 RandomDelaySchedule{...} 字面量绕过校验属自担
 // 行为，Next 保留 delta<=0 的防御分支）。
 func NewRandomDelaySchedule(min, max time.Duration) RandomDelaySchedule {
-	if min < 0 || max < 0 || min > max {
-		panic(fmt.Sprintf("cron: NewRandomDelaySchedule 参数非法: 需要 0 <= min <= max, got min=%v max=%v", min, max))
+	if min < 0 || max < 0 || min > max || (min == 0 && max == 0) {
+		panic(fmt.Sprintf("cron: NewRandomDelaySchedule 参数非法: 需要 0 <= min <= max 且 (0,0) 非法, got min=%v max=%v", min, max))
 	}
 	return RandomDelaySchedule{Min: min, Max: max}
 }
@@ -533,16 +582,27 @@ type RandomDelaySchedule struct {
 }
 
 // Next 返回当前时间加上 [Min, Max] 范围内随机延迟后的时间。
-// min == max 时确定性地返回 t + min（delta == 0 无随机空间）。
+//
+// 返回值**保证严格晚于入参**（doc.go 契约，#469）：delta>0 且 min=0 时
+// jitter 可能抽到 0（Next 恰等于入参的唯一形态），至少前进 1ns；min == max
+// 时确定性地返回 t + min（delta == 0 无随机空间）。
 func (r RandomDelaySchedule) Next(t time.Time) time.Time {
 	delta := r.Max - r.Min
 	if delta <= 0 {
-		// 防御分支：构造期已校验 0 <= min <= max，正常路径不会进入；
-		// 字面量直构绕过校验时按固定延迟 min 兜底。
-		return t.Add(r.Min)
+		// 防御分支：构造期已校验，字面量直构绕过校验时按固定延迟 min 兜底；
+		// min<=0（含零值结构体）前进到下一整秒界——包级「严格晚于」契约
+		// 不被任何直构形态打破。
+		if r.Min > 0 {
+			return t.Add(r.Min)
+		}
+		return t.Add(time.Second - time.Duration(t.Nanosecond())*time.Nanosecond)
 	}
 	jitter := time.Duration(rand.Int63n(int64(delta)))
-	return t.Add(r.Min + jitter)
+	next := t.Add(r.Min + jitter)
+	if !next.After(t) {
+		next = next.Add(time.Nanosecond)
+	}
+	return next
 }
 
 // Entry 表示一个 cron 条目。
@@ -590,9 +650,25 @@ func NextSchedule(s Schedule, from time.Time, n int) []time.Time {
 }
 
 // RoundDuration 将时间向上取整到指定间隔。
+//
+// precision <= 0：0 视为「不取整」原样返回；负值 panic（#470，对齐
+// mathx.toFixed 与 NewDelaySchedule 的 fail-fast 口径——负精度让 Ceil
+// 方向反转，结果可**小于入参**，「向上取整」被静默改成向下）。
+//
+// 整数算术而非 float64 中转（#470）：float64 对 >2^53 纳秒（约 104 天）的
+// duration 不可精确表示，Ceil 后结果可小于入参；整数除法/取余在 int64 域
+// 内无精度损失。负 d 沿用 Ceil 语义（向 +∞ 取整）：商为负时向零截断恰为
+// ceil，不进补位分支。
 func RoundDuration(d time.Duration, precision time.Duration) time.Duration {
 	if precision == 0 {
 		return d
 	}
-	return time.Duration(math.Ceil(float64(d)/float64(precision))) * precision
+	if precision < 0 {
+		panic(fmt.Sprintf("cron: RoundDuration 参数非法: precision 不能为负, got %v", precision))
+	}
+	q := d / precision
+	if r := d % precision; r != 0 && (d > 0) == (precision > 0) {
+		q++ // 截断丢掉向上取整的 1 份（同号商为正，向零截断=向下）
+	}
+	return q * precision
 }

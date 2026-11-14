@@ -317,7 +317,11 @@ func (s *loadState) walk(node reflect.Value, tree any, path string, errs *[]erro
 		}
 		// 4. 校验（装配完再判，判的是最终值）。
 		if s.reqSet[fpath] || envTag.required {
-			if fv.IsZero() {
+			// 切片补充判定（#479）：非 nil 空切片 IsZero=false，而 env 空串
+			// 恰好解析成非 nil 空切片——同一「用户给了空值」意图，字符串与
+			// yaml null 判失败、切片静默过闸。len==0 一并判未提供，env 空串、
+			// yaml null、显式 [] 三者同裁决。
+			if fv.IsZero() || (fv.Kind() == reflect.Slice && fv.Len() == 0) {
 				*errs = append(*errs, fmt.Errorf("config: 必填字段 %s 未提供（env=%s%s 或 yaml 键 %s）",
 					fpath, s.opts.envPrefix, envTag.name, ykey))
 			}
@@ -357,6 +361,15 @@ func parseEnvTag(raw string) (envTag, error) {
 			t.hasDef = true
 			// default 值可含逗号：取从 default= 起的剩余原文。
 			t.def = strings.Join(parts[i:], ",")[len("default="):]
+			// 剩余段里的裸 required / default= 必须报错（#488）：default 的
+			// 逗号吸收让后续段静默变默认值文本——互斥校验此前只对反序写法
+			// 可达，正序写法 required 被吞进默认值（校验失效 + 默认值串味）。
+			// 逗号吸收是「值含逗号」特性，不是「任意选项都可后置」的口子。
+			for _, rest := range parts[i+1:] {
+				if rest == "required" || strings.HasPrefix(rest, "default=") {
+					return t, fmt.Errorf("env tag 的 default 吸收逗号后出现歧义段 %q（required/default 不得出现在 default 之后）: %q", rest, raw)
+				}
+			}
 			i = len(parts)
 		default:
 			return t, fmt.Errorf("env tag 未知选项 %q: %q", p, raw)
@@ -593,10 +606,20 @@ func setFromYAML(v any, fv reflect.Value) error {
 	case reflect.Float32, reflect.Float64:
 		switch n := v.(type) {
 		case float64:
+			// 越界显式报错（#480）：float 是四个数值分支里最后一个补上
+			// Overflow 检查的——yaml 大数此前静默 +Inf，而 env 路径
+			// ParseFloat(bitSize) 同值报 ErrRange，两源不对称。
+			if fv.OverflowFloat(n) {
+				return fmt.Errorf("浮点 %v 超出 %s 范围", n, fv.Type())
+			}
 			fv.SetFloat(n)
 			return nil
 		case int64:
-			fv.SetFloat(float64(n))
+			f := float64(n)
+			if fv.OverflowFloat(f) {
+				return fmt.Errorf("浮点 %v 超出 %s 范围", n, fv.Type())
+			}
+			fv.SetFloat(f)
 			return nil
 		default:
 			return typeMismatch(fv, v, "请给数字")

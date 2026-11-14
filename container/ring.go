@@ -54,12 +54,17 @@ func (r *Ring[T]) Add(v T) {
 }
 
 // Take 按 FIFO 取出元素；已取空返回零值与 false。
+//
+// 取出即清零槽位（#475，同包 Queue 出队清零 / Slice 删除补尾清零的同一
+// 「释放引用，防大对象滞留」纪律）：对象生命周期不被无谓拉长到槽位覆写。
 func (r *Ring[T]) Take() (T, bool) {
 	var zero T
 	if r.read == r.write {
 		return zero, false
 	}
-	v := r.elements[r.read%r.n]
+	idx := r.read % r.n
+	v := r.elements[idx]
+	r.elements[idx] = zero
 	r.read++
 	return v, true
 }

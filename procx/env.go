@@ -77,52 +77,66 @@ func envAllowed(name string) bool {
 // （cmd.Env 不设即全量继承）就是那条路，不要用白名单「补枚举」可信场景
 // （GIT_* 开放命名空间、SSH_AUTH_SOCK、credential helper 链是活的，静态
 // 枚举列不全，漏的形态是认证莫名失败而非编译错误）。
+// childEnvCaseFold 环境变量名大小写归一开关（#489）：windows 环境变量名
+// 大小写不敏感，白名单（envAllowed）已按大写归一，keep/literal 与去重键
+// 用同一口径——否则按名透传静默丢变量（父进程是 Hf_Token、extra 写
+// HF_TOKEN）、同名双条目（literal 小写没压住父进程大写）。包级变量以便
+// 测试在非 windows 平台注入归一形态。
+var childEnvCaseFold = runtime.GOOS == "windows"
+
 func ChildEnv(extra []string) []string {
+	envName := func(name string) string {
+		if childEnvCaseFold {
+			return strings.ToUpper(name)
+		}
+		return name
+	}
 	keep := map[string]bool{}
-	literal := map[string]string{} // name → KEY=VALUE
+	literal := map[string]string{} // 归一名 → KEY=VALUE
 	var litOrder []string
 	for _, k := range extra {
 		if i := strings.IndexByte(k, '='); i > 0 {
-			name := k[:i]
+			name := envName(k[:i])
 			if _, dup := literal[name]; !dup {
 				litOrder = append(litOrder, name)
 			}
 			literal[name] = k
 		} else {
-			keep[k] = true
+			keep[envName(k)] = true
 		}
 	}
 	var env []string
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
-		if _, isLit := literal[name]; isLit {
-			continue // 字面注入项优先，不透传父进程同名值
+		if _, isLit := literal[envName(name)]; isLit {
+			continue // 字面注入项优先，不透传父进程同名值（含异大小写）
 		}
-		if envAllowed(name) || keep[name] {
+		if envAllowed(name) || keep[envName(name)] {
 			env = append(env, kv)
 		}
 	}
 	for _, name := range litOrder {
 		env = append(env, literal[name])
 	}
-	// 先到先得去重（含 os.Environ() 自身可能出现的同名项）：显式给的压过
-	// 缺省项，每 key 至多一项。
+	// 先到先得去重（含 os.Environ() 自身可能出现的同名项；windows 按归一
+	// 名去重）：显式给的压过缺省项，每 key 至多一项。
 	out := make([]string, 0, len(env)+2)
 	seen := make(map[string]bool, len(env)+2)
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
-		if seen[name] {
+		key := envName(name)
+		if seen[key] {
 			continue
 		}
-		seen[name] = true
+		seen[key] = true
 		out = append(out, kv)
 	}
 	for _, kv := range []string{"GIT_TERMINAL_PROMPT=0", "CI=1"} {
 		name, _, _ := strings.Cut(kv, "=")
-		if seen[name] {
+		if seen[envName(name)] {
 			continue // 显式项在位：缺省值不得覆盖，也不得并列出第二项
 		}
-		seen[name] = true
+		seen[envName(name)] = true
 		out = append(out, kv)
 	}
 	return out
