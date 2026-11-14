@@ -14,6 +14,7 @@ const (
 )
 
 // SpecSchedule 根据 cron 表达式调度任务。
+// Location 为 nil 时使用 time.Local；零值没有可匹配的月份，Next 返回零值时间。
 type SpecSchedule struct {
 	Second, Minute, Hour, Dom, Month, Dow uint64
 	Location                              *time.Location
@@ -174,7 +175,11 @@ func (s *SpecSchedule) Next(t time.Time) time.Time {
 }
 
 func (s *SpecSchedule) next(t time.Time) time.Time {
-	t = t.In(s.Location)
+	location := s.Location
+	if location == nil {
+		location = time.Local
+	}
+	t = t.In(location)
 
 	// 移动到下一秒
 	t = t.Add(1*time.Second - time.Duration(t.Nanosecond())*time.Nanosecond)
