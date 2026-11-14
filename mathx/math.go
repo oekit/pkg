@@ -36,6 +36,12 @@ func RandIntn(maxInt int) int {
 // ~1.8e308/10^n）同样返回商。乘积溢出成 ±Inf 后 math.Trunc(+Inf)=+Inf、
 // +Inf/m=+Inf，此前被原样放行（#317）。
 func DivisionN(dividend, divisor float64, n int) float64 {
+	if n < 0 {
+		// #467：负精度与 toFixed 同口径 fail-fast——此前静默按负位数计算，
+		// n≤-308 时 math.Pow10(n) 下溢为 0 不触发 IsInf 守卫，
+		// math.Trunc(prod)/m 产出 NaN（同包两套口径收口成一套）。
+		panic("mathx: n must be >= 0, got " + fmt.Sprintf("%d", n))
+	}
 	if dividend == 0 || divisor == 0 {
 		return 0
 	}
