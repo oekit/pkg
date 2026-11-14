@@ -14,7 +14,9 @@ import (
 //	u := mathx.NewUnstable(0.1)
 //	ttl := u.AroundDuration(30 * time.Minute) // ∈ [27min, 33min]
 //
-// 零值不可直接使用，经 NewUnstable 创建（deviation 夹到 [0,1]）。
+// 零值即 deviation=0（恒等返回），可直接使用（#490——此前「零值不可直接
+// 使用」与 NewUnstable(0) 恰好返回零值自相矛盾）；NewUnstable 负责把任意
+// 输入夹到 [0,1]。
 type Unstable struct {
 	deviation float64
 }

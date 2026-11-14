@@ -54,10 +54,32 @@ func WithRetryAfterSink(ctx context.Context) context.Context {
 // 解析失败/数值荒谬；超可信上限的建议原样返回，采信与否由 SelectRetryDelay 判定，
 // #363）。重试环在计算退避时调用。
 // sink 不随尝试清除：仅对本次失败确为限流的场景采信（陈旧建议不得套用到
-// 非限流错误上），门控归调用方的重试策略。
+// 非限流错误上），门控归调用方的重试策略。跨尝试复用同一 sink 的自建重试
+// 环应在每次物理调用前 ClearRetryAfter（#496）。
 func RetryAfterFrom(ctx context.Context) time.Duration {
 	if h, ok := ctx.Value(retryAfterKey{}).(*retryAfterHolder); ok {
 		return h.get()
+	}
+	return 0
+}
+
+// ClearRetryAfter 作废 sink 中已捕获的建议并返回作废前的值（诊断用；未安装
+// sink 返回 0）。
+//
+// 给第三方自建重试环的按尝试清除原语（#496）：sink 此前只写不清——跨尝试
+// 复用同一 sink 时，某一轮 429 不带 Retry-After 头，RetryAfterFrom 仍返回
+// 上一轮的旧窗口，陈旧建议被当成「本轮也是限流」的证据采信。正确姿势是
+// **每次物理调用前 Clear**（或读完建议后立即 Clear）：本轮确为限流且带
+// 响应头时传输层会重新写入；不带则读到 0，退避回落本地曲线。
+// agentkit/llm 的重试环（每轮注入全新 sink）不受影响；本 API 是同一纪律
+// 在「复用 sink」形态下的替身。
+func ClearRetryAfter(ctx context.Context) time.Duration {
+	if h, ok := ctx.Value(retryAfterKey{}).(*retryAfterHolder); ok {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		d := h.d
+		h.d = 0
+		return d
 	}
 	return 0
 }

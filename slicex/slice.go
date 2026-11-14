@@ -87,12 +87,29 @@ func GroupBy[T any, K comparable](slice []T, fn func(T) K) map[K][]T {
 }
 
 // ToMap 将切片转为 map，key 由 keyFn 提取。
+// 重复 key 取**最后一个**（与 Go map 字面量同语义，#491）；需要拒绝重复键
+// （fail-loud，对齐 strmap.ErrDuplicateKey 的构建期口径）用 ToMapStrict。
 func ToMap[T any, K comparable](slice []T, keyFn func(T) K) map[K]T {
 	result := make(map[K]T, len(slice))
 	for _, v := range slice {
 		result[keyFn(v)] = v
 	}
 	return result
+}
+
+// ToMapStrict 将切片转为 map，key 由 keyFn 提取；出现重复 key 报错（#491）
+// ——分组/索引场景 keyFn 碰撞是常态，静默覆盖 = 静默丢元素。需要 last-wins
+// 语义用 ToMap。
+func ToMapStrict[T any, K comparable](slice []T, keyFn func(T) K) (map[K]T, error) {
+	result := make(map[K]T, len(slice))
+	for _, v := range slice {
+		k := keyFn(v)
+		if _, dup := result[k]; dup {
+			return nil, fmt.Errorf("slicex: 重复 key %v（last-wins 语义用 ToMap）", k)
+		}
+		result[k] = v
+	}
+	return result, nil
 }
 
 // Chunk 将切片分成指定大小的块。

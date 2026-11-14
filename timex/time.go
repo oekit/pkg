@@ -28,6 +28,10 @@ func GetCurrentTime() int64 {
 }
 
 // GetCurrentDate 返回当前日期字符串，默认格式为 "2006-01-02"。
+// **按本机时区格式化**（time.Unix 的 Format 绑定本机 zone）：跨时区部署时
+// 同一时刻的日期字符串随机器时区变化（#493，与 TimestampString 的 UTC 口径、
+// Date2Stamp 的本地解析口径并存，各有声明）；需要固定时区请自行 time.Now().
+// In(loc) 后 Format。
 func GetCurrentDate(format string) string {
 	timestamp := time.Now().Unix()
 	tm := time.Unix(timestamp, 0)
@@ -45,6 +49,8 @@ func GetCurrentDayStartTime() int64 {
 }
 
 // StampString2Date 将时间戳字符串转换为日期格式。
+// **按本机时区格式化**（time.Unix 的 Format 绑定本机 zone，#493）：跨时区
+// 部署时同一时间戳的日期字符串随机器时区变化。
 // 解析失败时返回空字符串。
 func StampString2Date(timestampStr, format string) string {
 	timestamp, err := strconv.ParseInt(timestampStr, 10, 64)
@@ -60,6 +66,8 @@ func StampString2Date(timestampStr, format string) string {
 }
 
 // StampInt2Date 将 Unix 时间戳转换为日期格式。
+// **按本机时区格式化**（time.Unix 的 Format 绑定本机 zone，#493）：跨时区
+// 部署时同一时间戳的日期字符串随机器时区变化。
 func StampInt2Date(timestamp int64, format string) string {
 	tm := time.Unix(timestamp, 0)
 	if format == "" {
@@ -129,7 +137,14 @@ func layoutHasZone(layout string) bool {
 
 // NDateBefore 获取前 n 天的日期列表。
 // isMulti 为 true 时返回前 n 天每一天的日期，否则只返回第 n 天的日期。
+//
+// n <= 0 返回空切片（#472）：「前 0 天」「前负数天」没有良定义语义——
+// 此前负 n 在单日分支经 AddDate(0,0,-1*n) 反号成**未来日期**、multi 分支
+// 静默返回空，两种形态都无信号（日切统计/报表窗口静默取到未来日期）。
 func NDateBefore(n int, isMulti bool, format string) []string {
+	if n <= 0 {
+		return []string{}
+	}
 	var rs []string
 	nTime := time.Now()
 
@@ -154,6 +169,12 @@ func NDateBefore(n int, isMulti bool, format string) []string {
 }
 
 // ConvertTimezone 将日期时间从指定时区转换为本地时区。
+//
+// DST 前跳修正（#473，对齐 Date2Stamp #261 同一口径）：fromLoc 时区里
+// **不存在**的墙钟时刻（如 America/Santiago 2026-09-06 00:00:00 前跳直接
+// 到 01:00），ParseInLocation 会把结果静默归一到**前一天**而解析不报错
+// ——输入日期被改写无信号。检测到归一挪日时锚定目标日**首个存在瞬间**，
+// 再补回当天内的时刻偏移（宁可是当天 01:00，也不是前一天 23:00）。
 func ConvertTimezone(datetime string, fromLoc string) (string, error) {
 	loc, err := time.LoadLocation(fromLoc)
 	if err != nil {
@@ -162,6 +183,23 @@ func ConvertTimezone(datetime string, fromLoc string) (string, error) {
 	t, err := time.ParseInLocation(stdLayout, datetime, loc)
 	if err != nil {
 		return "", err
+	}
+	// 歧义检测（同 Date2Stamp）：用 UTC 解析同一墙钟串拿到「输入写的字段」。
+	// 日期一致（含回拨日的重复墙钟——ParseInLocation 取较早一次，日期不变）
+	// 则无归一篡改，按解析结果返回；UTC 对照解析失败（非法输入已在上一步
+	// 拦下，此处防御）同样按解析结果返回。
+	ref, refErr := time.ParseInLocation(stdLayout, datetime, time.UTC)
+	if refErr == nil {
+		if t.Year() == ref.Year() && t.Month() == ref.Month() && t.Day() == ref.Day() {
+			return time.Unix(t.Unix(), 0).Format(stdLayout), nil
+		}
+		// 输入的墙钟日期被归一挪走：锚定目标日首个存在瞬间，补回当天内的
+		// 时刻偏移（00:30 这类落在缺口内的时刻顺延到缺口之后，日期不丢）。
+		st := dayStart(ref.Year(), ref.Month(), ref.Day(), loc)
+		off := time.Duration(ref.Hour())*time.Hour +
+			time.Duration(ref.Minute())*time.Minute +
+			time.Duration(ref.Second())*time.Second
+		return time.Unix(st.Add(off).Unix(), 0).Format(stdLayout), nil
 	}
 	return time.Unix(t.Unix(), 0).Format(stdLayout), nil
 }
