@@ -94,8 +94,19 @@
 // MSG，STRUCTURED-DATA 恒 NILVALUE；分帧用非透明式（行=一帧，MSG 内换行
 // 净化为空格），octet-counting/TLS 不在首版。
 //
-// 本包做「签」「验」「转发」三面的字段约定单源；不读请求体/不判 IP 白名单
-// /不解析事件类型/不做重试退避——时间戳防重放窗的判定在收端（发出端只按
-// 约定打时间戳与幂等 ID，消费端按 DefaultDeliveryHeader 去重），转发面的
-// 轮询节奏与告警归宿主。
+// # IM 机器人载荷构造器（#485）
+//
+// 企业微信/钉钉/飞书 IM 机器人的出向 JSON 载荷单源：msgtype/markdown/
+// text 三家的字段约定与 header 名同属「平台历史约定」，写死在具名构造器
+// （WecomMarkdownPayload/DingtalkMarkdownPayload/FeishuTextPayload）里，
+// BuildIMPayload 按渠道名分发替代宿主各自的策略表。边界哲学与签名器
+// 一致：纯函数零网络——发送、鉴权（钉钉 URL 签名/飞书 payload 签名随
+// 宿主发送面走）、超长截断都不在本包（不做有损截断：静默截断把「没发
+// 全」伪装成「发完了」）。钉钉 markdown 的 title 是宿主内容（构造器收参
+// 不写死）；变体范围收 issue 原样三种，卡片深水区按需再进。
+//
+// 本包做「签」「验」「转发」「IM 载荷构造」四面的字段约定单源；不读请求
+// 体/不判 IP 白名单/不解析事件类型/不做重试退避——时间戳防重放窗的判定
+// 在收端（发出端只按约定打时间戳与幂等 ID，消费端按 DefaultDeliveryHeader
+// 去重），转发面的轮询节奏与告警归宿主。
 package webhook
