@@ -103,6 +103,29 @@ func Fingerprint(s Surface) (Version, error) {
 	}, nil
 }
 
+// FingerprintBytes 计算宿主自产规范形字节的版本指纹：sha256 → 48bit 十六进制。
+// 与 [Fingerprint] 的分工：规范化一步由宿主自己完成（保住既有字节布局），
+// canon 只负责哈希与版本格式——宿主历史指纹是「对宿主自有布局的字节取
+// sha256 前 12 hex」时，经本入口复算与历史值逐例一致，存量指纹无需迁移
+// （#514：规范化与指纹解耦的收编接缝）。
+//
+// canonical 必须是宿主已折算好的规范形字节（排序/去重/缺省折算纪律同样
+// 适用——同语义必须同版）；为空（nil/零长）按 [ErrBadSurface] 拒绝。
+// schema 空回退 [DefaultSchema]（与 Fingerprint 同口径）。
+func FingerprintBytes(schema string, canonical []byte) (Version, error) {
+	if len(canonical) == 0 {
+		return Version{}, fmt.Errorf("%w: 规范形字节为空", ErrBadSurface)
+	}
+	if schema == "" {
+		schema = DefaultSchema
+	}
+	sum := sha256.Sum256(canonical)
+	return Version{
+		Schema: schema,
+		Digest: hex.EncodeToString(sum[:digestLen]),
+	}, nil
+}
+
 // FacetDigest 单个 facet 值的规范形指纹（48bit 十六进制）：按 facet 吊销/
 // 比对时可独立持久化的切片指纹，与会话行记的 policy_version 配套。
 // 名字不进切片指纹——切片指纹只对「值」负责，名字是装配层的键。
@@ -185,6 +208,37 @@ func Diff(old, cur Surface) ([]Change, error) {
 	slices.SortFunc(changed, func(a, b Change) int { return strings.Compare(a.Name, b.Name) })
 	slices.SortFunc(removed, func(a, b Change) int { return strings.Compare(a.Name, b.Name) })
 	return append(append(added, changed...), removed...), nil
+}
+
+// DiffDigests 按名字逐片比较两代已持久化的 facet 指纹，返回变更清单。
+// 入参是宿主已存的「facet 名 → 切片指纹」映射（如快照行里的 facets_json）——
+// [Diff] 需要重建 Surface，而宿主手里往往只有持久化指纹、重建不出原面
+// （#514）；本入口直接吃指纹映射，无 JSON、无编码，故无 error。
+//
+// 输出与 [Diff] 同口径：Added 在前、Changed 居中、Removed 在后，各段按
+// Name 字典序；同名同指纹不报；无变更返回 nil。指纹值不作格式校验
+// （与 [FacetDigest] 产出同形即可比较）。
+func DiffDigests(old, cur map[string]string) []Change {
+	var added, changed, removed []Change
+	for name, od := range old {
+		cd, ok := cur[name]
+		if !ok {
+			removed = append(removed, Change{Kind: FacetRemoved, Name: name, From: od})
+			continue
+		}
+		if cd != od {
+			changed = append(changed, Change{Kind: FacetChanged, Name: name, From: od, To: cd})
+		}
+	}
+	for name, cd := range cur {
+		if _, ok := old[name]; !ok {
+			added = append(added, Change{Kind: FacetAdded, Name: name, To: cd})
+		}
+	}
+	slices.SortFunc(added, func(a, b Change) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(changed, func(a, b Change) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(removed, func(a, b Change) int { return strings.Compare(a.Name, b.Name) })
+	return append(append(added, changed...), removed...)
 }
 
 // facetDigests 快照内全部 facet 名 → 切片指纹（重名/空名由 canonicalBytes

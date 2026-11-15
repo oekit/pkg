@@ -1,6 +1,7 @@
 package canon
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -276,5 +277,134 @@ func TestBadSurfaceErrors(t *testing.T) {
 func TestChangeKindStringUnknown(t *testing.T) {
 	if got := ChangeKind(99).String(); got != fmt.Sprintf("ChangeKind(%d)", 99) {
 		t.Fatalf("未知形态 = %q", got)
+	}
+}
+
+// TestFingerprintBytesMatchesSha256Golden 契约（#514）：宿主自产规范形字节
+// 经 FingerprintBytes 复算 = 历史实现（sha256 前 12 hex）逐例一致——canon
+// 只负责哈希与版本格式，不重排宿主字节。
+func TestFingerprintBytesMatchesSha256Golden(t *testing.T) {
+	cases := []struct {
+		name      string
+		schema    string
+		canonical string
+	}{
+		{"canon 布局", "policyver/v1", `{"schema":"policyver/v1","facets":{"role:admin":["a","b"]}}`},
+		{"宿主历史布局", "bq_session.policy_version", `{"v":1,"role":"admin","scopes":["read","write"]}`},
+		{"空 schema 回退缺省", "", `{"k":"x"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			sum := sha256.Sum256([]byte(c.canonical))
+			want := hex.EncodeToString(sum[:6])
+			got, err := FingerprintBytes(c.schema, []byte(c.canonical))
+			if err != nil {
+				t.Fatalf("FingerprintBytes: %v", err)
+			}
+			if got.Digest != want {
+				t.Fatalf("digest = %s，应为历史实现值 %s", got.Digest, want)
+			}
+			wantSchema := c.schema
+			if wantSchema == "" {
+				wantSchema = DefaultSchema
+			}
+			if got.Schema != wantSchema {
+				t.Fatalf("schema = %q，应为 %q", got.Schema, wantSchema)
+			}
+		})
+	}
+
+	// 与 Fingerprint 同源：canon 自己的规范形字节经两个入口复算同版——
+	// 宿主从 canon 形态迁历史字节时不因入口不同而换指纹。
+	s := Surface{
+		Schema: "policyver/v1",
+		Facets: []Facet{{Name: "role:admin", Value: []string{"a", "b"}}},
+	}
+	vf, err := Fingerprint(s)
+	if err != nil {
+		t.Fatalf("Fingerprint: %v", err)
+	}
+	cb, err := canonicalBytes(s)
+	if err != nil {
+		t.Fatalf("canonicalBytes: %v", err)
+	}
+	vb, err := FingerprintBytes("policyver/v1", cb)
+	if err != nil {
+		t.Fatalf("FingerprintBytes: %v", err)
+	}
+	if vf != vb {
+		t.Fatalf("同一规范形字节两入口应同版：%s vs %s", vf, vb)
+	}
+}
+
+// TestFingerprintBytesRejectsEmpty 空规范形字节拒绝（无版本可言），
+// errors.Is 判定 ErrBadSurface。
+func TestFingerprintBytesRejectsEmpty(t *testing.T) {
+	for _, b := range [][]byte{nil, {}} {
+		if _, err := FingerprintBytes("s", b); !errors.Is(err, ErrBadSurface) {
+			t.Fatalf("canonical = %v 应按 ErrBadSurface 拒绝，got %v", b, err)
+		}
+	}
+}
+
+// TestDiffDigestsOrderAndParity 契约（#514）：对两代持久化指纹输出
+// Added/Changed/Removed，顺序与 Diff 同口径（A 前居中 R 后，段内 Name
+// 字典序）；与 Diff 对同一对快照的产出逐项一致——宿主无需重建 Surface。
+func TestDiffDigestsOrderAndParity(t *testing.T) {
+	old := Surface{Facets: []Facet{
+		{Name: "zeta", Value: "keep"},
+		{Name: "alpha", Value: "v1"},
+		{Name: "gone", Value: "x"},
+		{Name: "mid", Value: "y"},
+	}}
+	cur := Surface{Facets: []Facet{
+		{Name: "zeta", Value: "keep"}, // 同版不报
+		{Name: "alpha", Value: "v2"},
+		{Name: "beta", Value: "new"}, // 新增
+		{Name: "mid", Value: "y2"},
+	}}
+	changes, err := Diff(old, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	oldD, err := facetDigests(old)
+	if err != nil {
+		t.Fatalf("facetDigests(old): %v", err)
+	}
+	curD, err := facetDigests(cur)
+	if err != nil {
+		t.Fatalf("facetDigests(cur): %v", err)
+	}
+	got := DiffDigests(oldD, curD)
+	if !reflect.DeepEqual(got, changes) {
+		t.Fatalf("DiffDigests 与 Diff 产出不一致：\n got = %+v\nwant = %+v", got, changes)
+	}
+	// 顺序钉死：Added(1) → Changed(2) → Removed(2)，段内字典序。
+	want := []Change{
+		{Kind: FacetAdded, Name: "beta", To: curD["beta"]},
+		{Kind: FacetChanged, Name: "alpha", From: oldD["alpha"], To: curD["alpha"]},
+		{Kind: FacetChanged, Name: "mid", From: oldD["mid"], To: curD["mid"]},
+		{Kind: FacetRemoved, Name: "gone", From: oldD["gone"]},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("产出 = %+v，应为 %+v", got, want)
+	}
+}
+
+// TestDiffDigestsEdge 无变更返回 nil；空映射安全；宿主侧值可比对历史串。
+func TestDiffDigestsEdge(t *testing.T) {
+	if got := DiffDigests(
+		map[string]string{"a": "1", "b": "2"},
+		map[string]string{"b": "2", "a": "1"},
+	); got != nil {
+		t.Fatalf("同版应返回 nil，got %+v", got)
+	}
+	if got := DiffDigests(nil, nil); got != nil {
+		t.Fatalf("空对空应返回 nil，got %+v", got)
+	}
+	// 历史指纹串可直接当入参（格式不作校验）。
+	got := DiffDigests(map[string]string{"f": "dead00beef11"}, map[string]string{"f": "cafe00baab12"})
+	if len(got) != 1 || got[0].Kind != FacetChanged || got[0].From != "dead00beef11" || got[0].To != "cafe00baab12" {
+		t.Fatalf("changed = %+v，不合预期", got)
 	}
 }
