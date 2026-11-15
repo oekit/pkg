@@ -2,6 +2,14 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.51.0] — 2026-11-16
+
+- - canon 补宿主既有规范形字节指纹入口 `FingerprintBytes` 与指纹 diff `DiffDigests`：历史 12-hex 布局可原样复算，存量快照不再因收编 canon 集体失配（#514）。
+- shellx 补 shlex.quote 语义的最小引用变体 `IsSafeWord`/`QuoteMinimal`：省引号策略单源，宿主不再各自复制正则（#515）。
+- sse 导出传输无关的游标/回放内核 `ParseCursor`/`Cursor`/`ReplaySince`：net/http 与 Hertz 等响应端共用同一去重语义，「订阅先于回放」约定可复用（#516）。
+
+关联问题单：pkg#514、pkg#515、pkg#516。
+
 ## [v0.50.0] — 2026-11-15
 
 - feat: 下沉 sse 游标回放应答器（订阅先于回放去重+心跳注释帧+游标窗口，#483）与 canon 策略面规范形指纹（canonical→版本哈希+facet diff，#484）。BREAKING：摘除产品域两件 licensx(#486)/webhook IM 载荷(#485)——v0.49.0 曾随 tag 发出，现改道 yi-nology/gopkg（revert #508），0.x 阶段直接摘除，依赖方改接 yi-nology/gopkg。
