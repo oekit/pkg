@@ -41,12 +41,25 @@
 // 必须同版本」的输入域下可忽略，但绝不是密码学承诺——任何把版本串当
 // 完整性证明的用法都是错的（防篡改请用完整 sha256 或签名）。
 //
+// # 宿主既有规范形字节（迁移接缝）
+//
+// 已上线宿主往往已经持久化了历史版本指纹，且其规范形字节布局与本包的
+// canonicalDoc 不同。强制切到 [Fingerprint] 会让存量快照全部失配（一夜
+// 之间被判「策略已变」）。[FingerprintBytes] 把「规范化」与「指纹」解耦：
+// 宿主继续按历史布局自产规范形字节，canon 只做 sha256 + 48bit 版本串
+// 格式化，历史 12-hex 值可原样复算。schema 参数只是版本串前缀，不参与
+// 哈希；同一份字节换 schema 标签不换摘要。需要与 [Fingerprint] 并存时，
+// 两条入口的摘要口径一致（同字节同值），差异只在「schema 是否进规范形」。
+//
 // # facet diff
 //
 // [Diff] 按 facet 名逐片比较各自规范形指纹，产出 Added/Changed/Removed
 // 清单（同版 facet 不报）。按 facet 吊销受影响面（会话按旧版放行的
 // 记录、mandate 重检）直接消费这份清单；[FacetDigest] 可独立持久化
 // 单个 facet 的指纹（会话行记 policy_version + 命中 facet 集）。
+// [DiffDigests] 是同一比较口径的「已持久化指纹」入口：宿主只有两代
+// facet 指纹 map、重建不出 Surface 时直接消费它，顺序与 [Diff] 一致
+// （Added→Changed→Removed，各段按 facet 名排序）。
 //
 // # 用法
 //
