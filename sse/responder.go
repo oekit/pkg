@@ -67,9 +67,11 @@ func NewResponder(src Source, replay ReplayFunc, opts ...ResponderOption) *Respo
 }
 
 // ServeHTTP 应答一条 SSE 流。游标取 `Last-Event-ID` 请求头（EventSource
-// 重连自动携带；缺省 0 = 全量回放；非法值 400）。
+// 重连自动携带；缺省 0 = 全量回放；非法值 400）。游标判定与回放/去重
+// 内核分别由 [ParseCursor] / [ReplaySince] 提供——其它传输（Hertz/
+// WebSocket 网关等）复用同一导出面即可保持与本文档逐字一致的语义。
 func (r *Responder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	cursor, ok := parseCursor(req.Header.Get("Last-Event-ID"))
+	cursor, ok := ParseCursor(req.Header.Get("Last-Event-ID"))
 	if !ok {
 		http.Error(w, "Last-Event-ID 必须是无符号整数", http.StatusBadRequest)
 		return
@@ -84,19 +86,17 @@ func (r *Responder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	fl.Flush() // 头先出：客户端 EventSource 尽早进入 OPEN 态
 
 	// 订阅先于回放（核心不变量）：先拿实时面通道，再查窗口——缝隙归零，
-	// 重叠部分靠下面的幂等跳帧去重。契约细节见包文档。
+	// 重叠部分靠 [Cursor.Accept] 的幂等跳帧去重。契约细节见包文档。
 	frames, cancel := r.src.Subscribe()
 	defer cancel()
 
-	last := cursor
-	for _, e := range r.replay(last) {
-		if e.ID <= last {
-			continue // 回放窗口内的乱序/重叠帧跳过（宿主契约的防御性兜底）
-		}
+	// 回放/去重内核与 Hertz 等其它传输共用同一导出面（[ReplaySince]），
+	// 本方法只剩 net/http 的写帧与心跳适配。
+	backlog, cur := ReplaySince(cursor, r.replay)
+	for _, e := range backlog {
 		if !writeFrame(w, fl, e.frame()) {
 			return
 		}
-		last = e.ID
 	}
 
 	// 心跳注释帧：空闲保活，防中间层掐流（语义见包文档）。
@@ -116,13 +116,12 @@ func (r *Responder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			if !ok {
 				return // Hub Close 或掉队断流：客户端带游标重连补窗
 			}
-			if e.ID <= last {
+			if !cur.Accept(e) {
 				continue // 订阅/回放重叠去重：同 ID 只写一次
 			}
 			if !writeFrame(w, fl, e.frame()) {
 				return
 			}
-			last = e.ID
 		}
 	}
 }
