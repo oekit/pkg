@@ -1,9 +1,11 @@
 // Package shellx 提供 POSIX shell 的参数转义与分词原语。
 //
-// Quote 把任意字符串转义成**一个** shell word；QuoteArgv 把一组参数转义成
-// 一条命令行；Split 是它们的逆运算——把一条命令行拆回 argv（未闭合引号、
-// 尾随转义报错，不做尽力解析）。三者都是纯函数，不做策略判断——是否该拒绝
-// 某个输入由调用方决定（换行、路径越界这类各有各的规则，见 pathx 与本包的文档）。
+// Quote 把任意字符串转义成**一个** shell word；QuoteMinimal 按
+// CPython shlex.quote 的语义做最小引用（安全词原样、危险词才加引号）；
+// QuoteArgv 把一组参数转义成一条命令行；Split 是它们的逆运算——把一条
+// 命令行拆回 argv（未闭合引号、尾随转义报错，不做尽力解析）。它们都是
+// 纯函数，不做拒绝策略——是否该拒绝某个输入由调用方决定（换行、路径
+// 越界这类各有各的规则，见 pathx 与本包的文档）。
 //
 // 为什么需要它：把外部输入拼进 shell 命令时，不转义就等于把命令交给对方。
 // "a.txt; rm -rf /" 是**两条命令**而不是一个文件名；含空格的路径会被拆成
@@ -17,11 +19,21 @@
 // 空字符串是一个容易漏的边界：空参数仍然是一个参数，丢掉它会让
 // "cmd ” arg" 变成 "cmd arg"，参数整体错位。所以 Quote("") 返回 "”"。
 //
+// QuoteMinimal 是 Quote 的策略包装，不引入第二套转义算法：只决定「这个
+// 词能不能省引号」，引号内的拼接仍由 Quote 负责（内嵌单引号输出与 Quote
+// 逐字节一致）。可省引号的判据是 CPython shlex.quote 的既定语义：ASCII
+// \w 与 @%+=:,./- 之外一律不安全（非 ASCII 也不安全，对齐 re.ASCII）。
+// 这份策略表单源在本包，宿主不必再各抄一份正则——少一个 : 或 % 不会报错，
+// 只会让路径/地址类参数突然多一对或漏一对引号。
+//
 // 用法:
 //
-//	shellx.Quote("/tmp/a b.txt")   // "'/tmp/a b.txt'"
-//	shellx.Quote("it's")            // "'it'\\''s'"
-//	shellx.QuoteArgv("rm", "-f", p) // "rm '-f' '/tmp/x'" —— 逐个转义，程序名自己按需
+//	shellx.Quote("/tmp/a b.txt")      // "'/tmp/a b.txt'"
+//	shellx.Quote("it's")              // "'it'\\''s'"
+//	shellx.QuoteMinimal("ls")         // "ls"（安全词原样）
+//	shellx.QuoteMinimal("a b")        // "'a b'"（危险词走 Quote）
+//	shellx.QuoteMinimal("")           // "''"（空参数仍占位）
+//	shellx.QuoteArgv("rm", "-f", p)   // "rm '-f' '/tmp/x'" —— 逐个转义，程序名自己按需
 //
 // 与 pathx 的关系是两个不同的问题：pathx 问「这个路径合法吗」（越界即拒绝），
 // shellx 问「这个字符串怎么写进命令行才不会被 shell 解释」。两者互补，

@@ -278,3 +278,159 @@ func TestChangeKindStringUnknown(t *testing.T) {
 		t.Fatalf("未知形态 = %q", got)
 	}
 }
+
+// TestFingerprintBytesHostLayout 契约：宿主自产规范形字节（历史布局）经
+// FingerprintBytes 复算，与历史 12-hex 指纹逐字一致。合成本例的布局刻意
+// 与 canon 的 canonicalDoc 不同（facets 是数组、带额外字段、键序也不同），
+// 证明本入口只哈希、不重排、不重新规范化。
+func TestFingerprintBytesHostLayout(t *testing.T) {
+	host := []byte(`{"scope":"tenant-a","v":3,"facets":[{"k":"alpha","d":"1a2b3c4d5e6f"},{"k":"beta","d":"abcdef123456"}]}`)
+	const wantDigest = "bfa439c8f3d1" // sha256(host) 前 48bit：历史实现同值
+
+	v, err := FingerprintBytes("hostver/v3", host)
+	if err != nil {
+		t.Fatalf("FingerprintBytes: %v", err)
+	}
+	if v.Schema != "hostver/v3" || v.Digest != wantDigest {
+		t.Fatalf("FingerprintBytes = %s，应为 hostver/v3:%s", v, wantDigest)
+	}
+	if got, want := v.String(), "hostver/v3:"+wantDigest; got != want {
+		t.Fatalf("String() = %q，应为 %q", got, want)
+	}
+
+	// schema 只是版本串前缀，不参与哈希：换命名空间/升格标签不改摘要。
+	// （与 Fingerprint 不同——后者把 schema 写进规范形再哈希。）
+	v2, err := FingerprintBytes("hostver/v4", host)
+	if err != nil {
+		t.Fatalf("FingerprintBytes(schema v4): %v", err)
+	}
+	if v2.Digest != wantDigest {
+		t.Fatalf("schema 不应进哈希：%s vs %s", v2, v)
+	}
+
+	// 空 schema 回退 DefaultSchema；同一字节重复计算稳定。
+	v3, err := FingerprintBytes("", host)
+	if err != nil {
+		t.Fatalf("FingerprintBytes(空 schema): %v", err)
+	}
+	if v3.Schema != DefaultSchema {
+		t.Fatalf("缺省 schema = %q，应为 %q", v3.Schema, DefaultSchema)
+	}
+	v4, _ := FingerprintBytes("hostver/v3", host)
+	if v4 != v {
+		t.Fatalf("同一字节应稳定同版：%s vs %s", v4, v)
+	}
+
+	// 字节变则指纹变（不规范化，但哈希必须敏感）。
+	changed := []byte(`{"scope":"tenant-a","v":3,"facets":[{"k":"alpha","d":"1a2b3c4d5e6f"},{"k":"beta","d":"abcdef123457"}]}`)
+	v5, _ := FingerprintBytes("hostver/v3", changed)
+	if v5.Digest == wantDigest {
+		t.Fatal("规范形字节变化必须换指纹")
+	}
+}
+
+// TestFingerprintBytesEmptyRejected 空规范形字节 fail-fast：空面无版本可言
+// （与 [Fingerprint] 拒绝空面同口径），且 errors.Is 可判定。
+func TestFingerprintBytesEmptyRejected(t *testing.T) {
+	for _, b := range [][]byte{nil, {}} {
+		if _, err := FingerprintBytes("hostver/v1", b); !errors.Is(err, ErrBadSurface) {
+			t.Fatalf("空字节应 ErrBadSurface，got %v", err)
+		}
+	}
+}
+
+// TestFingerprintSharesBytesKernel 契约：Fingerprint 与 FingerprintBytes
+// 走同一条哈希/版本格式化管线——同一份规范形字节得到同一 Version。
+func TestFingerprintSharesBytesKernel(t *testing.T) {
+	s := Surface{Schema: "hostver/v2", Facets: []Facet{{Name: "alpha", Value: []string{"a", "b"}}}}
+	b, err := canonicalBytes(s)
+	if err != nil {
+		t.Fatalf("canonicalBytes: %v", err)
+	}
+	v, err := Fingerprint(s)
+	if err != nil {
+		t.Fatalf("Fingerprint: %v", err)
+	}
+	vb, err := FingerprintBytes(s.Schema, b)
+	if err != nil {
+		t.Fatalf("FingerprintBytes: %v", err)
+	}
+	if v != vb {
+		t.Fatalf("Fingerprint 与 FingerprintBytes 应同值：%s vs %s", v, vb)
+	}
+}
+
+// TestDiffDigests 契约：直接吃两代 facet 指纹 map，输出与 [Diff] 同口径的
+// Added/Changed/Removed；顺序确定（Added→Changed→Removed，各段按名排序），
+// 同指纹不报，nil/空 map 合法。
+func TestDiffDigests(t *testing.T) {
+	old := map[string]string{
+		"alpha": "111111111111",
+		"beta":  "222222222222", // unchanged
+		"gamma": "333333333333", // changed
+	}
+	cur := map[string]string{
+		"epsilon": "555555555555",
+		"delta":   "444444444444",
+		"gamma":   "999999999999",
+		"beta":    "222222222222",
+	}
+	want := []Change{
+		{Kind: FacetAdded, Name: "delta", To: "444444444444"},
+		{Kind: FacetAdded, Name: "epsilon", To: "555555555555"},
+		{Kind: FacetChanged, Name: "gamma", From: "333333333333", To: "999999999999"},
+		{Kind: FacetRemoved, Name: "alpha", From: "111111111111"},
+	}
+	// 多轮重复：map 迭代序随机，顺序必须由函数保证而非碰巧。
+	for i := 0; i < 50; i++ {
+		if got := DiffDigests(old, cur); !reflect.DeepEqual(got, want) {
+			t.Fatalf("第 %d 轮 DiffDigests = %+v，应为 %+v", i+1, got, want)
+		}
+	}
+
+	if got := DiffDigests(nil, nil); len(got) != 0 {
+		t.Fatalf("nil/nil 应无变更，got %+v", got)
+	}
+	if got := DiffDigests(old, old); len(got) != 0 {
+		t.Fatalf("同指纹应无变更，got %+v", got)
+	}
+	addedOnly := DiffDigests(nil, map[string]string{"alpha": "1"})
+	if len(addedOnly) != 1 || addedOnly[0].Kind != FacetAdded || addedOnly[0].From != "" {
+		t.Fatalf("nil → 非空应只报 added，got %+v", addedOnly)
+	}
+	removedOnly := DiffDigests(map[string]string{"alpha": "1"}, nil)
+	if len(removedOnly) != 1 || removedOnly[0].Kind != FacetRemoved || removedOnly[0].To != "" {
+		t.Fatalf("非空 → nil 应只报 removed，got %+v", removedOnly)
+	}
+}
+
+// TestDiffDigestsMatchesDiff 契约：Diff 与 DiffDigests 同口径——前者是
+// 「快照 → 指纹 map → 后者」的薄包装，输出必须逐项一致。
+func TestDiffDigestsMatchesDiff(t *testing.T) {
+	old := Surface{Schema: "hostver/v1", Facets: []Facet{
+		{Name: "alpha", Value: []string{"a"}},
+		{Name: "beta", Value: map[string]string{"k": "v"}},
+		{Name: "gamma", Value: 3},
+	}}
+	cur := Surface{Schema: "hostver/v1", Facets: []Facet{
+		{Name: "beta", Value: map[string]string{"k": "v2"}},
+		{Name: "delta", Value: []string{"d"}},
+		{Name: "epsilon", Value: true},
+	}}
+	oldD, err := facetDigests(old)
+	if err != nil {
+		t.Fatalf("facetDigests(old): %v", err)
+	}
+	curD, err := facetDigests(cur)
+	if err != nil {
+		t.Fatalf("facetDigests(cur): %v", err)
+	}
+	viaSurface, err := Diff(old, cur)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	viaDigests := DiffDigests(oldD, curD)
+	if !reflect.DeepEqual(viaSurface, viaDigests) {
+		t.Fatalf("Diff 与 DiffDigests 不一致：%+v vs %+v", viaSurface, viaDigests)
+	}
+}

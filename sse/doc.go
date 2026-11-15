@@ -1,8 +1,9 @@
-// Package sse 提供 net/http 形态的 SSE（Server-Sent Events）游标回放应答器：
-// 游标窗口回放 + 「订阅先于回放」按事件 ID 去重 + 心跳注释帧，三件事
-// 由一个 [Responder] 单点承担，宿主只注入取数与广播两处业务差异
-// （[ReplayFunc] 取游标窗口、[Source] 供实时帧），stdlib-only
-// （pkg 零第三方依赖红线）。
+// Package sse 提供 SSE（Server-Sent Events）的游标回放内核与 net/http
+// 应答器：游标窗口回放 + 「订阅先于回放」按事件 ID 去重 + 心跳注释帧。
+// 传输无关的 [ParseCursor]/[Cursor]/[ReplaySince] 是内核导出面，任何
+// 传输的响应端都可组合复用；[Responder] 是 net/http 的薄适配（响应头
+// 四件套 + 写帧 + 心跳），宿主只注入取数与广播两处业务差异（[ReplayFunc]
+// 取游标窗口、[Source] 供实时帧）。stdlib-only（pkg 零第三方依赖红线）。
 //
 // # 定位与分工
 //
@@ -36,6 +37,32 @@
 //     自动携带）；缺省视为 0（全量回放）。头在场但不是合法无符号整数
 //     时按 400 拒绝（fail-closed：非法游标多半是客户端 bug，静默按 0
 //     全量回放会放大成一次昂贵的误回放）。
+//
+// # 传输无关内核（任何响应端必须遵循的装配纪律）
+//
+// [ParseCursor]、[Cursor]、[ReplaySince] 把游标判定与回放/去重语义从
+// net/http 中解耦出来。**任何传输的响应端**（net/http、Hertz、WebSocket
+// 网关等）都应遵循同一纪律，且不得另写一套：
+//
+//  1. **先订阅、再按游标回放**：游标头经 [ParseCursor] 解析（空 = 0 从
+//     头、非法 = 400），然后先 [Source.Subscribe] 建立实时面，再调用
+//     [ReplaySince] 取窗口——顺序反了会留下丢帧缝隙；
+//  2. **按 Event.ID 去重**：回放事件先写；实时帧一律经 [Cursor.Accept]
+//     判定，`ID <= 已回放最大 ID` 的帧跳过（订阅/回放重叠与同 ID 重复
+//     广播都只写一次）；
+//  3. 事件 ID 必须由宿主单调递增分配，[ReplayFunc] 按 ID 升序返回。
+//
+// 骨架（传输层只替换 write 与心跳）：
+//
+//	after, ok := sse.ParseCursor(lastEventID)
+//	if !ok { /* 400 */ }
+//	live, cancel := src.Subscribe()
+//	defer cancel()
+//	backlog, cursor := sse.ReplaySince(after, replay)
+//	for _, e := range backlog { write(e) }
+//	for e := range live {
+//	    if cursor.Accept(e) { write(e) }
+//	}
 //
 // # 心跳注释帧
 //

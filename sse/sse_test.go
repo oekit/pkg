@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -273,26 +274,33 @@ func TestHubLaggardDisconnect(t *testing.T) {
 	hub.Emit(Event{ID: 3}) // 对已断流广播：不得 panic
 }
 
-// TestCursorParsing 游标解析：缺省 0 全量回放、空白容忍、非法拒绝。
+// TestCursorParsing 游标解析（导出面 ParseCursor）：缺省 0 全量回放、
+// 空白容忍、非法拒绝——net/http 与 Hertz 两侧共用同一判定函数。
 func TestCursorParsing(t *testing.T) {
 	cases := []struct {
 		in   string
 		want uint64
 		ok   bool
 	}{
-		{"", 0, true},
+		{"", 0, true}, // 缺省游标 = 从头回放
+		{"   ", 0, true},
 		{"  7 ", 7, true},
+		{"\t7\n", 7, true},
 		{"0", 0, true},
 		{"18446744073709551615", 18446744073709551615, true},
 		{"abc", 0, false},
 		{"-1", 0, false},
+		{"+1", 0, false},
 		{"1.5", 0, false},
+		{"0x10", 0, false},
+		{"1 2", 0, false},
+		{"１", 0, false}, // 全角数字不是 ASCII 十进制
 		{"18446744073709551616", 0, false},
 	}
 	for _, c := range cases {
-		got, ok := parseCursor(c.in)
+		got, ok := ParseCursor(c.in)
 		if ok != c.ok || (ok && got != c.want) {
-			t.Fatalf("parseCursor(%q) = (%d, %v)，应为 (%d, %v)", c.in, got, ok, c.want, c.ok)
+			t.Fatalf("ParseCursor(%q) = (%d, %v)，应为 (%d, %v)", c.in, got, ok, c.want, c.ok)
 		}
 	}
 }
@@ -380,4 +388,133 @@ func TestConstructorFailFast(t *testing.T) {
 	mustPanic("注释无冒号", func() { _ = NewResponder(hub, replay, WithHeartbeatComment("ping")) })
 	mustPanic("注释含换行", func() { _ = NewResponder(hub, replay, WithHeartbeatComment(": a\nb")) })
 	mustPanic("缓冲非正数", func() { _ = NewHub(WithSubscriberBuffer(0)) })
+	mustPanic("nil 回放内核入参", func() { _, _ = ReplaySince(0, nil) })
+}
+
+// TestCursorAccept 契约：去重游标只接受 ID 严格大于已见最大 ID 的事件；
+// 零值等价 after=0；重复/旧 ID 跳帧，接受后推进 Last。
+func TestCursorAccept(t *testing.T) {
+	var zero Cursor
+	if got := zero.Last(); got != 0 {
+		t.Fatalf("零值 Last = %d，应为 0", got)
+	}
+	if zero.Accept(Event{ID: 0}) {
+		t.Fatal("ID 0 不大于游标 0，应跳帧")
+	}
+	if !zero.Accept(Event{ID: 1}) {
+		t.Fatal("ID 1 应接受")
+	}
+	if zero.Accept(Event{ID: 1}) {
+		t.Fatal("同 ID 重复应跳帧")
+	}
+	if zero.Accept(Event{ID: 0}) {
+		t.Fatal("旧 ID 应跳帧")
+	}
+	if got := zero.Last(); got != 1 {
+		t.Fatalf("接受后 Last = %d，应为 1", got)
+	}
+	if !zero.Accept(Event{ID: 9}) {
+		t.Fatal("更大 ID 应接受")
+	}
+
+	cur := NewCursor(10)
+	if got := cur.Last(); got != 10 {
+		t.Fatalf("NewCursor(10).Last = %d，应为 10", got)
+	}
+	if cur.Accept(Event{ID: 10}) {
+		t.Fatal("ID 等于初始游标应跳帧")
+	}
+	if !cur.Accept(Event{ID: 11}) || cur.Last() != 11 {
+		t.Fatalf("ID 11 应接受并推进游标，Last = %d", cur.Last())
+	}
+}
+
+// TestReplaySinceDedupAndOrder 内核级回归：订阅先于回放 + 回放窗口去重 +
+// 实时面按 Event.ID 跳帧。与 TestReplayWindowOrderAndDedup 同场景，但不经
+// HTTP——这是 Hertz/其它传输适配要复用的导出面。
+func TestReplaySinceDedupAndOrder(t *testing.T) {
+	hub := NewHub()
+	afterCh := make(chan uint64, 1)
+	replay := func(after uint64) []Event {
+		afterCh <- after
+		hub.Emit(Event{ID: 6, Data: "during"}) // 回放进行中的实时广播（与窗口尾重叠）
+		return []Event{
+			{ID: 3, Data: "a"},
+			{ID: 4, Data: "b1\nb2"},
+			{ID: 5, Data: "c"},
+			{ID: 6, Data: "during"},
+		}
+	}
+
+	live, cancel := hub.Subscribe() // 先订阅
+	defer cancel()
+	hub.Emit(Event{ID: 2, Data: "stale"}) // 游标之前的实时帧：应被去重跳过
+
+	backlog, cur := ReplaySince(2, replay) // 再按游标回放
+	if got := <-afterCh; got != 2 {
+		t.Fatalf("replay 收到 after = %d，应为游标 2", got)
+	}
+	want := []Event{
+		{ID: 3, Data: "a"},
+		{ID: 4, Data: "b1\nb2"},
+		{ID: 5, Data: "c"},
+		{ID: 6, Data: "during"},
+	}
+	if !reflect.DeepEqual(backlog, want) {
+		t.Fatalf("回放窗口 = %+v，应为 %+v", backlog, want)
+	}
+	if got := cur.Last(); got != 6 {
+		t.Fatalf("回放后游标 = %d，应为 6", got)
+	}
+
+	// 实时通道现有 ID 2（订阅后广播）与 ID 6（回放中广播）：都 <= 游标，跳帧。
+	if cur.Accept(<-live) {
+		t.Fatal("ID 2 不大于游标 2，应跳帧")
+	}
+	if e := <-live; e.ID != 6 || cur.Accept(e) {
+		t.Fatalf("重叠 ID 6 应跳帧，got %+v", e)
+	}
+
+	hub.Emit(Event{ID: 7, Data: "live"})
+	hub.Emit(Event{ID: 6, Data: "dup"}) // 同 ID 重复广播
+	hub.Emit(Event{ID: 8, Data: "live2"})
+	var gotIDs []uint64
+	for len(gotIDs) < 2 {
+		if e := <-live; cur.Accept(e) {
+			gotIDs = append(gotIDs, e.ID)
+		}
+	}
+	if !reflect.DeepEqual(gotIDs, []uint64{7, 8}) {
+		t.Fatalf("实时接受序 = %v，应为 [7 8]", gotIDs)
+	}
+	if got := cur.Last(); got != 8 {
+		t.Fatalf("实时帧后游标 = %d，应为 8", got)
+	}
+}
+
+// TestReplaySinceDefensiveFilter 契约兜底：宿主回放窗口即使乱序/越界，
+// 内核也只接受 ID > after 且严格递增的帧（与 Responder 原实现同口径）。
+func TestReplaySinceDefensiveFilter(t *testing.T) {
+	events, cur := ReplaySince(2, func(uint64) []Event {
+		return []Event{
+			{ID: 5, Data: "a"},
+			{ID: 3, Data: "b"}, // 小于已接受游标：跳过
+			{ID: 5, Data: "c"}, // 重复：跳过
+			{ID: 1, Data: "d"}, // 小于 after：跳过
+			{ID: 6, Data: "e"},
+		}
+	})
+	want := []Event{{ID: 5, Data: "a"}, {ID: 6, Data: "e"}}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("防御性过滤 = %+v，应为 %+v", events, want)
+	}
+	if got := cur.Last(); got != 6 {
+		t.Fatalf("游标 = %d，应为 6", got)
+	}
+
+	// 空窗口：游标停在 after，不改写调用方入参。
+	empty, cur2 := ReplaySince(9, func(uint64) []Event { return nil })
+	if len(empty) != 0 || cur2.Last() != 9 {
+		t.Fatalf("空窗口应无事件且游标 9，got %+v / %d", empty, cur2.Last())
+	}
 }

@@ -56,16 +56,24 @@ func setHeaders(w http.ResponseWriter) {
 // writeFrame 写一帧并立即 flush。写失败（客户端已断开）返回 false，
 // 调用方随即收尾——SSE 长循环里「写失败即退出」是断开清理的触发点。
 func writeFrame(w http.ResponseWriter, fl http.Flusher, frame []byte) bool {
-	if _, err := w.Write(frame); err != nil {
+	// 帧是 text/event-stream 协议数据（EventSource 解析，不进 HTML 渲染
+	// 上下文），G705 的 XSS 模型不适用。
+	if _, err := w.Write(frame); err != nil { //nolint:gosec // G705 误报：text/event-stream 非 HTML 渲染上下文
 		return false
 	}
 	fl.Flush()
 	return true
 }
 
-// parseCursor 解析 Last-Event-ID 游标：空 = 0（全量回放）；非合法
-// 无符号整数 = 非法（调用方按 400 拒绝，fail-closed）。
-func parseCursor(s string) (uint64, bool) {
+// ParseCursor 解析 Last-Event-ID 游标：空串（含全空白）= (0, true)，
+// 表示客户端没有游标、从头全量回放；合法 ASCII 十进制无符号 64 位整数
+// = (id, true)，两侧空白容忍；其它（负数、正号、小数、十六进制、溢出、
+// 非 ASCII 数字）= (0, false)，调用方按 400 拒绝（fail-closed）。
+//
+// 语义与历史 Responder 内部的 parseCursor 逐字一致。net/http [Responder]
+// 与 Hertz/WebSocket 等其它传输的响应端必须共用本函数——非法游标的判定
+// 口径只有这一份，适配层不得另写一套。
+func ParseCursor(s string) (uint64, bool) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, true

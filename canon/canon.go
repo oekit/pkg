@@ -89,18 +89,40 @@ func canonicalBytes(s Surface) ([]byte, error) {
 	return json.Marshal(canonicalDoc{Schema: schemaOf(s), Facets: facets})
 }
 
+// FingerprintBytes 对宿主自产的规范形字节计算版本指纹：canon 只负责
+// 哈希与版本串格式化，**不再规范化**——字节里有没有 schema 字段、字段
+// 怎么排序，全由宿主历史布局决定（sha256 原样吃入，不 trim、不补空）。
+//
+// 这是「规范化」与「指纹」解耦的迁移接缝：已持久化历史版本指纹的宿主
+// 保持原布局产出字节，即可用本函数原样复算历史值（12 个 hex 字符），
+// 不必为了收编 canon 而让存量快照全部失配。
+//
+// schema 只是版本串前缀，不参与哈希（这一点与 [Fingerprint] 不同：
+// 后者的 schema 写在规范形 JSON 里，升格会换哈希）；空 schema 回退
+// [DefaultSchema]。空 nil 字节按 [ErrBadSurface] 拒绝（空面无版本可言）。
+func FingerprintBytes(schema string, canonical []byte) (Version, error) {
+	if len(canonical) == 0 {
+		return Version{}, fmt.Errorf("%w: 规范形字节为空（空面无版本可言）", ErrBadSurface)
+	}
+	if schema == "" {
+		schema = DefaultSchema
+	}
+	sum := sha256.Sum256(canonical)
+	return Version{
+		Schema: schema,
+		Digest: hex.EncodeToString(sum[:digestLen]),
+	}, nil
+}
+
 // Fingerprint 计算快照的版本指纹：规范形 JSON → sha256 → 48bit 十六进制。
-// 同语义（三条归一纪律后）必同版、可复现。
+// 同语义（三条归一纪律后）必同版、可复现。哈希与版本格式化复用
+// [FingerprintBytes]，两条入口不会漂移出两套摘要口径。
 func Fingerprint(s Surface) (Version, error) {
 	b, err := canonicalBytes(s)
 	if err != nil {
 		return Version{}, err
 	}
-	sum := sha256.Sum256(b)
-	return Version{
-		Schema: schemaOf(s),
-		Digest: hex.EncodeToString(sum[:digestLen]),
-	}, nil
+	return FingerprintBytes(s.Schema, b)
 }
 
 // FacetDigest 单个 facet 值的规范形指纹（48bit 十六进制）：按 facet 吊销/
@@ -146,11 +168,43 @@ type Change struct {
 	To   string // 新指纹（Added/Changed 时非空）
 }
 
+// DiffDigests 直接比较两代 facet 指纹（map[facet 名]digest，宿主已持久化
+// 的 [FacetDigest] 产物），返回与 [Diff] 同口径的变更清单：确定性顺序
+// Added 在前、Changed 居中、Removed 在后，各段按 Name 字典序；同指纹不报。
+// nil/空 map 合法（该代没有 facet）。
+//
+// 适用面：宿主只存了上一代指纹、重建不出 Surface 的场景（会话行记
+// policy_version + facet 指纹集）。本函数拿不到 schema，因此无法像
+// [Diff] 那样兜底 [ErrSchemaMismatch]——调用方必须保证两代指纹来自同一
+// schema，跨 schema 的指纹 map 不可比。
+func DiffDigests(old, cur map[string]string) []Change {
+	var added, changed, removed []Change
+	for name, from := range old {
+		to, ok := cur[name]
+		if !ok {
+			removed = append(removed, Change{Kind: FacetRemoved, Name: name, From: from})
+			continue
+		}
+		if to != from {
+			changed = append(changed, Change{Kind: FacetChanged, Name: name, From: from, To: to})
+		}
+	}
+	for name, to := range cur {
+		if _, ok := old[name]; !ok {
+			added = append(added, Change{Kind: FacetAdded, Name: name, To: to})
+		}
+	}
+	slices.SortFunc(added, func(a, b Change) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(changed, func(a, b Change) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(removed, func(a, b Change) int { return strings.Compare(a.Name, b.Name) })
+	return append(append(added, changed...), removed...)
+}
+
 // Diff 按 facet 名逐片比较两个快照，返回变更清单。确定性顺序：Added
 // 在前、Changed 居中、Removed 在后，各段按 Name 字典序——「新面多了
 // 什么、什么变了、什么没了」。同版 facet 不报。新旧 schema 不一致按
 // [ErrSchemaMismatch] 拒绝：跨 schema 的 diff 是无意义比对，升格纪律
-// 在此兜底。
+// 在此兜底。比较本体复用 [DiffDigests]（两条入口同口径）。
 func Diff(old, cur Surface) ([]Change, error) {
 	so, sc := schemaOf(old), schemaOf(cur)
 	if so != sc {
@@ -164,27 +218,7 @@ func Diff(old, cur Surface) ([]Change, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	var added, changed, removed []Change
-	for _, f := range old.Facets {
-		cd, ok := curD[f.Name]
-		if !ok {
-			removed = append(removed, Change{Kind: FacetRemoved, Name: f.Name, From: oldD[f.Name]})
-			continue
-		}
-		if cd != oldD[f.Name] {
-			changed = append(changed, Change{Kind: FacetChanged, Name: f.Name, From: oldD[f.Name], To: cd})
-		}
-	}
-	for _, f := range cur.Facets {
-		if _, ok := oldD[f.Name]; !ok {
-			added = append(added, Change{Kind: FacetAdded, Name: f.Name, To: curD[f.Name]})
-		}
-	}
-	slices.SortFunc(added, func(a, b Change) int { return strings.Compare(a.Name, b.Name) })
-	slices.SortFunc(changed, func(a, b Change) int { return strings.Compare(a.Name, b.Name) })
-	slices.SortFunc(removed, func(a, b Change) int { return strings.Compare(a.Name, b.Name) })
-	return append(append(added, changed...), removed...), nil
+	return DiffDigests(oldD, curD), nil
 }
 
 // facetDigests 快照内全部 facet 名 → 切片指纹（重名/空名由 canonicalBytes
