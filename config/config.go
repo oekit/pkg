@@ -95,7 +95,7 @@ func Load(cfg any, opts ...LoadOption) error {
 	if o.file != "" {
 		data, rerr := os.ReadFile(o.file)
 		if rerr != nil {
-			errs = append(errs, fmt.Errorf("config: 读配置文件 %s: %w", o.file, rerr))
+			errs = append(errs, errors.Wrapf(rerr, "config: 读配置文件 %s", o.file))
 		} else if tree, rerr = parseYAML(string(data)); rerr != nil {
 			errs = append(errs, rerr)
 		}
@@ -138,7 +138,7 @@ func applyOptions(cfg any, opts []LoadOption) (*loadOptions, reflect.Value, erro
 	}
 	v := reflect.ValueOf(cfg)
 	if v.Kind() != reflect.Pointer || v.IsNil() || v.Elem().Kind() != reflect.Struct {
-		return nil, reflect.Value{}, fmt.Errorf("config: cfg 必须是指向结构体的非 nil 指针，得到 %T", cfg)
+		return nil, reflect.Value{}, errors.Newf("config: cfg 必须是指向结构体的非 nil 指针，得到 %T", cfg)
 	}
 	return o, v.Elem(), nil
 }
@@ -167,12 +167,12 @@ func resolvePaths(t reflect.Type, paths []string) (map[string]bool, []error) {
 		// 明文泄密（拼对也漏，比拼错更糟）。路径产出侧已收口为「内嵌透明
 		// 短路径」，声明侧同口径 fail-fast 并给修正指引。
 		if embeddedLayerInPath(t, strings.Split(p, ".")) {
-			errs = append(errs, fmt.Errorf(
+			errs = append(errs, errors.Newf(
 				"config: 声明的字段路径不存在: %s（内嵌结构体的层名不进字段路径——路径对内嵌层透明，请写短路径 %q）",
 				p, lastPart(p)))
 			continue
 		}
-		errs = append(errs, fmt.Errorf("config: 声明的字段路径不存在: %s", p))
+		errs = append(errs, errors.Newf("config: 声明的字段路径不存在: %s", p))
 	}
 	return set, errs
 }
@@ -269,7 +269,7 @@ func (s *loadState) walk(node reflect.Value, tree any, path string, errs *[]erro
 		}
 		envTag, enverr := parseEnvTag(f.Tag.Get("env"))
 		if enverr != nil {
-			*errs = append(*errs, fmt.Errorf("config: 字段 %s: %w", fpath, enverr))
+			*errs = append(*errs, errors.Wrapf(enverr, "config: 字段 %s", fpath))
 			continue
 		}
 		if envTag.skip {
@@ -278,11 +278,11 @@ func (s *loadState) walk(node reflect.Value, tree any, path string, errs *[]erro
 		ykey := yamlKey(f)
 		if fv.Kind() == reflect.Struct {
 			if fv.Type() == timeType {
-				*errs = append(*errs, fmt.Errorf("config: 字段 %s: 不支持 time.Time（请用字符串字段自行解析）", fpath))
+				*errs = append(*errs, errors.Newf("config: 字段 %s: 不支持 time.Time（请用字符串字段自行解析）", fpath))
 				continue
 			}
 			if envTag.name != "" || envTag.hasDef || envTag.required {
-				*errs = append(*errs, fmt.Errorf("config: 字段 %s: 结构体字段不支持 env tag（tag 放在叶子字段上）", fpath))
+				*errs = append(*errs, errors.Newf("config: 字段 %s: 结构体字段不支持 env tag（tag 放在叶子字段上）", fpath))
 				continue
 			}
 			sub := yamlSubtree(tree, ykey)
@@ -290,12 +290,12 @@ func (s *loadState) walk(node reflect.Value, tree any, path string, errs *[]erro
 			continue
 		}
 		if !leafSupported(fv.Type()) {
-			*errs = append(*errs, fmt.Errorf("config: 字段 %s: 不支持的字段类型 %s", fpath, fv.Type()))
+			*errs = append(*errs, errors.Newf("config: 字段 %s: 不支持的字段类型 %s", fpath, fv.Type()))
 			continue
 		}
 		validateTag, verr := parseValidateTag(f.Tag.Get("validate"))
 		if verr != nil {
-			*errs = append(*errs, fmt.Errorf("config: 字段 %s: %w", fpath, verr))
+			*errs = append(*errs, errors.Wrapf(verr, "config: 字段 %s", fpath))
 			continue
 		}
 
@@ -322,12 +322,12 @@ func (s *loadState) walk(node reflect.Value, tree any, path string, errs *[]erro
 			// yaml null 判失败、切片静默过闸。len==0 一并判未提供，env 空串、
 			// yaml null、显式 [] 三者同裁决。
 			if fv.IsZero() || (fv.Kind() == reflect.Slice && fv.Len() == 0) {
-				*errs = append(*errs, fmt.Errorf("config: 必填字段 %s 未提供（env=%s%s 或 yaml 键 %s）",
+				*errs = append(*errs, errors.Newf("config: 必填字段 %s 未提供（env=%s%s 或 yaml 键 %s）",
 					fpath, s.opts.envPrefix, envTag.name, ykey))
 			}
 		}
 		if validateTag.nonempty && fv.Kind() == reflect.String && fv.String() == "" {
-			*errs = append(*errs, fmt.Errorf("config: 字段 %s 为空（validate:nonempty）", fpath))
+			*errs = append(*errs, errors.Newf("config: 字段 %s 为空（validate:nonempty）", fpath))
 		}
 	}
 }
@@ -344,19 +344,19 @@ func parseEnvTag(raw string) (envTag, error) {
 	parts := strings.Split(raw, ",")
 	t := envTag{name: strings.TrimSpace(parts[0])}
 	if t.name == "" {
-		return t, fmt.Errorf("env tag 缺少变量名: %q", raw)
+		return t, errors.Newf("env tag 缺少变量名: %q", raw)
 	}
 	for i := 1; i < len(parts); i++ {
 		p := parts[i]
 		switch {
 		case p == "required":
 			if t.hasDef {
-				return t, fmt.Errorf("env tag 不能同时 required 与 default: %q", raw)
+				return t, errors.Newf("env tag 不能同时 required 与 default: %q", raw)
 			}
 			t.required = true
 		case strings.HasPrefix(p, "default="):
 			if t.required || t.hasDef {
-				return t, fmt.Errorf("env tag 的 default 只能出现一次且不得与 required 同用: %q", raw)
+				return t, errors.Newf("env tag 的 default 只能出现一次且不得与 required 同用: %q", raw)
 			}
 			t.hasDef = true
 			// default 值可含逗号：取从 default= 起的剩余原文。
@@ -367,12 +367,12 @@ func parseEnvTag(raw string) (envTag, error) {
 			// 逗号吸收是「值含逗号」特性，不是「任意选项都可后置」的口子。
 			for _, rest := range parts[i+1:] {
 				if rest == "required" || strings.HasPrefix(rest, "default=") {
-					return t, fmt.Errorf("env tag 的 default 吸收逗号后出现歧义段 %q（required/default 不得出现在 default 之后）: %q", rest, raw)
+					return t, errors.Newf("env tag 的 default 吸收逗号后出现歧义段 %q（required/default 不得出现在 default 之后）: %q", rest, raw)
 				}
 			}
 			i = len(parts)
 		default:
-			return t, fmt.Errorf("env tag 未知选项 %q: %q", p, raw)
+			return t, errors.Newf("env tag 未知选项 %q: %q", p, raw)
 		}
 	}
 	return t, nil
@@ -399,7 +399,7 @@ func parseValidateTag(raw string) (validateTag, error) {
 		case "nonempty":
 			t.nonempty = true
 		default:
-			return t, fmt.Errorf("不支持的 validate 规则 %q（当前仅 nonempty）", p)
+			return t, errors.Newf("不支持的 validate 规则 %q（当前仅 nonempty）", p)
 		}
 	}
 	return t, nil
@@ -464,7 +464,7 @@ func leafSupported(t reflect.Type) bool {
 // 解析失败记入汇总并保留字段现状——一个坏值不掩盖后续字段的其它问题。
 func applyEnvValue(raw string, fv reflect.Value, fpath string, errs *[]error) {
 	if e := SetFromString(raw, fv); e != nil {
-		*errs = append(*errs, fmt.Errorf("config: 字段 %s: %w", fpath, e))
+		*errs = append(*errs, errors.Wrapf(e, "config: 字段 %s", fpath))
 	}
 }
 
@@ -488,7 +488,7 @@ func SetFromString(raw string, fv reflect.Value) error {
 	case reflect.Bool:
 		b, err := strconv.ParseBool(raw)
 		if err != nil {
-			return fmt.Errorf("布尔值非法 %q: %w", raw, err)
+			return errors.Wrapf(err, "布尔值非法 %q", raw)
 		}
 		fv.SetBool(b)
 		return nil
@@ -496,28 +496,28 @@ func SetFromString(raw string, fv reflect.Value) error {
 		if fv.Type() == DurationType {
 			d, err := time.ParseDuration(raw)
 			if err != nil {
-				return fmt.Errorf("时长非法 %q（如 30s/5m）: %w", raw, err)
+				return errors.Wrapf(err, "时长非法 %q（如 30s/5m）", raw)
 			}
 			fv.SetInt(int64(d))
 			return nil
 		}
 		n, err := strconv.ParseInt(raw, 10, fv.Type().Bits())
 		if err != nil {
-			return fmt.Errorf("整数非法 %q: %w", raw, err)
+			return errors.Wrapf(err, "整数非法 %q", raw)
 		}
 		fv.SetInt(n)
 		return nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		n, err := strconv.ParseUint(raw, 10, fv.Type().Bits())
 		if err != nil {
-			return fmt.Errorf("无符号整数非法 %q: %w", raw, err)
+			return errors.Wrapf(err, "无符号整数非法 %q", raw)
 		}
 		fv.SetUint(n)
 		return nil
 	case reflect.Float32, reflect.Float64:
 		f, err := strconv.ParseFloat(raw, fv.Type().Bits())
 		if err != nil {
-			return fmt.Errorf("浮点数非法 %q: %w", raw, err)
+			return errors.Wrapf(err, "浮点数非法 %q", raw)
 		}
 		fv.SetFloat(f)
 		return nil
@@ -539,14 +539,14 @@ func SetFromString(raw string, fv reflect.Value) error {
 		fv.Set(out)
 		return nil
 	}
-	return fmt.Errorf("类型 %s 不能从字符串解析", fv.Type())
+	return errors.Newf("类型 %s 不能从字符串解析", fv.Type())
 }
 
 // applyYAMLValue 把 yaml 子树的通用值按字段类型落位。不做跨型隐式转换：
 // 值形态与字段类型不符记入汇总（quoted 端口落 int 字段这类错配置应当面暴露）。
 func applyYAMLValue(v any, fv reflect.Value, fpath string, errs *[]error) {
 	if e := setFromYAML(v, fv); e != nil {
-		*errs = append(*errs, fmt.Errorf("config: 字段 %s: %w", fpath, e))
+		*errs = append(*errs, errors.Wrapf(e, "config: 字段 %s", fpath))
 	}
 }
 
@@ -579,7 +579,7 @@ func setFromYAML(v any, fv reflect.Value) error {
 			}
 			d, err := time.ParseDuration(s)
 			if err != nil {
-				return fmt.Errorf("时长非法 %q: %w", s, err)
+				return errors.Wrapf(err, "时长非法 %q", s)
 			}
 			fv.SetInt(int64(d))
 			return nil
@@ -589,7 +589,7 @@ func setFromYAML(v any, fv reflect.Value) error {
 			return typeMismatch(fv, v, "请给整数")
 		}
 		if fv.OverflowInt(n) {
-			return fmt.Errorf("整数 %d 超出 %s 范围", n, fv.Type())
+			return errors.Newf("整数 %d 超出 %s 范围", n, fv.Type())
 		}
 		fv.SetInt(n)
 		return nil
@@ -599,7 +599,7 @@ func setFromYAML(v any, fv reflect.Value) error {
 			return typeMismatch(fv, v, "请给整数")
 		}
 		if n < 0 || fv.OverflowUint(uint64(n)) {
-			return fmt.Errorf("整数 %d 超出 %s 范围", n, fv.Type())
+			return errors.Newf("整数 %d 超出 %s 范围", n, fv.Type())
 		}
 		fv.SetUint(uint64(n))
 		return nil
@@ -610,14 +610,14 @@ func setFromYAML(v any, fv reflect.Value) error {
 			// Overflow 检查的——yaml 大数此前静默 +Inf，而 env 路径
 			// ParseFloat(bitSize) 同值报 ErrRange，两源不对称。
 			if fv.OverflowFloat(n) {
-				return fmt.Errorf("浮点 %v 超出 %s 范围", n, fv.Type())
+				return errors.Newf("浮点 %v 超出 %s 范围", n, fv.Type())
 			}
 			fv.SetFloat(n)
 			return nil
 		case int64:
 			f := float64(n)
 			if fv.OverflowFloat(f) {
-				return fmt.Errorf("浮点 %v 超出 %s 范围", n, fv.Type())
+				return errors.Newf("浮点 %v 超出 %s 范围", n, fv.Type())
 			}
 			fv.SetFloat(f)
 			return nil
@@ -633,19 +633,19 @@ func setFromYAML(v any, fv reflect.Value) error {
 		for i, item := range items {
 			elem := reflect.New(fv.Type().Elem()).Elem()
 			if err := setFromYAML(item, elem); err != nil {
-				return fmt.Errorf("第 %d 项: %w", i+1, err)
+				return errors.Wrapf(err, "第 %d 项", i+1)
 			}
 			out = reflect.Append(out, elem)
 		}
 		fv.Set(out)
 		return nil
 	}
-	return fmt.Errorf("类型 %s 不能从 yaml 取值", fv.Type())
+	return errors.Newf("类型 %s 不能从 yaml 取值", fv.Type())
 }
 
 func typeMismatch(fv reflect.Value, v any, hint string) error {
 	// 带上原始值文本：定位「哪个键配错了」比知道 Go 类型名更有用。
-	return fmt.Errorf("yaml 值 %q（%T）与字段类型 %s 不匹配（%s）", v, v, fv.Type(), hint)
+	return errors.Newf("yaml 值 %q（%T）与字段类型 %s 不匹配（%s）", v, v, fv.Type(), hint)
 }
 
 // redactWalk 渲染脱敏 dump：每行「路径=值」；敏感路径（含整棵命名子树）

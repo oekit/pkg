@@ -1,10 +1,11 @@
 package convert
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // defaultTrustedProxies 是默认的可信代理 CIDR 列表（内网地址 + 回环地址）。
@@ -137,13 +138,13 @@ func parseTrustedProxy(item string) (*net.IPNet, error) {
 	if strings.Contains(item, "/") {
 		_, network, err := net.ParseCIDR(item)
 		if err != nil {
-			return nil, fmt.Errorf("convert: 可信代理条目 %q 不是合法 CIDR: %w", item, err)
+			return nil, errors.Wrapf(err, "convert: 可信代理条目 %q 不是合法 CIDR", item)
 		}
 		return network, nil
 	}
 	ip := net.ParseIP(item)
 	if ip == nil {
-		return nil, fmt.Errorf("convert: 可信代理条目 %q 不是合法 IP 或 CIDR", item)
+		return nil, errors.Newf("convert: 可信代理条目 %q 不是合法 IP 或 CIDR", item)
 	}
 	if v4 := ip.To4(); v4 != nil {
 		return &net.IPNet{IP: v4, Mask: net.CIDRMask(32, 32)}, nil
