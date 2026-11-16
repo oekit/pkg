@@ -106,6 +106,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // DialFunc 与 httpx/net 的拨号函数同形（标准库形态），可直接互相包装。
@@ -344,7 +346,7 @@ func New(opts ...GuardOption) (*Guard, error) {
 	for _, raw := range g.rawAllowCIDRs {
 		_, n, err := net.ParseCIDR(strings.TrimSpace(raw))
 		if err != nil {
-			return nil, fmt.Errorf("urlguard: invalid CIDR %q: %w", raw, err)
+			return nil, errors.Wrapf(err, "urlguard: invalid CIDR %q", raw)
 		}
 		g.allowCIDRs = append(g.allowCIDRs, n)
 	}
@@ -353,7 +355,7 @@ func New(opts ...GuardOption) (*Guard, error) {
 		for _, raw := range g.rawExactHosts {
 			eh, err := parseExactHost(raw)
 			if err != nil {
-				return nil, fmt.Errorf("urlguard: invalid exact host %q: %w", raw, err)
+				return nil, errors.Wrapf(err, "urlguard: invalid exact host %q", raw)
 			}
 			g.exactHosts[eh] = struct{}{}
 		}
@@ -429,7 +431,7 @@ func (g *Guard) inAllowDomains(host string) bool {
 // 自定义 checkIPFunc 在其后照常执行。
 func (g *Guard) checkIPForHost(host string, ip net.IP) error {
 	if ip == nil {
-		return fmt.Errorf("urlguard: nil ip")
+		return errors.New("urlguard: nil ip")
 	}
 	if v4 := ip.To4(); v4 != nil {
 		ip = v4 // ::ffff:a.b.c.d 归一化，防 mapped 绕过
@@ -446,7 +448,7 @@ func (g *Guard) checkIPForHost(host string, ip net.IP) error {
 	// 2. 自定义判定（消费方策略，单一判定源）
 	if g.checkIPFunc != nil {
 		if err := g.checkIPFunc(ip); err != nil {
-			return fmt.Errorf("urlguard: ip %s rejected by policy: %w", ip, err)
+			return errors.Wrapf(err, "urlguard: ip %s rejected by policy", ip)
 		}
 	}
 	return nil
@@ -471,7 +473,7 @@ func (g *Guard) inAllowCIDRs(ip net.IP) bool {
 func (g *Guard) CheckHost(host string) error {
 	host = canonicalHost(host)
 	if host == "" {
-		return fmt.Errorf("urlguard: empty host")
+		return errors.New("urlguard: empty host")
 	}
 	if g.exactEnabled {
 		if err := g.checkExact(host, ""); err != nil {
@@ -495,7 +497,7 @@ func (g *Guard) CheckHost(host string) error {
 // nil/false ⇒ 落进「普通域名」分支交给 DNS——「判定放行 + 客户端连回环」。
 func (g *Guard) checkHostLiteral(host string) error {
 	if host == "" {
-		return fmt.Errorf("urlguard: empty host")
+		return errors.New("urlguard: empty host")
 	}
 	folded, ok := foldHostForGuard(host)
 	if !ok {
@@ -508,7 +510,7 @@ func (g *Guard) checkHostLiteral(host string) error {
 	// 判定落到「普通域名」分支 ⇒ 同一目标加一个全角尾点即从拒到放。
 	host = strings.TrimRight(folded, ".")
 	if host == "" {
-		return fmt.Errorf("urlguard: empty host")
+		return errors.New("urlguard: empty host")
 	}
 	if ip := net.ParseIP(stripIPv6Zone(host)); ip != nil {
 		// IP 字面量带 host 上下文判定（#296）：host 命中 allowDomains 时
@@ -554,7 +556,7 @@ func (g *Guard) checkHostPolicy(host string) error {
 		return nil
 	}
 	if err := g.checkHostFunc(host); err != nil {
-		return fmt.Errorf("urlguard: host %q rejected by policy: %w", host, err)
+		return errors.Wrapf(err, "urlguard: host %q rejected by policy", host)
 	}
 	return nil
 }
@@ -709,7 +711,7 @@ func isHexDigit(c byte) bool {
 func (g *Guard) CheckURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("urlguard: parse url: %w", err)
+		return errors.Wrapf(err, "urlguard: parse url")
 	}
 	scheme := strings.ToLower(u.Scheme)
 	if _, ok := g.schemes[scheme]; !ok {
@@ -736,7 +738,7 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
-			return nil, fmt.Errorf("urlguard: split %q: %w", addr, err)
+			return nil, errors.Wrapf(err, "urlguard: split %q", addr)
 		}
 		canon := canonicalHost(host)
 		// host 字面量判定（pkg#91 / pkg#204）：拨号层也走与 CheckHost 同源的
@@ -749,7 +751,7 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 		// allowDomains 优先与 allowPrivate 短路，四条规则各写一份必然漂移，
 		// 而漂移的形态是「写面拒绝、拨号面放行」这种最难发现的不一致。
 		if herr := g.checkHostLiteral(canon); herr != nil {
-			return nil, fmt.Errorf("urlguard: dial %q blocked: %w", addr, herr)
+			return nil, errors.Wrapf(herr, "urlguard: dial %q blocked", addr)
 		}
 		ips, err := g.resolve(ctx, host)
 		if err != nil {
@@ -761,7 +763,7 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 			if cerr := g.checkIPForHost(canon, ip); cerr != nil {
 				// %w（#380）：与同函数 :733 的字面量拒绝同口径——防护拒绝
 				// 的哨兵（ErrBlockedRange 等）经链透传，调用方 errors.Is 可判。
-				return nil, fmt.Errorf("urlguard: dial %q blocked: %w", addr, cerr)
+				return nil, errors.Wrapf(cerr, "urlguard: dial %q blocked", addr)
 			}
 		}
 		conn, err := next(ctx, network, addr)
@@ -779,7 +781,7 @@ func (g *Guard) DialFunc(next DialFunc) DialFunc {
 				if err := g.checkIPForHost(canon, ip); err != nil {
 					_ = conn.Close()
 					// %w（#380）：端点复核的拒绝同样是防护拦截，哨兵照旧可判。
-					return nil, fmt.Errorf("urlguard: dial %q blocked: connected endpoint %s violates guard: %w", addr, ip, err)
+					return nil, errors.Wrapf(err, "urlguard: dial %q blocked: connected endpoint %s violates guard", addr, ip)
 				}
 			}
 		}
@@ -803,7 +805,7 @@ func (g *Guard) resolve(ctx context.Context, host string) ([]net.IP, error) {
 	}
 	addrs, err := g.lookup(ctx, host)
 	if err != nil {
-		return nil, fmt.Errorf("urlguard: resolve %q: %w", host, err)
+		return nil, errors.Wrapf(err, "urlguard: resolve %q", host)
 	}
 	return addrs, nil
 }
@@ -877,24 +879,24 @@ func addrIP(ra net.Addr) net.IP {
 func parseExactHost(raw string) (exactHost, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
-		return exactHost{}, fmt.Errorf("empty host")
+		return exactHost{}, errors.New("empty host")
 	}
 	if strings.ContainsAny(s, "/@ \t\r\n") {
-		return exactHost{}, fmt.Errorf("must be host[:port] without path, userinfo or whitespace")
+		return exactHost{}, errors.New("must be host[:port] without path, userinfo or whitespace")
 	}
 	host, portStr, err := splitAuthority(s)
 	if err != nil {
 		return exactHost{}, err
 	}
 	if host == "" {
-		return exactHost{}, fmt.Errorf("empty host")
+		return exactHost{}, errors.New("empty host")
 	}
 	canon := canonicalHost(host)
 	if canon == "" {
-		return exactHost{}, fmt.Errorf("empty host")
+		return exactHost{}, errors.New("empty host")
 	}
 	if strings.Contains(canon, ":") && net.ParseIP(canon) == nil {
-		return exactHost{}, fmt.Errorf("invalid host %q", host)
+		return exactHost{}, errors.Newf("invalid host %q", host)
 	}
 	p, err := parsePort(portStr)
 	if err != nil {
@@ -912,7 +914,7 @@ func splitAuthority(s string) (host, port string, err error) {
 	if strings.HasPrefix(s, "[") {
 		end := strings.Index(s, "]")
 		if end < 0 {
-			return "", "", fmt.Errorf("invalid authority %q", s)
+			return "", "", errors.Newf("invalid authority %q", s)
 		}
 		rest := s[end+1:]
 		switch {
@@ -921,11 +923,11 @@ func splitAuthority(s string) (host, port string, err error) {
 		case strings.HasPrefix(rest, ":"):
 			p := rest[1:]
 			if p == "" {
-				return "", "", fmt.Errorf("empty port")
+				return "", "", errors.New("empty port")
 			}
 			return s[:end+1], p, nil
 		default:
-			return "", "", fmt.Errorf("invalid authority %q", s)
+			return "", "", errors.Newf("invalid authority %q", s)
 		}
 	}
 	if !strings.Contains(s, ":") {
@@ -933,10 +935,10 @@ func splitAuthority(s string) (host, port string, err error) {
 	}
 	h, p, serr := net.SplitHostPort(s)
 	if serr != nil {
-		return "", "", fmt.Errorf("invalid authority %q: %w", s, serr)
+		return "", "", errors.Wrapf(serr, "invalid authority %q", s)
 	}
 	if p == "" {
-		return "", "", fmt.Errorf("empty port")
+		return "", "", errors.New("empty port")
 	}
 	return h, p, nil
 }
@@ -949,10 +951,10 @@ func parsePort(p string) (int, error) {
 	}
 	n, err := strconv.Atoi(p)
 	if err != nil {
-		return 0, fmt.Errorf("invalid port %q", p)
+		return 0, errors.Newf("invalid port %q", p)
 	}
 	if n < 0 || n > 65535 {
-		return 0, fmt.Errorf("port %d out of range", n)
+		return 0, errors.Newf("port %d out of range", n)
 	}
 	return n, nil
 }
@@ -961,11 +963,11 @@ func parsePort(p string) (int, error) {
 func (g *Guard) checkExact(host, port string) error {
 	canon := canonicalHost(host)
 	if canon == "" {
-		return fmt.Errorf("urlguard: empty host")
+		return errors.New("urlguard: empty host")
 	}
 	p, err := parsePort(port)
 	if err != nil {
-		return fmt.Errorf("urlguard: %w", err)
+		return errors.Wrapf(err, "urlguard")
 	}
 	if _, ok := g.exactHosts[exactHost{host: canon, port: p}]; !ok {
 		// 哨兵（#390）：白名单未命中是配置类拒绝。

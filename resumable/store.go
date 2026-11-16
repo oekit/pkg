@@ -8,6 +8,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // 两个内存后端是接口的参考实现（纯内存状态面）：单测、嵌入式与「存储
@@ -36,7 +38,7 @@ var _ SessionStore = (*MemSessionStore)(nil)
 // Create 登记新会话；id 重复报 [ErrSessionExists]。
 func (m *MemSessionStore) Create(ctx context.Context, s *Session) error {
 	if s == nil {
-		return fmt.Errorf("resumable: Create: nil session")
+		return errors.New("resumable: Create: nil session")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -132,7 +134,7 @@ func (m *MemSessionStore) ReleaseClaim(ctx context.Context, id string) error {
 		return fmt.Errorf("%w: %s", ErrSessionNotFound, id)
 	}
 	if st.sess.Status != StatusMerging {
-		return fmt.Errorf("resumable: ReleaseClaim: 会话 %s 状态 %s，不在合并态", id, st.sess.Status)
+		return errors.Newf("resumable: ReleaseClaim: 会话 %s 状态 %s，不在合并态", id, st.sess.Status)
 	}
 	st.sess.Status = StatusUploading
 	st.sess.UpdatedAt = time.Now()
@@ -148,7 +150,7 @@ func (m *MemSessionStore) Finish(ctx context.Context, id string) error {
 		return fmt.Errorf("%w: %s", ErrSessionNotFound, id)
 	}
 	if st.sess.Status != StatusMerging {
-		return fmt.Errorf("resumable: Finish: 会话 %s 状态 %s，不在合并态", id, st.sess.Status)
+		return errors.Newf("resumable: Finish: 会话 %s 状态 %s，不在合并态", id, st.sess.Status)
 	}
 	st.sess.Status = StatusDone
 	st.sess.UpdatedAt = time.Now()

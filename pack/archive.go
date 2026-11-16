@@ -78,7 +78,7 @@ func (a *Archive) ReadJSONL(name string, fn func(json.RawMessage) error) error {
 	}
 	rc, err := f.Open()
 	if err != nil {
-		return fmt.Errorf("pack: 打开 %s 失败: %w", name, err)
+		return errors.Wrapf(err, "pack: 打开 %s 失败", name)
 	}
 	defer rc.Close()
 
@@ -92,10 +92,10 @@ func (a *Archive) ReadJSONL(name string, fn func(json.RawMessage) error) error {
 				lineNo++
 				var raw json.RawMessage
 				if uerr := json.Unmarshal(trimmed, &raw); uerr != nil {
-					return fmt.Errorf("pack: %s 第 %d 行不是合法 JSON: %w", name, lineNo, uerr)
+					return errors.Wrapf(uerr, "pack: %s 第 %d 行不是合法 JSON", name, lineNo)
 				}
 				if ferr := fn(raw); ferr != nil {
-					return fmt.Errorf("pack: %s 第 %d 行处理失败: %w", name, lineNo, ferr)
+					return errors.Wrapf(ferr, "pack: %s 第 %d 行处理失败", name, lineNo)
 				}
 			}
 		}
@@ -103,7 +103,7 @@ func (a *Archive) ReadJSONL(name string, fn func(json.RawMessage) error) error {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
-			return fmt.Errorf("pack: 读取 %s 失败: %w", name, err)
+			return errors.Wrapf(err, "pack: 读取 %s 失败", name)
 		}
 	}
 }
@@ -118,7 +118,7 @@ func (a *Archive) ReadJSONLInto(name string, dst any) error {
 	}
 	elem := rv.Elem()
 	if elem.Kind() != reflect.Slice {
-		return fmt.Errorf("pack: dst 必须指向切片，收到 %T", dst)
+		return errors.Newf("pack: dst 必须指向切片，收到 %T", dst)
 	}
 	itemType := elem.Type().Elem()
 	return a.ReadJSONL(name, func(raw json.RawMessage) error {
@@ -147,7 +147,7 @@ func readLine(br *bufio.Reader, limit int) ([]byte, error) {
 		chunk, err := br.ReadSlice('\n')
 		buf = append(buf, chunk...)
 		if len(buf) > limit {
-			return nil, fmt.Errorf("单行超过 %d 字节上限", limit)
+			return nil, errors.Newf("单行超过 %d 字节上限", limit)
 		}
 		if err == nil {
 			return buf, nil

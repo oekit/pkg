@@ -2,9 +2,11 @@ package procx
 
 import (
 	"context"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"sync"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // 子进程内存上限的哨兵错误（fail closed 纪律：兑现不了就拒绝执行，绝不
@@ -13,9 +15,9 @@ var (
 	// ErrMemLimitUnsupported 表示当前平台/环境不能兑现子进程内存上限。
 	// 非 Linux 一律在此列；Linux 上 cgroup v2 不可用/无权限由调用点带
 	// 具体原因包装（errors.Is 可判本哨兵的只有平台不支持一类）。
-	ErrMemLimitUnsupported = errors.New("procx: 子进程内存上限仅 Linux/cgroup v2 可兑现")
+	ErrMemLimitUnsupported = stderrors.New("procx: 子进程内存上限仅 Linux/cgroup v2 可兑现")
 	// ErrMemGroupClosed 表示对已回收的 [MemGroup] 调用 [MemGroup.Attach]。
-	ErrMemGroupClosed = errors.New("procx: 内存限额组已回收")
+	ErrMemGroupClosed = stderrors.New("procx: 内存限额组已回收")
 )
 
 // MemGroup 是「cgroup v2 memory.max 限额」原语：创建（[NewMemGroup]）、
@@ -62,10 +64,10 @@ type MemGroup struct {
 //     带具体原因的 error，**不建组、不假装支持**。
 func NewMemGroup(limitBytes int64) (*MemGroup, error) {
 	if limitBytes <= 0 {
-		return nil, fmt.Errorf("procx: NewMemGroup: 非正上限 %d", limitBytes)
+		return nil, errors.Newf("procx: NewMemGroup: 非正上限 %d", limitBytes)
 	}
 	if limitBytes > 1<<62 {
-		return nil, fmt.Errorf("procx: NewMemGroup: 上限 %d 超防呆上限 %d", limitBytes, int64(1<<62))
+		return nil, errors.Newf("procx: NewMemGroup: 上限 %d 超防呆上限 %d", limitBytes, int64(1<<62))
 	}
 	dir, limit, err := createMemGroup(limitBytes)
 	if err != nil {
@@ -81,7 +83,7 @@ func NewMemGroup(limitBytes int64) (*MemGroup, error) {
 // pid <= 0 或组已回收（[MemGroup.Close] 之后）：返回 error。
 func (g *MemGroup) Attach(pid int) error {
 	if pid <= 0 {
-		return fmt.Errorf("procx: Attach: 非法 pid %d", pid)
+		return errors.Newf("procx: Attach: 非法 pid %d", pid)
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()

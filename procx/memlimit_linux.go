@@ -8,7 +8,7 @@ package procx
 
 import (
 	"context"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // memGroupSeq 保证组名不重复（pid + 递增序号，跨进程重启由 pid 兜）。
@@ -58,7 +60,7 @@ func createMemGroup(limitBytes int64) (string, int64, error) {
 		if err == nil {
 			return dir, aligned, nil
 		}
-		attempts = append(attempts, fmt.Errorf("procx: 父组 %s 建组: %w", parent, err))
+		attempts = append(attempts, errors.Wrapf(err, "procx: 父组 %s 建组", parent))
 	}
 
 	// 策略 2：本组已委托 / 可启用（真根组豁免）→ 本组子组。
@@ -67,27 +69,27 @@ func createMemGroup(limitBytes int64) (string, int64, error) {
 		if err == nil {
 			return dir, aligned, nil
 		}
-		attempts = append(attempts, fmt.Errorf("procx: 本组 %s 建组: %w", base, err))
+		attempts = append(attempts, errors.Wrapf(err, "procx: 本组 %s 建组", base))
 	} else if err := enableMemory(base); err == nil {
 		dir, mkErr := makeMemGroup(base, aligned)
 		if mkErr == nil {
 			return dir, aligned, nil
 		}
-		attempts = append(attempts, fmt.Errorf("procx: 本组 %s 建组: %w", base, mkErr))
+		attempts = append(attempts, errors.Wrapf(mkErr, "procx: 本组 %s 建组", base))
 	} else {
-		attempts = append(attempts, fmt.Errorf("procx: 本组 %s 启用 memory: %w", base, err))
+		attempts = append(attempts, errors.Wrapf(err, "procx: 本组 %s 启用 memory", base))
 		// 策略 3：委托舞蹈——本组清空后才能启用 memory。
 		if rest, derr := delegateDance(base); derr == nil {
 			dir, err := makeMemGroup(base, aligned)
 			if err == nil {
 				return dir, aligned, nil
 			}
-			attempts = append(attempts, fmt.Errorf("procx: 舞蹈后 %s 建组（进程已挪至 %s）: %w", base, rest, err))
+			attempts = append(attempts, errors.Wrapf(err, "procx: 舞蹈后 %s 建组（进程已挪至 %s）", base, rest))
 		} else {
-			attempts = append(attempts, fmt.Errorf("procx: 委托舞蹈（%s）: %w", base, derr))
+			attempts = append(attempts, errors.Wrapf(derr, "procx: 委托舞蹈（%s）", base))
 		}
 	}
-	return "", 0, errors.Join(attempts...)
+	return "", 0, stderrors.Join(attempts...)
 }
 
 // makeMemGroup 在 parent 下建一个子组并写 memory.max，写后回读核对
@@ -113,7 +115,7 @@ func makeMemGroup(parent string, aligned int64) (string, error) {
 	}
 	got, err := strconv.ParseInt(strings.TrimSpace(string(back)), 10, 64)
 	if err != nil || got != aligned {
-		return cleanup(fmt.Errorf("%s 回读不符：写 %d 读 %q", maxFile, aligned, strings.TrimSpace(string(back))))
+		return cleanup(errors.Newf("%s 回读不符：写 %d 读 %q", maxFile, aligned, strings.TrimSpace(string(back))))
 	}
 	// 同时封死换出面（memory.swap.max=0）：只限物理内存的形态会被换页规避
 	// ——内存洪峰换出去、memory.current 不越线、OOM-kill 永不触发，沙箱的
@@ -123,10 +125,10 @@ func makeMemGroup(parent string, aligned int64) (string, error) {
 	swapFile := filepath.Join(dir, "memory.swap.max")
 	if _, err := os.Stat(swapFile); err == nil {
 		if err := os.WriteFile(swapFile, []byte("0"), 0o600); err != nil {
-			return cleanup(fmt.Errorf("写 %s 失败: %w", swapFile, err))
+			return cleanup(errors.Wrapf(err, "写 %s 失败", swapFile))
 		}
 		if back, err := os.ReadFile(swapFile); err != nil || strings.TrimSpace(string(back)) != "0" {
-			return cleanup(fmt.Errorf("%s 回读不符：写 0 读 %q", swapFile, strings.TrimSpace(string(back))))
+			return cleanup(errors.Newf("%s 回读不符：写 0 读 %q", swapFile, strings.TrimSpace(string(back))))
 		}
 	}
 	return dir, nil
@@ -153,7 +155,7 @@ func delegateDance(base string) (string, error) {
 				_ = os.WriteFile(filepath.Join(base, "cgroup.procs"), []byte(strconv.Itoa(done)), 0o600)
 			}
 			_ = os.Remove(rest)
-			return "", fmt.Errorf("挪 pid=%d 至 %s: %w", pid, rest, err)
+			return "", errors.Wrapf(err, "挪 pid=%d 至 %s", pid, rest)
 		}
 		moved = append(moved, pid)
 	}
@@ -186,7 +188,7 @@ func enableMemory(dir string) error {
 func attachMemGroup(dir string, pid int) error {
 	procs := filepath.Join(dir, "cgroup.procs")
 	if err := os.WriteFile(procs, []byte(strconv.Itoa(pid)), 0o600); err != nil { //nolint:gosec // G703:落点是本库自建 cgroup 组内的 cgroup.procs，非外部可控路径
-		return fmt.Errorf("procx: 移入 cgroup 组 %s 失败（pid=%d）: %w", dir, pid, err)
+		return errors.Wrapf(err, "procx: 移入 cgroup 组 %s 失败（pid=%d）", dir, pid)
 	}
 	return nil
 }
@@ -199,34 +201,34 @@ func removeMemGroup(ctx context.Context, dir string) error {
 	var lastErr error
 	for range 201 { // 10ms × 200 ≈ 2s 收敛窗口
 		if err := ctx.Err(); err != nil {
-			return errors.Join(append(killErrs, lastErr, err)...)
+			return stderrors.Join(append(killErrs, lastErr, err)...)
 		}
 		pids, err := listGroupProcs(dir)
 		switch {
-		case errors.Is(err, os.ErrNotExist):
-			return errors.Join(killErrs...) // 组已回收
+		case stderrors.Is(err, os.ErrNotExist):
+			return stderrors.Join(killErrs...) // 组已回收
 		case err != nil:
 			// listGroupProcs 读错不丢信号：并入 killErrs（此前赋给 lastErr 后
 			// 立即被 removeCgroupTree 的返回覆盖，读错静默消失——ineffassign 实锤）
-			killErrs = append(killErrs, fmt.Errorf("procx: 读 cgroup 组内进程 %s: %w", dir, err))
+			killErrs = append(killErrs, errors.Wrapf(err, "procx: 读 cgroup 组内进程 %s", dir))
 		default:
 			for _, pid := range pids {
-				if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-					killErrs = append(killErrs, fmt.Errorf("procx: 杀 cgroup 组内残余 pid=%d: %w", pid, err))
+				if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !stderrors.Is(err, syscall.ESRCH) {
+					killErrs = append(killErrs, errors.Wrapf(err, "procx: 杀 cgroup 组内残余 pid=%d", pid))
 				}
 			}
 		}
 		lastErr = removeCgroupTree(dir)
-		if lastErr == nil || errors.Is(lastErr, os.ErrNotExist) {
-			return errors.Join(killErrs...)
+		if lastErr == nil || stderrors.Is(lastErr, os.ErrNotExist) {
+			return stderrors.Join(killErrs...)
 		}
 		select {
 		case <-ctx.Done():
-			return errors.Join(append(killErrs, lastErr, ctx.Err())...)
+			return stderrors.Join(append(killErrs, lastErr, ctx.Err())...)
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	return errors.Join(append(killErrs, fmt.Errorf("procx: cgroup 组回收失败（%s）: %w", dir, lastErr))...)
+	return stderrors.Join(append(killErrs, errors.Wrapf(lastErr, "procx: cgroup 组回收失败（%s）", dir))...)
 }
 
 // removeCgroupTree 深度优先删掉组及其子组（子进程可能在组内又建了子组）。
@@ -260,7 +262,7 @@ func listGroupProcs(dir string) ([]int, error) {
 		}
 		pid, err := strconv.Atoi(line)
 		if err != nil {
-			return nil, fmt.Errorf("procx: 解析 cgroup.procs 行 %q: %w", line, err)
+			return nil, errors.Wrapf(err, "procx: 解析 cgroup.procs 行 %q", line)
 		}
 		pids = append(pids, pid)
 	}
@@ -277,7 +279,7 @@ func cgroupBase() (string, error) {
 	}
 	data, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
-		return "", fmt.Errorf("procx: 读 /proc/self/cgroup 失败: %w", err)
+		return "", errors.Wrapf(err, "procx: 读 /proc/self/cgroup 失败")
 	}
 	for line := range strings.SplitSeq(string(data), "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "0::")
@@ -294,7 +296,7 @@ func cgroupBase() (string, error) {
 func findCgroup2Mount() (string, error) {
 	data, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
-		return "", fmt.Errorf("procx: 读 /proc/self/mountinfo 失败: %w", err)
+		return "", errors.Wrapf(err, "procx: 读 /proc/self/mountinfo 失败")
 	}
 	for line := range strings.SplitSeq(string(data), "\n") {
 		// mountinfo：… <mount point> … - <fstype> …；挂载点按八进制转义。

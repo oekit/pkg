@@ -4,40 +4,42 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"math"
 	"time"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // 状态机与存储面的哨兵错误（errors.Is 可判）。
 var (
 	// ErrSessionNotFound 会话不存在。
-	ErrSessionNotFound = errors.New("resumable: 会话不存在")
+	ErrSessionNotFound = stderrors.New("resumable: 会话不存在")
 	// ErrSessionExists 会话 id 已存在（Create 撞 id）。
-	ErrSessionExists = errors.New("resumable: 会话已存在")
+	ErrSessionExists = stderrors.New("resumable: 会话已存在")
 	// ErrChunkNotFound 分片不存在（Stat/Open 未命中）。
-	ErrChunkNotFound = errors.New("resumable: 分片不存在")
+	ErrChunkNotFound = stderrors.New("resumable: 分片不存在")
 	// ErrSessionDone 会话已完成——完成态不可再收片/合并/中止。
-	ErrSessionDone = errors.New("resumable: 会话已完成")
+	ErrSessionDone = stderrors.New("resumable: 会话已完成")
 	// ErrSessionAborted 会话已中止。
-	ErrSessionAborted = errors.New("resumable: 会话已中止")
+	ErrSessionAborted = stderrors.New("resumable: 会话已中止")
 	// ErrMergeInProgress 合并进行中：合并抢占的输家、或对合并中的会话
 	// 收片/中止。输家可轮询 [Manager.ListParts] 的状态等赢家收场。
-	ErrMergeInProgress = errors.New("resumable: 合并进行中")
+	ErrMergeInProgress = stderrors.New("resumable: 合并进行中")
 	// ErrNotOwner 归属不符：Abort 的 owner 与会话归属不一致。
-	ErrNotOwner = errors.New("resumable: 归属不符")
+	ErrNotOwner = stderrors.New("resumable: 归属不符")
 	// ErrBadChunkIndex 分片序号越界（不在 [0, NumChunks) 内）。
-	ErrBadChunkIndex = errors.New("resumable: 分片序号越界")
+	ErrBadChunkIndex = stderrors.New("resumable: 分片序号越界")
 	// ErrChunkSize 分片字节数与会话数学不符（偏短/残缺）。
-	ErrChunkSize = errors.New("resumable: 分片字节数不符")
+	ErrChunkSize = stderrors.New("resumable: 分片字节数不符")
 	// ErrChunkTooLarge 分片字节数超过上限（会话分片大小或调用方 maxChunk）。
-	ErrChunkTooLarge = errors.New("resumable: 分片字节数超过上限")
+	ErrChunkTooLarge = stderrors.New("resumable: 分片字节数超过上限")
 	// ErrMissingChunks 完成时分片不齐（收到的缺清单见包装上下文）。
-	ErrMissingChunks = errors.New("resumable: 分片不齐")
+	ErrMissingChunks = stderrors.New("resumable: 分片不齐")
 	// ErrBadInit 会话参数非法（Hash 空、Size 负、ChunkSize 非正等）。
-	ErrBadInit = errors.New("resumable: 会话参数非法")
+	ErrBadInit = stderrors.New("resumable: 会话参数非法")
 )
 
 // Status 会话状态机的状态。状态迁移是单点语义（[SessionStore] 保证原子）：
@@ -267,7 +269,7 @@ func (m *Manager) Init(ctx context.Context, req InitReq, dedup DedupResolver) (*
 //     「写住了」，断点对账把「登记了但字节丢了」的分片算进 missing。
 func (m *Manager) PutChunk(ctx context.Context, id string, idx int, r io.Reader, maxChunk int64) error {
 	if r == nil {
-		return fmt.Errorf("resumable: PutChunk: nil reader")
+		return errors.New("resumable: PutChunk: nil reader")
 	}
 	sess, err := m.sessions.Get(ctx, id)
 	if err != nil {
@@ -287,14 +289,14 @@ func (m *Manager) PutChunk(ctx context.Context, id string, idx int, r io.Reader,
 	// 流式写入：只读 want+1 字节，多一字节即超长（不整片进内存）。
 	lr := &io.LimitedReader{R: r, N: want + 1}
 	if putErr := m.chunks.Put(ctx, id, idx, lr); putErr != nil {
-		return fmt.Errorf("resumable: 写分片 %d: %w", idx, putErr)
+		return errors.Wrapf(putErr, "resumable: 写分片 %d", idx)
 	}
 	if lr.N == 0 {
 		return fmt.Errorf("%w: 分片 %d 超过 %d 字节", ErrChunkTooLarge, idx, want)
 	}
 	size, err := m.chunks.Stat(ctx, id, idx)
 	if err != nil {
-		return fmt.Errorf("resumable: 分片 %d 写后存活确认: %w", idx, err)
+		return errors.Wrapf(err, "resumable: 分片 %d 写后存活确认", idx)
 	}
 	if size != want {
 		return fmt.Errorf("%w: 分片 %d 写 %d 字节，应有 %d", ErrChunkSize, idx, size, want)
@@ -316,7 +318,7 @@ func (m *Manager) PutChunk(ctx context.Context, id string, idx int, r io.Reader,
 //     [Manager.Sweep] 收口（merge 已交付，不重跑）。
 func (m *Manager) Complete(ctx context.Context, id string, merge MergeFunc) error {
 	if merge == nil {
-		return fmt.Errorf("resumable: Complete: nil MergeFunc")
+		return errors.New("resumable: Complete: nil MergeFunc")
 	}
 	sess, err := m.sessions.Get(ctx, id)
 	if err != nil {
@@ -340,23 +342,23 @@ func (m *Manager) Complete(ctx context.Context, id string, merge MergeFunc) erro
 	// 抢占后重新取快照：抢占前登记的最后一片以新快照为准。
 	sess, err = m.sessions.Get(ctx, id)
 	if err != nil {
-		return errors.Join(err, m.sessions.ReleaseClaim(ctx, id))
+		return stderrors.Join(err, m.sessions.ReleaseClaim(ctx, id))
 	}
 
 	received, missing, err := m.reconcile(ctx, sess)
 	if err != nil {
-		return errors.Join(err, m.sessions.ReleaseClaim(ctx, id))
+		return stderrors.Join(err, m.sessions.ReleaseClaim(ctx, id))
 	}
 	if len(missing) > 0 {
-		return errors.Join(
+		return stderrors.Join(
 			fmt.Errorf("%w: 已收 %v，缺 %v", ErrMissingChunks, received, missing),
 			m.sessions.ReleaseClaim(ctx, id))
 	}
 
 	cs := &chunkStream{ctx: ctx, store: m.chunks, id: id, n: sess.NumChunks()}
 	if err := merge(ctx, sess.clone(), cs); err != nil {
-		return errors.Join(
-			fmt.Errorf("resumable: 合并交付失败: %w", err),
+		return stderrors.Join(
+			errors.Wrapf(err, "resumable: 合并交付失败"),
 			cs.Close(),
 			m.sessions.ReleaseClaim(ctx, id))
 	}
@@ -419,7 +421,7 @@ func (m *Manager) ListParts(ctx context.Context, id string) (received, missing [
 // 聚合上抛（清扫不因单个会话失败而中断）。olderThan < 0 报错。
 func (m *Manager) Sweep(ctx context.Context, olderThan time.Duration) (int, error) {
 	if olderThan < 0 {
-		return 0, fmt.Errorf("resumable: Sweep: 负时长 %v", olderThan)
+		return 0, errors.Newf("resumable: Sweep: 负时长 %v", olderThan)
 	}
 	all, err := m.sessions.List(ctx)
 	if err != nil {
@@ -437,14 +439,14 @@ func (m *Manager) Sweep(ctx context.Context, olderThan time.Duration) (int, erro
 			one = append(one, m.sessions.Abandon(ctx, s.ID))
 		}
 		one = append(one, m.chunks.DeletePrefix(ctx, s.ID), m.sessions.Delete(ctx, s.ID))
-		sweepErr := errors.Join(one...)
+		sweepErr := stderrors.Join(one...)
 		if sweepErr != nil {
-			errs = append(errs, fmt.Errorf("resumable: 清扫会话 %s: %w", s.ID, sweepErr))
+			errs = append(errs, errors.Wrapf(sweepErr, "resumable: 清扫会话 %s", s.ID))
 			continue
 		}
 		done++
 	}
-	return done, errors.Join(errs...)
+	return done, stderrors.Join(errs...)
 }
 
 // reconcile 做断点对账（双源取交）：idx 既在 sess.Received（登记）又被
@@ -460,7 +462,7 @@ func (m *Manager) reconcile(ctx context.Context, sess *Session) (received, missi
 		want := sess.chunkLen(i)
 		size, err := m.chunks.Stat(ctx, sess.ID, i)
 		switch {
-		case errors.Is(err, ErrChunkNotFound):
+		case stderrors.Is(err, ErrChunkNotFound):
 			missing = append(missing, i)
 		case err != nil:
 			return nil, nil, err
@@ -542,7 +544,7 @@ func (cs *chunkStream) Close() error {
 func newSessionID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("resumable: 生成会话 id: %w", err)
+		return "", errors.Wrapf(err, "resumable: 生成会话 id")
 	}
 	return hex.EncodeToString(b[:]), nil
 }

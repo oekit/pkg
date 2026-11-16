@@ -1,8 +1,9 @@
 package pathx
 
 import (
-	"fmt"
 	"strings"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // 本文件提供 URL path 低基数模板化原语（ID 段折叠）。
@@ -134,10 +135,10 @@ func NewPathClassifier(opts ...ClassifyOption) (*PathClassifier, error) {
 		}
 	}
 	if c.placeholder == "" {
-		return nil, fmt.Errorf("pathx: 占位符不能为空")
+		return nil, errors.New("pathx: 占位符不能为空")
 	}
 	if strings.Contains(c.placeholder, "/") {
-		return nil, fmt.Errorf("pathx: 非法占位符 %q：占位符替换整个 path 段，不能含 '/'", c.placeholder)
+		return nil, errors.Newf("pathx: 非法占位符 %q：占位符替换整个 path 段，不能含 '/'", c.placeholder)
 	}
 	return c, nil
 }

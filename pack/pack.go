@@ -110,7 +110,7 @@ func (w *Writer) AddJSONL(name string, rows any) (int, error) {
 		return 0, err
 	}
 	if _, dup := w.files[safe]; dup {
-		return 0, fmt.Errorf("pack: 文件名 %q 重复", safe)
+		return 0, errors.Newf("pack: 文件名 %q 重复", safe)
 	}
 	iter, err := newRowIter(rows)
 	if err != nil {
@@ -119,7 +119,7 @@ func (w *Writer) AddJSONL(name string, rows any) (int, error) {
 
 	f, err := w.zw.Create(safe)
 	if err != nil {
-		w.err = fmt.Errorf("pack: 创建条目 %s 失败: %w", safe, err)
+		w.err = errors.Wrapf(err, "pack: 创建条目 %s 失败", safe)
 		return 0, w.err
 	}
 	dw := &digestWriter{w: f, h: sha256.New()}
@@ -128,15 +128,15 @@ func (w *Writer) AddJSONL(name string, rows any) (int, error) {
 	for iter.Next() {
 		line, err := json.Marshal(iter.Value())
 		if err != nil {
-			w.err = fmt.Errorf("pack: 编码 %s 第 %d 行失败: %w", safe, n+1, err)
+			w.err = errors.Wrapf(err, "pack: 编码 %s 第 %d 行失败", safe, n+1)
 			return 0, w.err
 		}
 		if _, err := dw.Write(line); err != nil {
-			w.err = fmt.Errorf("pack: 写入 %s 第 %d 行失败: %w", safe, n+1, err)
+			w.err = errors.Wrapf(err, "pack: 写入 %s 第 %d 行失败", safe, n+1)
 			return 0, w.err
 		}
 		if _, err := dw.Write([]byte{'\n'}); err != nil {
-			w.err = fmt.Errorf("pack: 写入 %s 第 %d 行失败: %w", safe, n+1, err)
+			w.err = errors.Wrapf(err, "pack: 写入 %s 第 %d 行失败", safe, n+1)
 			return 0, w.err
 		}
 		n++
@@ -174,22 +174,22 @@ func (w *Writer) Close() (*Manifest, error) {
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
-		w.err = fmt.Errorf("pack: 序列化清单失败: %w", err)
+		w.err = errors.Wrapf(err, "pack: 序列化清单失败")
 		return nil, w.err
 	}
 	data = append(data, '\n')
 
 	f, err := w.zw.Create(manifestName)
 	if err != nil {
-		w.err = fmt.Errorf("pack: 写入清单失败: %w", err)
+		w.err = errors.Wrapf(err, "pack: 写入清单失败")
 		return nil, w.err
 	}
 	if _, err := f.Write(data); err != nil {
-		w.err = fmt.Errorf("pack: 写入清单失败: %w", err)
+		w.err = errors.Wrapf(err, "pack: 写入清单失败")
 		return nil, w.err
 	}
 	if err := w.zw.Close(); err != nil {
-		w.err = fmt.Errorf("pack: 关闭 zip 失败: %w", err)
+		w.err = errors.Wrapf(err, "pack: 关闭 zip 失败")
 		return nil, w.err
 	}
 

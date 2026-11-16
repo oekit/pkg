@@ -1,9 +1,10 @@
 package stringx
 
 import (
-	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // 本文件提供基于 rune 级 trie 的多模式替换器。
@@ -32,15 +33,15 @@ type Replacer struct {
 // 返回值。同名 pattern 后写覆盖先写。
 func NewReplacer(patterns, repls []string) (*Replacer, error) {
 	if len(patterns) != len(repls) {
-		return nil, fmt.Errorf("stringx: patterns 数 %d 与 repls 数 %d 不一致", len(patterns), len(repls))
+		return nil, errors.Newf("stringx: patterns 数 %d 与 repls 数 %d 不一致", len(patterns), len(repls))
 	}
 	root := &replacerNode{}
 	for i, p := range patterns {
 		if p == "" {
-			return nil, fmt.Errorf("stringx: pattern 不能为空串（索引 %d）", i)
+			return nil, errors.Newf("stringx: pattern 不能为空串（索引 %d）", i)
 		}
 		if !utf8.ValidString(p) {
-			return nil, fmt.Errorf("stringx: pattern 含非法 UTF-8 序列（索引 %d）", i)
+			return nil, errors.Newf("stringx: pattern 含非法 UTF-8 序列（索引 %d）", i)
 		}
 		node := root
 		for _, r := range p {

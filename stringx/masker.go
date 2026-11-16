@@ -1,11 +1,12 @@
 package stringx
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // 本文件提供按「形态」脱敏的遮蔽器 Masker。
@@ -133,19 +134,19 @@ func NewMasker(rules []Rule) (*Masker, error) {
 	seen := make(map[string]int, len(rules))
 	for i, r := range rules {
 		if r.Re == nil {
-			return nil, fmt.Errorf("stringx: 规则 %d 的 Re 为 nil", i)
+			return nil, errors.Newf("stringx: 规则 %d 的 Re 为 nil", i)
 		}
 		if r.Name == "" {
-			return nil, fmt.Errorf("stringx: 规则 %d 的 Name 为空", i)
+			return nil, errors.Newf("stringx: 规则 %d 的 Name 为空", i)
 		}
 		if r.Keep < 0 {
-			return nil, fmt.Errorf("stringx: 规则 %q 的 Keep 为负数（%d）", r.Name, r.Keep)
+			return nil, errors.Newf("stringx: 规则 %q 的 Keep 为负数（%d）", r.Name, r.Keep)
 		}
 		if err := validMaskName(r.Name); err != nil {
-			return nil, fmt.Errorf("stringx: 规则 %d 的 Name 非法: %w", i, err)
+			return nil, errors.Wrapf(err, "stringx: 规则 %d 的 Name 非法", i)
 		}
 		if prev, dup := seen[r.Name]; dup {
-			return nil, fmt.Errorf("stringx: 规则 %q 重复（索引 %d 与 %d）", r.Name, prev, i)
+			return nil, errors.Newf("stringx: 规则 %q 重复（索引 %d 与 %d）", r.Name, prev, i)
 		}
 		seen[r.Name] = i
 		m.rules = append(m.rules, maskRule{name: r.Name, re: r.Re, keep: r.Keep})
@@ -158,9 +159,9 @@ func validMaskName(name string) error {
 	for _, r := range name {
 		switch {
 		case r == maskLabelOpen || r == maskLabelClose:
-			return fmt.Errorf("形态标签不能含定界符 %q/%q", maskLabelOpen, maskLabelClose)
+			return errors.Newf("形态标签不能含定界符 %q/%q", maskLabelOpen, maskLabelClose)
 		case unicode.IsControl(r):
-			return fmt.Errorf("形态标签不能含控制字符 %U", r)
+			return errors.Newf("形态标签不能含控制字符 %U", r)
 		}
 	}
 	return nil

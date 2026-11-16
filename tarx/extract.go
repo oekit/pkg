@@ -7,13 +7,14 @@ package tarx
 
 import (
 	"archive/tar"
-	"errors"
-	"fmt"
+	stderrors "errors"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // Extract 从 tar 流解包到 root 目录，返回落地口径的 Stats。
@@ -50,7 +51,7 @@ func Extract(r io.Reader, root string) (Stats, error) {
 	tr := tar.NewReader(r)
 	for {
 		hdr, err := tr.Next()
-		if errors.Is(err, io.EOF) {
+		if stderrors.Is(err, io.EOF) {
 			return st, nil
 		}
 		if err != nil {
@@ -133,10 +134,10 @@ func extractFile(tr *tar.Reader, target string, perm fs.FileMode, st *Stats) err
 	n, copyErr := io.Copy(f, tr)
 	closeErr := f.Close()
 	if copyErr != nil {
-		return fmt.Errorf("tarx: %s: 写入中止: %w", target, copyErr)
+		return errors.Wrapf(copyErr, "tarx: %s: 写入中止", target)
 	}
 	if closeErr != nil {
-		return fmt.Errorf("tarx: %s: 关闭失败: %w", target, closeErr)
+		return errors.Wrapf(closeErr, "tarx: %s: 关闭失败", target)
 	}
 	st.Files++
 	st.Bytes += n

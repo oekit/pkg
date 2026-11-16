@@ -21,26 +21,28 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // 转发面错误哨兵（errors.Is 判定）。
 var (
 	// ErrDeliveryFailed sink 投递失败（HTTP 非 2xx / 网络错 / 签名失败 /
 	// syslog 连接或写帧失败）——游标不推进，整批下轮重发。
-	ErrDeliveryFailed = errors.New("webhook: 转发投递失败")
+	ErrDeliveryFailed = stderrors.New("webhook: 转发投递失败")
 	// ErrInvalidForwardPayload 批内载荷非法（空或非合法 JSON）——毒批
 	// fail-loud 卡住游标，绝不静默跳过（跳过=有意丢数据，是宿主的决策
 	// 不是转发器的；宿主需在源头保证产出质量或显式改游标绕过）。
-	ErrInvalidForwardPayload = errors.New("webhook: 转发载荷非法")
+	ErrInvalidForwardPayload = stderrors.New("webhook: 转发载荷非法")
 	// ErrBadForwardBatch 批序非法（Seq 非严格递增或未越过游标）——源侧
 	// 契约破坏，硬失败不推进（推进非最大 Seq 会静默丢事件）。
-	ErrBadForwardBatch = errors.New("webhook: 转发批次序非法")
+	ErrBadForwardBatch = stderrors.New("webhook: 转发批次序非法")
 )
 
 // ForwardEvent 转发批次里的一条事件。
@@ -195,11 +197,11 @@ func NewForwarder(store CursorStore, src BatchSource, sinks []ForwardSink, opts 
 func (f *Forwarder) ForwardOnce(ctx context.Context) (int, error) {
 	cursor, err := f.store.LoadCursor(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("webhook: 加载转发游标失败: %w", err)
+		return 0, errors.Wrapf(err, "webhook: 加载转发游标失败")
 	}
 	batch, err := f.src.FetchAfter(ctx, cursor, f.limit)
 	if err != nil {
-		return 0, fmt.Errorf("webhook: 取转发批失败（游标 %d 之后）: %w", cursor, err)
+		return 0, errors.Wrapf(err, "webhook: 取转发批失败（游标 %d 之后）", cursor)
 	}
 	if len(batch) == 0 {
 		return 0, nil

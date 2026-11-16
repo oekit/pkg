@@ -13,13 +13,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"errors"
-	"fmt"
+	stderrors "errors"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // ErrNoPassphrase passphrase 缺失（空串）。与 ErrNoKey 同 fail-fast 口径：
 // 「环境变量没配就落库明文」不存在合法形态。
-var ErrNoPassphrase = errors.New("secretx: passphrase missing")
+var ErrNoPassphrase = stderrors.New("secretx: passphrase missing")
 
 const (
 	// passphraseSaltSize 每密文随机 salt 长度（16B，NIST 建议下限）。
@@ -80,15 +81,15 @@ func NewPassphraseBox(passphrase string) (*Box, error) {
 func derivePassphraseAEAD(passphrase string, salt []byte, iterations int) (cipher.AEAD, error) {
 	key, err := pbkdf2.Key(sha256.New, passphrase, salt, iterations, passphraseKeySize)
 	if err != nil {
-		return nil, fmt.Errorf("secretx: kdf: %w", err)
+		return nil, errors.Wrapf(err, "secretx: kdf")
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, fmt.Errorf("secretx: new cipher: %w", err)
+		return nil, errors.Wrapf(err, "secretx: new cipher")
 	}
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, fmt.Errorf("secretx: new gcm: %w", err)
+		return nil, errors.Wrapf(err, "secretx: new gcm")
 	}
 	return aead, nil
 }
@@ -99,7 +100,7 @@ func derivePassphraseAEAD(passphrase string, salt []byte, iterations int) (ciphe
 func (b *Box) sealPassphrase(plaintext, aad []byte) (string, error) {
 	salt := make([]byte, passphraseSaltSize)
 	if _, err := rand.Read(salt); err != nil {
-		return "", fmt.Errorf("secretx: read salt: %w", err)
+		return "", errors.Wrapf(err, "secretx: read salt")
 	}
 	a, err := derivePassphraseAEAD(b.pass, salt, PassphraseKDFIterations)
 	if err != nil {
@@ -107,7 +108,7 @@ func (b *Box) sealPassphrase(plaintext, aad []byte) (string, error) {
 	}
 	nonce := make([]byte, nonceSize)
 	if _, err := rand.Read(nonce); err != nil {
-		return "", fmt.Errorf("secretx: read nonce: %w", err)
+		return "", errors.Wrapf(err, "secretx: read nonce")
 	}
 	buf := make([]byte, 0, passphraseSaltSize+nonceSize+len(plaintext)+a.Overhead())
 	buf = append(buf, salt...)
@@ -123,10 +124,10 @@ func (b *Box) sealPassphrase(plaintext, aad []byte) (string, error) {
 func (b *Box) openPassphrase(payload string, aad []byte) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
-		return nil, fmt.Errorf("secretx: %w", ErrBadCiphertext)
+		return nil, errors.Wrapf(ErrBadCiphertext, "secretx")
 	}
 	if len(raw) < passphraseSaltSize+nonceSize+gcmTagSize {
-		return nil, fmt.Errorf("secretx: %w", ErrBadCiphertext)
+		return nil, errors.Wrapf(ErrBadCiphertext, "secretx")
 	}
 	a, err := derivePassphraseAEAD(b.pass, raw[:passphraseSaltSize], PassphraseKDFIterations)
 	if err != nil {
@@ -135,7 +136,7 @@ func (b *Box) openPassphrase(payload string, aad []byte) ([]byte, error) {
 	nonce := raw[passphraseSaltSize : passphraseSaltSize+nonceSize]
 	plaintext, err := a.Open(nil, nonce, raw[passphraseSaltSize+nonceSize:], aad)
 	if err != nil {
-		return nil, fmt.Errorf("secretx: %w", ErrBadCiphertext)
+		return nil, errors.Wrapf(ErrBadCiphertext, "secretx")
 	}
 	return plaintext, nil
 }

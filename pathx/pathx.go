@@ -2,9 +2,10 @@
 package pathx
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // MatchesPath 检查路径是否匹配任意一个 glob 模式。
@@ -83,7 +84,7 @@ func MatchesPathStrict(patterns []string, path string) (bool, error) {
 		}
 		ok, err := filepath.Match(pattern, path)
 		if err != nil {
-			return false, fmt.Errorf("pathx: 非法 glob pattern %q: %w", pattern, err)
+			return false, errors.Wrapf(err, "pathx: 非法 glob pattern %q", pattern)
 		}
 		if ok {
 			return true, nil
@@ -111,7 +112,7 @@ func ValidatePattern(pattern string) error {
 	// name 取任意非空占位即可：语法错误与 name 无关，filepath.Match 对
 	// 非法 pattern 无论 name 是什么都返回 ErrBadPattern。
 	if _, err := filepath.Match(pattern, "x"); err != nil {
-		return fmt.Errorf("pathx: 非法 glob pattern %q: %w", pattern, err)
+		return errors.Wrapf(err, "pathx: 非法 glob pattern %q", pattern)
 	}
 	return nil
 }

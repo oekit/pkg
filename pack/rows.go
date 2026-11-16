@@ -1,7 +1,6 @@
 package pack
 
 import (
-	"fmt"
 	"reflect"
 
 	"github.com/oekit/pkg/errors"
@@ -29,10 +28,10 @@ func newRowIter(rows any) (rowIter, error) {
 	switch rv.Kind() {
 	case reflect.Slice, reflect.Array:
 	default:
-		return nil, fmt.Errorf("pack: rows 必须是切片或数组，收到 %T", rows)
+		return nil, errors.Newf("pack: rows 必须是切片或数组，收到 %T", rows)
 	}
 	if rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Uint8 {
-		return nil, fmt.Errorf("pack: rows 不支持字节切片（%T），请逐行传入结构体或映射", rows)
+		return nil, errors.Newf("pack: rows 不支持字节切片（%T），请逐行传入结构体或映射", rows)
 	}
 	return &reflectRowIter{rv: rv}, nil
 }
