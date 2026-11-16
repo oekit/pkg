@@ -8,13 +8,15 @@ package tarx
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // ManifestName WithManifest 夹带的清单条目名（解包后位于 root/<ManifestName>；
@@ -26,10 +28,10 @@ var (
 	// ErrNoManifest 目录里没有清单（root/<ManifestName> 不存在）——
 	// 没用 WithManifest 的流解出来的树自然没有，调用方据此区分「没自证」
 	// 与「自证失败」。
-	ErrNoManifest = errors.New("tarx: manifest 不存在")
+	ErrNoManifest = stderrors.New("tarx: manifest 不存在")
 	// ErrMismatch 清单核对失败：文件缺失、内容被篡改、清单行格式非法
 	// ——错误消息点名具体文件/行号。
-	ErrMismatch = errors.New("tarx: manifest 核对失败")
+	ErrMismatch = stderrors.New("tarx: manifest 核对失败")
 )
 
 // VerifyManifest 对解包后的树核对清单（读 root/<ManifestName>，逐文件
@@ -45,7 +47,7 @@ var (
 func VerifyManifest(root string) error {
 	manifestPath := filepath.Join(root, ManifestName)
 	data, err := os.ReadFile(manifestPath)
-	if errors.Is(err, fs.ErrNotExist) {
+	if stderrors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("%w: %s", ErrNoManifest, ManifestName)
 	}
 	if err != nil {
@@ -68,7 +70,7 @@ func VerifyManifest(root string) error {
 		}
 		f, err := os.Open(target)
 		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
+			if stderrors.Is(err, fs.ErrNotExist) {
 				return fmt.Errorf("%w: %s: 清单列出的文件缺失", ErrMismatch, name)
 			}
 			return err
@@ -77,10 +79,10 @@ func VerifyManifest(root string) error {
 		_, copyErr := io.Copy(sum, f)
 		closeErr := f.Close()
 		if copyErr != nil {
-			return fmt.Errorf("tarx: %s: 读取中止: %w", name, copyErr)
+			return errors.Wrapf(copyErr, "tarx: %s: 读取中止", name)
 		}
 		if closeErr != nil {
-			return fmt.Errorf("tarx: %s: 关闭失败: %w", name, closeErr)
+			return errors.Wrapf(closeErr, "tarx: %s: 关闭失败", name)
 		}
 		if got := hex.EncodeToString(sum.Sum(nil)); got != want {
 			return fmt.Errorf("%w: %s: 期望 sha256 %s，实得 %s", ErrMismatch, name, want, got)

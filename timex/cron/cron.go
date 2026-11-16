@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/oekit/pkg/errors"
 )
 
 const (
@@ -35,13 +37,13 @@ type Schedule interface {
 // 也支持 6 字段格式：秒 分 时 日 月 周
 func Parse(spec string) (Schedule, error) {
 	if spec == "@every" {
-		return nil, fmt.Errorf("missing duration after @every")
+		return nil, errors.New("missing duration after @every")
 	}
 
 	if strings.HasPrefix(spec, "@every ") {
 		d, err := time.ParseDuration(spec[7:])
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse duration %s: %w", spec[7:], err)
+			return nil, errors.Wrapf(err, "failed to parse duration %s", spec[7:])
 		}
 		return Every(d), nil
 	}
@@ -66,7 +68,7 @@ func Parse(spec string) (Schedule, error) {
 	}
 
 	if len(fields) != 6 {
-		return nil, fmt.Errorf("expected 5 or 6 fields, got %d: %s", len(fields), spec)
+		return nil, errors.Newf("expected 5 or 6 fields, got %d: %s", len(fields), spec)
 	}
 
 	schedule := &SpecSchedule{
@@ -76,23 +78,23 @@ func Parse(spec string) (Schedule, error) {
 	var err error
 	schedule.Second, err = getField(fields[0], 0, 59)
 	if err != nil {
-		return nil, fmt.Errorf("invalid second field: %w", err)
+		return nil, errors.Wrapf(err, "invalid second field")
 	}
 	schedule.Minute, err = getField(fields[1], 0, 59)
 	if err != nil {
-		return nil, fmt.Errorf("invalid minute field: %w", err)
+		return nil, errors.Wrapf(err, "invalid minute field")
 	}
 	schedule.Hour, err = getField(fields[2], 0, 23)
 	if err != nil {
-		return nil, fmt.Errorf("invalid hour field: %w", err)
+		return nil, errors.Wrapf(err, "invalid hour field")
 	}
 	schedule.Dom, err = getField(fields[3], 1, 31)
 	if err != nil {
-		return nil, fmt.Errorf("invalid day of month field: %w", err)
+		return nil, errors.Wrapf(err, "invalid day of month field")
 	}
 	schedule.Month, err = getField(fields[4], 1, 12)
 	if err != nil {
-		return nil, fmt.Errorf("invalid month field: %w", err)
+		return nil, errors.Wrapf(err, "invalid month field")
 	}
 	// dow 接受 7≡Sunday（[#186] / [#215]）：vixie cron / cronie / crontab(5) /
 	// robfig 都接受 7，且**在列表与范围的端点同样接受**（`6,7`、`5-7`）——
@@ -101,7 +103,7 @@ func Parse(spec string) (Schedule, error) {
 	// 方向被反向误导。方言差异（MON/JAN 名字、L/W/# 均不支持）见 doc.go。
 	schedule.Dow, err = getDowField(fields[5])
 	if err != nil {
-		return nil, fmt.Errorf("invalid day of week field %q (0/7 都是 Sunday; MON/JAN 等名字与 L/W/# 扩展不支持): %w", fields[5], err)
+		return nil, errors.Wrapf(err, "invalid day of week field %q (0/7 都是 Sunday; MON/JAN 等名字与 L/W/# 扩展不支持)", fields[5])
 	}
 
 	return schedule, nil
@@ -366,7 +368,7 @@ func splitStep(s string) (body string, step uint64, err error) {
 		return "", 0, err
 	}
 	if step == 0 {
-		return "", 0, fmt.Errorf("step cannot be zero")
+		return "", 0, errors.New("step cannot be zero")
 	}
 	return body, step, nil
 }
@@ -443,10 +445,10 @@ func parseRange(s string, min, max uint64, bits *uint64, normalize func(uint64) 
 			return err
 		}
 		if start > end {
-			return fmt.Errorf("invalid range: %s", s)
+			return errors.Newf("invalid range: %s", s)
 		}
 		if start < min || end > max {
-			return fmt.Errorf("out of range [%d, %d]: %s", min, max, s)
+			return errors.Newf("out of range [%d, %d]: %s", min, max, s)
 		}
 		for i := start; i <= end; i += step {
 			*bits |= 1 << norm(i)
@@ -463,9 +465,9 @@ func parseRange(s string, min, max uint64, bits *uint64, normalize func(uint64) 
 	if start < min || start > max {
 		// "N/step" 报整段（既有文案口径），纯单值报值本身
 		if strings.ContainsRune(s, '/') {
-			return fmt.Errorf("out of range [%d, %d]: %s", min, max, s)
+			return errors.Newf("out of range [%d, %d]: %s", min, max, s)
 		}
-		return fmt.Errorf("out of range [%d, %d]: %d", min, max, start)
+		return errors.Newf("out of range [%d, %d]: %d", min, max, start)
 	}
 	if strings.ContainsRune(s, '/') {
 		// 单值步长 "N/step"：从 N（归一后）步进到字段最大值（终点见
