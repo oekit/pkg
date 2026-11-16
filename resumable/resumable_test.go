@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"slices"
@@ -696,7 +695,7 @@ func TestPutChunkStatError(t *testing.T) {
 	m := NewManager(NewMemSessionStore(), store)
 	s := initSession(t, m)
 
-	boom := fmt.Errorf("stat boom")
+	boom := errors.New("stat boom")
 	store.statErr = boom
 	err := m.PutChunk(ctx, s.ID, 0, strings.NewReader("AAAA"), 4)
 	if !errors.Is(err, boom) {
