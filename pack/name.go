@@ -1,7 +1,6 @@
 package pack
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/oekit/pkg/errors"
@@ -19,31 +18,31 @@ func sanitizeName(name string) (string, error) {
 		return "", errors.New("pack: 文件名为空")
 	}
 	if strings.TrimSpace(name) != name {
-		return "", fmt.Errorf("pack: 非法文件名 %q：不允许首尾空白", name)
+		return "", errors.Newf("pack: 非法文件名 %q：不允许首尾空白", name)
 	}
 	if strings.ContainsAny(name, `/\`) {
-		return "", fmt.Errorf("pack: 非法文件名 %q：不允许包含路径分隔符", name)
+		return "", errors.Newf("pack: 非法文件名 %q：不允许包含路径分隔符", name)
 	}
 	if strings.Contains(name, "..") {
-		return "", fmt.Errorf("pack: 非法文件名 %q：不允许包含连续点序列", name)
+		return "", errors.Newf("pack: 非法文件名 %q：不允许包含连续点序列", name)
 	}
 	if strings.HasPrefix(name, "/") {
-		return "", fmt.Errorf("pack: 非法文件名 %q：不允许绝对路径", name)
+		return "", errors.Newf("pack: 非法文件名 %q：不允许绝对路径", name)
 	}
 	// Windows 盘符形式（如 C:data.json）
 	if len(name) >= 2 && name[1] == ':' {
-		return "", fmt.Errorf("pack: 非法文件名 %q：不允许绝对路径", name)
+		return "", errors.Newf("pack: 非法文件名 %q：不允许绝对路径", name)
 	}
 	if name == "." {
-		return "", fmt.Errorf("pack: 非法文件名 %q：不是合法文件名", name)
+		return "", errors.Newf("pack: 非法文件名 %q：不是合法文件名", name)
 	}
 	for _, r := range name {
 		if r < 0x20 || r == 0x7f {
-			return "", fmt.Errorf("pack: 非法文件名 %q：不允许控制字符", name)
+			return "", errors.Newf("pack: 非法文件名 %q：不允许控制字符", name)
 		}
 	}
 	if name == manifestName {
-		return "", fmt.Errorf("pack: 非法文件名 %q：与清单文件名冲突", name)
+		return "", errors.Newf("pack: 非法文件名 %q：与清单文件名冲突", name)
 	}
 	return name, nil
 }

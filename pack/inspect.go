@@ -251,7 +251,7 @@ func indexEntries(zr *zip.Reader) (map[string]*zip.File, []string, []string) {
 func digestAndCount(f *zip.File) (string, int, error) {
 	// 预检：条目**声明**的解压大小超限 ⇒ 直接拒绝，省掉实际解压。
 	if f.UncompressedSize64 > maxEntrySize {
-		return "", 0, fmt.Errorf("条目声明解压后 %d 字节，超过 %d 字节上限",
+		return "", 0, errors.Newf("条目声明解压后 %d 字节，超过 %d 字节上限",
 			f.UncompressedSize64, maxEntrySize)
 	}
 	rc, err := f.Open()
@@ -280,7 +280,7 @@ func digestAndCount(f *zip.File) (string, int, error) {
 			// 硬上限：声明大小可以撒谎，实际解压量用计数器卡住。
 			total += int64(n)
 			if total > maxEntrySize {
-				return "", 0, fmt.Errorf("条目解压后超过 %d 字节上限", maxEntrySize)
+				return "", 0, errors.Newf("条目解压后超过 %d 字节上限", maxEntrySize)
 			}
 			h.Write(buf[:n])
 			nonEmpty = true
@@ -318,7 +318,7 @@ func readLimited(f *zip.File, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("%s 超过 %d 字节上限", f.Name, limit)
+		return nil, errors.Newf("%s 超过 %d 字节上限", f.Name, limit)
 	}
 	return data, nil
 }
