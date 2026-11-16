@@ -3,6 +3,8 @@ package slicex
 import (
 	"fmt"
 	"strings"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // Contains 检查切片中是否包含指定元素。
@@ -105,7 +107,7 @@ func ToMapStrict[T any, K comparable](slice []T, keyFn func(T) K) (map[K]T, erro
 	for _, v := range slice {
 		k := keyFn(v)
 		if _, dup := result[k]; dup {
-			return nil, fmt.Errorf("slicex: 重复 key %v（last-wins 语义用 ToMap）", k)
+			return nil, errors.Newf("slicex: 重复 key %v（last-wins 语义用 ToMap）", k)
 		}
 		result[k] = v
 	}

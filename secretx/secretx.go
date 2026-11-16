@@ -5,24 +5,25 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
-	"errors"
-	"fmt"
+	stderrors "errors"
 	"strings"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // 哨兵错误（errors.Is 判定）。
 var (
 	// ErrNoKey 主密钥缺失（空串/空切片）。构造期 fail-fast，不存在「缺钥
 	// 明文透传」的降级路径——本地开发需要绕过时请自行用恒等实现。
-	ErrNoKey = errors.New("secretx: master key missing")
+	ErrNoKey = stderrors.New("secretx: master key missing")
 	// ErrBadKeySize 主密钥长度不在 16/24/32 字节（AES-128/192/256）范围内。
-	ErrBadKeySize = errors.New("secretx: master key size must be 16, 24 or 32 bytes")
+	ErrBadKeySize = stderrors.New("secretx: master key size must be 16, 24 or 32 bytes")
 	// ErrBadCiphertext 密文损坏或主密钥不匹配（GCM 认证失败）。两种情形
 	// 统一表述，不泄露细节——「哪条密文是用哪把钥封的」不该可被日志反推。
-	ErrBadCiphertext = errors.New("secretx: bad ciphertext")
+	ErrBadCiphertext = stderrors.New("secretx: bad ciphertext")
 	// ErrUnsupportedVersion 密文版本前缀未识别（主密钥轮换识别位：v2 密钥
 	// 落地后，下游可按前缀选钥解密重封）。
-	ErrUnsupportedVersion = errors.New("secretx: unsupported ciphertext version")
+	ErrUnsupportedVersion = stderrors.New("secretx: unsupported ciphertext version")
 )
 
 // VersionV1 原始主密钥形态的密文版本前缀（"v1:"）。与 domain-manage 手搓
@@ -49,10 +50,10 @@ func ParseKey(encoded string) ([]byte, error) {
 	}
 	key, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil, fmt.Errorf("secretx: master key 不是合法 base64: %w", err)
+		return nil, errors.Wrapf(err, "secretx: master key 不是合法 base64")
 	}
 	if !validKeySize(len(key)) {
-		return nil, fmt.Errorf("secretx: master key 解码后 %d 字节: %w", len(key), ErrBadKeySize)
+		return nil, errors.Wrapf(ErrBadKeySize, "secretx: master key 解码后 %d 字节", len(key))
 	}
 	return key, nil
 }
@@ -85,15 +86,15 @@ func NewBox(masterKey []byte) (*Box, error) {
 		return nil, ErrNoKey
 	}
 	if !validKeySize(len(masterKey)) {
-		return nil, fmt.Errorf("secretx: master key %d 字节: %w", len(masterKey), ErrBadKeySize)
+		return nil, errors.Wrapf(ErrBadKeySize, "secretx: master key %d 字节", len(masterKey))
 	}
 	block, err := aes.NewCipher(masterKey)
 	if err != nil {
-		return nil, fmt.Errorf("secretx: new cipher: %w", err) // 长度已校验，防御性
+		return nil, errors.Wrapf(err, "secretx: new cipher") // 长度已校验，防御性
 	}
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, fmt.Errorf("secretx: new gcm: %w", err)
+		return nil, errors.Wrapf(err, "secretx: new gcm")
 	}
 	return &Box{aead: aead}, nil
 }
@@ -113,7 +114,7 @@ func (b *Box) Seal(plaintext []byte) (string, error) {
 // （salt 前置，见 passphrase.go）；原始主密钥形态产出 "v1:"（历史行为不变）。
 func (b *Box) SealWithAAD(plaintext, aad []byte) (string, error) {
 	if b == nil {
-		return "", errors.New("secretx: Box 未初始化（须由 NewBox/NewPassphraseBox 创建）")
+		return "", stderrors.New("secretx: Box 未初始化（须由 NewBox/NewPassphraseBox 创建）")
 	}
 	if b.pass != "" {
 		return b.sealPassphrase(plaintext, aad)
@@ -124,7 +125,7 @@ func (b *Box) SealWithAAD(plaintext, aad []byte) (string, error) {
 	}
 	nonce := make([]byte, nonceSize)
 	if _, err := rand.Read(nonce); err != nil {
-		return "", fmt.Errorf("secretx: read nonce: %w", err)
+		return "", errors.Wrapf(err, "secretx: read nonce")
 	}
 	// Seal 返回 append(dst, ciphertext+tag...) ⇒ nonce‖ct
 	sealed := a.Seal(nonce, nonce, plaintext, aad)
@@ -148,25 +149,25 @@ func (b *Box) Open(ciphertext string) ([]byte, error) {
 // （统一表述——不向日志泄露「哪条密文是用哪把钥封的」）。
 func (b *Box) OpenWithAAD(ciphertext string, aad []byte) ([]byte, error) {
 	if b == nil {
-		return nil, errors.New("secretx: Box 未初始化（须由 NewBox/NewPassphraseBox 创建）")
+		return nil, stderrors.New("secretx: Box 未初始化（须由 NewBox/NewPassphraseBox 创建）")
 	}
 	version, payload, ok := strings.Cut(ciphertext, versionSep)
 	if !ok {
-		return nil, fmt.Errorf("secretx: 密文缺少版本前缀: %w", ErrUnsupportedVersion)
+		return nil, errors.Wrapf(ErrUnsupportedVersion, "secretx: 密文缺少版本前缀")
 	}
 	switch version {
 	case VersionV1:
 		if b.pass != "" {
-			return nil, fmt.Errorf("secretx: 密文是原始主密钥形态(%s)，当前 Box 由 NewPassphraseBox 构造（无原始主密钥）: %w", VersionV1, ErrUnsupportedVersion)
+			return nil, errors.Wrapf(ErrUnsupportedVersion, "secretx: 密文是原始主密钥形态(%s)，当前 Box 由 NewPassphraseBox 构造（无原始主密钥）", VersionV1)
 		}
 		return b.openV1(payload, aad)
 	case VersionV2:
 		if b.pass == "" {
-			return nil, fmt.Errorf("secretx: 密文是 passphrase 派生形态(%s)，当前 Box 由 NewBox 构造（无 passphrase）: %w", VersionV2, ErrUnsupportedVersion)
+			return nil, errors.Wrapf(ErrUnsupportedVersion, "secretx: 密文是 passphrase 派生形态(%s)，当前 Box 由 NewBox 构造（无 passphrase）", VersionV2)
 		}
 		return b.openPassphrase(payload, aad)
 	default:
-		return nil, fmt.Errorf("secretx: 密文版本 %q: %w", version, ErrUnsupportedVersion)
+		return nil, errors.Wrapf(ErrUnsupportedVersion, "secretx: 密文版本 %q", version)
 	}
 }
 
@@ -178,14 +179,14 @@ func (b *Box) openV1(payload string, aad []byte) ([]byte, error) {
 	}
 	raw, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
-		return nil, fmt.Errorf("secretx: %w", ErrBadCiphertext)
+		return nil, errors.Wrapf(ErrBadCiphertext, "secretx")
 	}
 	if len(raw) < nonceSize+a.Overhead() {
-		return nil, fmt.Errorf("secretx: %w", ErrBadCiphertext)
+		return nil, errors.Wrapf(ErrBadCiphertext, "secretx")
 	}
 	plaintext, err := a.Open(nil, raw[:nonceSize], raw[nonceSize:], aad)
 	if err != nil {
-		return nil, fmt.Errorf("secretx: %w", ErrBadCiphertext)
+		return nil, errors.Wrapf(ErrBadCiphertext, "secretx")
 	}
 	return plaintext, nil
 }
@@ -194,7 +195,7 @@ func (b *Box) openV1(payload string, aad []byte) ([]byte, error) {
 // 而不是静默产出空密文。
 func (b *Box) aeadOrErr() (cipher.AEAD, error) {
 	if b == nil || b.aead == nil {
-		return nil, errors.New("secretx: Box 未初始化（须由 NewBox 创建）")
+		return nil, stderrors.New("secretx: Box 未初始化（须由 NewBox 创建）")
 	}
 	return b.aead, nil
 }
