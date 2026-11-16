@@ -2,6 +2,12 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.52.0] — 2026-11-16
+
+- feat(errors): 新增 Newf/Wrapf——错误构造单 import 收口（#520）。Newf 格式化构造（无链）、Wrapf 格式化链式包装（err 尾参 %w + args 防御性拷贝）；doc.go 仓规 #378 修订为三形态并存（fmt.Errorf/Newf/Wrapf），Errorf 去留史追加 v0.52.0 修订记录。后续全矩阵 fmt.Errorf 调用点按三形态对位替换。
+
+关联问题单：pkg#520。
+
 ## [v0.51.0] — 2026-11-16
 
 - - canon 补宿主既有规范形字节指纹入口 `FingerprintBytes` 与指纹 diff `DiffDigests`：历史 12-hex 布局可原样复算，存量快照不再因收编 canon 集体失配（#514）。
