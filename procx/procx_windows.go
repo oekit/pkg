@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // windows 侧全部走 syscall.NewLazyDLL 直调 kernel32——零第三方依赖
@@ -65,7 +67,7 @@ type jobObjectBasicLimitInformation struct {
 func newJobObject() (uintptr, error) {
 	h, _, callErr := procCreateJobObjectW.Call(0, 0)
 	if h == 0 {
-		return 0, fmt.Errorf("procx: CreateJobObjectW: %w", callErr)
+		return 0, errors.Wrapf(callErr, "procx: CreateJobObjectW")
 	}
 	limit := jobObjectBasicLimitInformation{LimitFlags: jobObjectLimitKillOnJobClose}
 	r, _, callErr := procSetInformationJobObject.Call(
@@ -76,7 +78,7 @@ func newJobObject() (uintptr, error) {
 	)
 	if r == 0 {
 		procCloseHandle.Call(h)
-		return 0, fmt.Errorf("procx: SetInformationJobObject: %w", callErr)
+		return 0, errors.Wrapf(callErr, "procx: SetInformationJobObject")
 	}
 	return h, nil
 }
@@ -86,7 +88,7 @@ func newJobObject() (uintptr, error) {
 func openProcessHandle(pid int) (uintptr, error) {
 	h, _, callErr := procOpenProcess.Call(processAccessSetQuotaTerminate, 0, uintptr(pid))
 	if h == 0 {
-		return 0, fmt.Errorf("procx: OpenProcess(pid=%d): %w", pid, callErr)
+		return 0, errors.Wrapf(callErr, "procx: OpenProcess(pid=%d)", pid)
 	}
 	return h, nil
 }
@@ -174,7 +176,7 @@ func (st *treeState) cancel(cmd *exec.Cmd) error {
 		defer procCloseHandle.Call(ph)
 		r, _, callErr := procTerminateProcess.Call(ph, windowsTerminateExitCode)
 		if r == 0 {
-			return fmt.Errorf("procx: TerminateProcess(pid=%d): %w", cmd.Process.Pid, callErr)
+			return errors.Wrapf(callErr, "procx: TerminateProcess(pid=%d)", cmd.Process.Pid)
 		}
 		return nil
 	}
@@ -194,7 +196,7 @@ func (st *treeState) cancel(cmd *exec.Cmd) error {
 	}
 	r, _, callErr := procTerminateJobObject.Call(job, windowsTerminateExitCode)
 	if r == 0 {
-		return fmt.Errorf("procx: TerminateJobObject: %w", callErr)
+		return errors.Wrapf(callErr, "procx: TerminateJobObject")
 	}
 	return nil
 }

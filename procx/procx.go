@@ -2,11 +2,13 @@ package procx
 
 import (
 	"context"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"os/exec"
 	"sync"
 	"time"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // defaultGrace 是 TERM→KILL 的宽限时长。
@@ -129,7 +131,7 @@ func Run(ctx context.Context, name string, args []string, opts ...RunOption) (*R
 		memg, err = NewMemGroup(c.memLimit)
 		if err != nil {
 			st.release()
-			return nil, fmt.Errorf("procx: 兑现子进程内存上限失败，拒绝执行（fail closed）: %w", err)
+			return nil, errors.Wrapf(err, "procx: 兑现子进程内存上限失败，拒绝执行（fail closed）")
 		}
 	}
 	if err := cmd.Start(); err != nil {
@@ -139,9 +141,9 @@ func Run(ctx context.Context, name string, args []string, opts ...RunOption) (*R
 			closeErr = memg.Close(context.WithoutCancel(ctx))
 		}
 		if ctx.Err() != nil {
-			return nil, errors.Join(ctx.Err(), closeErr) // exec.Start 对已取消 ctx 返回 ctx.Err()
+			return nil, stderrors.Join(ctx.Err(), closeErr) // exec.Start 对已取消 ctx 返回 ctx.Err()
 		}
-		return nil, errors.Join(err, closeErr)
+		return nil, stderrors.Join(err, closeErr)
 	}
 	if memg != nil {
 		if err := memg.Attach(cmd.Process.Pid); err != nil {
@@ -151,8 +153,8 @@ func Run(ctx context.Context, name string, args []string, opts ...RunOption) (*R
 			_ = cmd.Wait()
 			st.release()
 			st.reap(cmd)
-			return nil, errors.Join(
-				fmt.Errorf("procx: 子进程未进内存限额组，已终止（fail closed）: %w", err),
+			return nil, stderrors.Join(
+				errors.Wrapf(err, "procx: 子进程未进内存限额组，已终止（fail closed）"),
 				memg.Close(context.WithoutCancel(ctx)))
 		}
 	}
@@ -180,23 +182,23 @@ func Run(ctx context.Context, name string, args []string, opts ...RunOption) (*R
 	// exit 0」固定多等宽限+1s 且 err≠nil，退出码信息被弃）。此刻进程自身已
 	// 收场（非零退出 exec 优先返回 *ExitError，走不到这里），按退出码口径回
 	// nil err；强关管道意味着孙进程在其后的输出不再收集，边界见 Run/包文档。
-	if errors.Is(werr, exec.ErrWaitDelay) {
+	if stderrors.Is(werr, exec.ErrWaitDelay) {
 		werr = nil
 	}
 	var ee *exec.ExitError
-	if errors.As(werr, &ee) {
+	if stderrors.As(werr, &ee) {
 		res.ExitCode = ee.ExitCode()
 	} else if werr == nil {
 		res.ExitCode = 0
 	}
 	if ctx.Err() != nil {
 		if memCloseErr != nil {
-			return res, errors.Join(ctx.Err(), memCloseErr)
+			return res, stderrors.Join(ctx.Err(), memCloseErr)
 		}
 		return res, ctx.Err()
 	}
 	if memCloseErr != nil {
-		return res, errors.Join(werr, memCloseErr)
+		return res, stderrors.Join(werr, memCloseErr)
 	}
 	return res, werr
 }
