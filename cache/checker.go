@@ -6,7 +6,6 @@ package cache
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -123,7 +122,7 @@ func (c *Checker) Check(ctx context.Context) error {
 			// （waiter 可 errors.Is/As 到 refresh 回调 panic 出去的原始错误），
 			// goroutine 栈与 panic 值类型信息由 PanicError 携带——此前 %v
 			// 把身份拍平成文本。
-			perr := fmt.Errorf("cache: refresh panic: %w", errors.Recovered(r))
+			perr := errors.Wrapf(errors.Recovered(r), "cache: refresh panic")
 			c.mu.Lock()
 			c.cachedErr = perr
 			c.validUntil = c.now().Add(c.failTTL)

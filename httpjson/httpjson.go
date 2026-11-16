@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	pkgerrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/stringx"
 )
 
@@ -156,7 +157,7 @@ func doSend(ctx context.Context, client *http.Client, req Request, method, ifNon
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, body)
 	if err != nil {
-		return 0, nil, "", false, fmt.Errorf("构造请求失败: %w", err)
+		return 0, nil, "", false, pkgerrors.Wrapf(err, "构造请求失败")
 	}
 	if req.Header != nil {
 		req.Header(httpReq.Header)
@@ -166,7 +167,7 @@ func doSend(ctx context.Context, client *http.Client, req Request, method, ifNon
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return 0, nil, "", false, fmt.Errorf("请求失败: %w", err)
+		return 0, nil, "", false, pkgerrors.Wrapf(err, "请求失败")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	noStore := cacheControlNoStore(resp.Header.Get("Cache-Control"))
@@ -174,7 +175,7 @@ func doSend(ctx context.Context, client *http.Client, req Request, method, ifNon
 	// 排空剩余响应体，连接才能被复用（见 drainBody）。
 	drainBody(resp.Body)
 	if err != nil {
-		return resp.StatusCode, nil, "", noStore, fmt.Errorf("读取响应失败: %w", err)
+		return resp.StatusCode, nil, "", noStore, pkgerrors.Wrapf(err, "读取响应失败")
 	}
 	return resp.StatusCode, raw, resp.Header.Get("ETag"), noStore, nil
 }
@@ -202,7 +203,7 @@ func decodeOK(raw []byte, out any) error {
 		return nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("响应解析失败: %w", err)
+		return pkgerrors.Wrapf(err, "响应解析失败")
 	}
 	return nil
 }
@@ -236,14 +237,14 @@ func DoRaw(ctx context.Context, client *http.Client, req Request, limit int64) (
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, body)
 	if err != nil {
-		return RawResponse{}, fmt.Errorf("构造请求失败: %w", err)
+		return RawResponse{}, pkgerrors.Wrapf(err, "构造请求失败")
 	}
 	if req.Header != nil {
 		req.Header(httpReq.Header)
 	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return RawResponse{}, fmt.Errorf("请求失败: %w", err)
+		return RawResponse{}, pkgerrors.Wrapf(err, "请求失败")
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -255,7 +256,7 @@ func DoRaw(ctx context.Context, client *http.Client, req Request, limit int64) (
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, readLimit))
 	if err != nil {
 		drainBody(resp.Body)
-		return RawResponse{StatusCode: resp.StatusCode}, fmt.Errorf("读取响应失败: %w", err)
+		return RawResponse{StatusCode: resp.StatusCode}, pkgerrors.Wrapf(err, "读取响应失败")
 	}
 	truncated := int64(len(raw)) > limit
 	if truncated {

@@ -2,7 +2,6 @@ package singleflight
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/oekit/pkg/errors"
@@ -77,7 +76,7 @@ func (f *Flight[T]) Do(ctx context.Context, key string, fn func(ctx context.Cont
 			// 保留——waiter 才能 errors.Is/As 到原始错误；%v 只留文本，
 			// 身份丢了。栈与类型信息由 PanicError 携带，error/非 error
 			// 双分支不再由调用方手写。
-			perr := fmt.Errorf("singleflight: fn panic: %w", errors.Recovered(r))
+			perr := errors.Wrapf(errors.Recovered(r), "singleflight: fn panic")
 			c.err = perr
 			f.calls.CompareAndDelete(key, c)
 			close(c.ready)

@@ -1,9 +1,10 @@
 package convert
 
 import (
-	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // ConvertStruct 将 src 结构体的同名字段映射到 dst。
@@ -25,28 +26,28 @@ import (
 // 转换。
 func ConvertStruct(src, dst any) error {
 	if dst == nil {
-		return fmt.Errorf("convert: dst must be a non-nil pointer to struct, got %T", dst)
+		return errors.Newf("convert: dst must be a non-nil pointer to struct, got %T", dst)
 	}
 
 	dstVal := reflect.ValueOf(dst)
 	if dstVal.Kind() != reflect.Pointer {
-		return fmt.Errorf("convert: dst must be a non-nil pointer to struct, got %T", dst)
+		return errors.Newf("convert: dst must be a non-nil pointer to struct, got %T", dst)
 	}
 	if dstVal.IsNil() {
-		return fmt.Errorf("convert: dst must be a non-nil pointer to struct, got nil %T", dst)
+		return errors.Newf("convert: dst must be a non-nil pointer to struct, got nil %T", dst)
 	}
 
 	srcVal := reflect.Indirect(reflect.ValueOf(src))
 	if !srcVal.IsValid() {
-		return fmt.Errorf("convert: src must be a struct or non-nil pointer to struct, got %T", src)
+		return errors.Newf("convert: src must be a struct or non-nil pointer to struct, got %T", src)
 	}
 	if srcVal.Kind() != reflect.Struct {
-		return fmt.Errorf("convert: src must be a struct or non-nil pointer to struct, got %T", src)
+		return errors.Newf("convert: src must be a struct or non-nil pointer to struct, got %T", src)
 	}
 
 	dstVal = dstVal.Elem()
 	if dstVal.Kind() != reflect.Struct {
-		return fmt.Errorf("convert: dst must point to a struct, got pointer to %s", dstVal.Kind())
+		return errors.Newf("convert: dst must point to a struct, got pointer to %s", dstVal.Kind())
 	}
 
 	srcType := srcVal.Type()

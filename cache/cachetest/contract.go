@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/oekit/pkg/cache"
+	"github.com/oekit/pkg/errors"
 )
 
 // Contract 定义被测缓存的价值工厂与相等性。
@@ -93,7 +94,7 @@ func Run[T any](t *testing.T, c Contract[T], factory func(t *testing.T, source c
 func unusedSource[T any](t *testing.T) cache.SourceFunc[T] {
 	return func(ctx context.Context, key string) (*T, error) {
 		t.Errorf("该场景不应回源（key=%q）", key)
-		return nil, fmt.Errorf("cachetest: unexpected source call, key=%q", key)
+		return nil, errors.Newf("cachetest: unexpected source call, key=%q", key)
 	}
 }
 

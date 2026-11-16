@@ -5,9 +5,10 @@ package config
 // 得多。
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // parseYAML 把 yaml 文本解析为通用值：map[string]any / []any / string /
@@ -27,7 +28,7 @@ func parseYAML(src string) (any, error) {
 	}
 	if p.pos < len(p.lines) {
 		ln := p.lines[p.pos]
-		return nil, fmt.Errorf("config yaml: 第 %d 行无法解析（缩进或结构不符合子集）: %q", ln.num, ln.text)
+		return nil, errors.Newf("config yaml: 第 %d 行无法解析（缩进或结构不符合子集）: %q", ln.num, ln.text)
 	}
 	return v, nil
 }
@@ -51,7 +52,7 @@ func scanYAMLLines(src string) ([]yamlLine, error) {
 			indent++
 		}
 		if indent < len(rl) && rl[indent] == '\t' {
-			return nil, fmt.Errorf("config yaml: 第 %d 行使用 tab 缩进（仅允许空格）", i+1)
+			return nil, errors.Newf("config yaml: 第 %d 行使用 tab 缩进（仅允许空格）", i+1)
 		}
 		text := strings.TrimSpace(stripComment(strings.TrimRight(rl, " ")))
 		if text == "" {
@@ -63,10 +64,10 @@ func scanYAMLLines(src string) ([]yamlLine, error) {
 				docStarted = true
 				continue
 			}
-			return nil, fmt.Errorf("config yaml: 第 %d 行遇到文档分隔符 ---（不支持多文档流）", i+1)
+			return nil, errors.Newf("config yaml: 第 %d 行遇到文档分隔符 ---（不支持多文档流）", i+1)
 		}
 		if text == "..." {
-			return nil, fmt.Errorf("config yaml: 第 %d 行遇到文档结束符 ...（不支持多文档流）", i+1)
+			return nil, errors.Newf("config yaml: 第 %d 行遇到文档结束符 ...（不支持多文档流）", i+1)
 		}
 		out = append(out, yamlLine{indent: indent, text: text, num: i + 1})
 	}
@@ -155,14 +156,14 @@ func (p *yamlParser) parseMapping(indent int) (any, error) {
 			return m, nil
 		}
 		if ln.indent > indent {
-			return nil, fmt.Errorf("config yaml: 第 %d 行缩进异常（期望 %d 列）: %q", ln.num, indent, ln.text)
+			return nil, errors.Newf("config yaml: 第 %d 行缩进异常（期望 %d 列）: %q", ln.num, indent, ln.text)
 		}
 		key, rest, err := splitKey(ln.text, ln.num)
 		if err != nil {
 			return nil, err
 		}
 		if _, dup := m[key]; dup {
-			return nil, fmt.Errorf("config yaml: 第 %d 行重复键 %q", ln.num, key)
+			return nil, errors.Newf("config yaml: 第 %d 行重复键 %q", ln.num, key)
 		}
 		p.pos++
 		var val any
@@ -196,7 +197,7 @@ func (p *yamlParser) parseSequence(indent int) (any, error) {
 			return s, nil
 		}
 		if ln.indent > indent {
-			return nil, fmt.Errorf("config yaml: 第 %d 行缩进异常（期望 %d 列）: %q", ln.num, indent, ln.text)
+			return nil, errors.Newf("config yaml: 第 %d 行缩进异常（期望 %d 列）: %q", ln.num, indent, ln.text)
 		}
 		if !isSeqItem(ln.text) {
 			return s, nil
@@ -248,7 +249,7 @@ func splitKey(text string, num int) (key, rest string, err error) {
 		}
 		rest = strings.TrimLeft(rest, " ")
 		if !strings.HasPrefix(rest, ":") {
-			return "", "", fmt.Errorf("config yaml: 第 %d 行引号键后缺少冒号: %q", num, text)
+			return "", "", errors.Newf("config yaml: 第 %d 行引号键后缺少冒号: %q", num, text)
 		}
 		return key, strings.TrimSpace(rest[1:]), nil
 	}
@@ -257,7 +258,7 @@ func splitKey(text string, num int) (key, rest string, err error) {
 			return strings.TrimSpace(text[:i]), strings.TrimSpace(text[i+1:]), nil
 		}
 	}
-	return "", "", fmt.Errorf("config yaml: 第 %d 行不是「键: 值」形态: %q", num, text)
+	return "", "", errors.Newf("config yaml: 第 %d 行不是「键: 值」形态: %q", num, text)
 }
 
 // parseQuoted 解析行首引号标量，返回（值, 余下文本）。单引号 ” 转义自身；
@@ -297,11 +298,11 @@ func parseQuoted(text string, num int) (string, string, error) {
 				b.WriteByte(text[i])
 			case 'u':
 				if i+4 >= len(text) {
-					return "", "", fmt.Errorf("config yaml: 第 %d 行 \\u 转义不完整: %q", num, text)
+					return "", "", errors.Newf("config yaml: 第 %d 行 \\u 转义不完整: %q", num, text)
 				}
 				r, perr := strconv.ParseUint(text[i+1:i+5], 16, 32)
 				if perr != nil {
-					return "", "", fmt.Errorf("config yaml: 第 %d 行非法 \\u 转义: %q", num, text)
+					return "", "", errors.Newf("config yaml: 第 %d 行非法 \\u 转义: %q", num, text)
 				}
 				i += 4
 				if r >= 0xD800 && r <= 0xDFFF {
@@ -312,14 +313,14 @@ func parseQuoted(text string, num int) (string, string, error) {
 					// 显式报错。
 					hi := rune(r)
 					if hi >= 0xDC00 {
-						return "", "", fmt.Errorf("config yaml: 第 %d 行孤立低代理 \\u%04X: %q", num, r, text)
+						return "", "", errors.Newf("config yaml: 第 %d 行孤立低代理 \\u%04X: %q", num, r, text)
 					}
 					if i+7 > len(text) || text[i+1] != '\\' || text[i+2] != 'u' {
-						return "", "", fmt.Errorf("config yaml: 第 %d 行孤立高代理 \\u%04X（缺 \\uXXXX 低代理配对）: %q", num, r, text)
+						return "", "", errors.Newf("config yaml: 第 %d 行孤立高代理 \\u%04X（缺 \\uXXXX 低代理配对）: %q", num, r, text)
 					}
 					lo, perr := strconv.ParseUint(text[i+3:i+7], 16, 32)
 					if perr != nil || lo < 0xDC00 || lo > 0xDFFF {
-						return "", "", fmt.Errorf("config yaml: 第 %d 行非法低代理转义: %q", num, text)
+						return "", "", errors.Newf("config yaml: 第 %d 行非法低代理转义: %q", num, text)
 					}
 					b.WriteRune(0x10000 + (hi-0xD800)<<10 + (rune(lo) - 0xDC00))
 					i += 6
@@ -327,7 +328,7 @@ func parseQuoted(text string, num int) (string, string, error) {
 				}
 				b.WriteRune(rune(r))
 			default:
-				return "", "", fmt.Errorf("config yaml: 第 %d 行不支持的转义 \\%c", num, text[i])
+				return "", "", errors.Newf("config yaml: 第 %d 行不支持的转义 \\%c", num, text[i])
 			}
 			continue
 		}
@@ -336,7 +337,7 @@ func parseQuoted(text string, num int) (string, string, error) {
 		}
 		b.WriteByte(c)
 	}
-	return "", "", fmt.Errorf("config yaml: 第 %d 行引号未闭合: %q", num, text)
+	return "", "", errors.Newf("config yaml: 第 %d 行引号未闭合: %q", num, text)
 }
 
 // parseValue 解析单行标量值；子集不支持的结构显式报错。
@@ -348,19 +349,19 @@ func parseValue(text string, num int) (any, error) {
 			return nil, err
 		}
 		if strings.TrimSpace(rest) != "" {
-			return nil, fmt.Errorf("config yaml: 第 %d 行引号标量后有多余内容: %q", num, text)
+			return nil, errors.Newf("config yaml: 第 %d 行引号标量后有多余内容: %q", num, text)
 		}
 		return s, nil
 	case '[', '{':
-		return nil, fmt.Errorf("config yaml: 第 %d 行 flow 风格（%c…）不支持，请改用块风格", num, text[0])
+		return nil, errors.Newf("config yaml: 第 %d 行 flow 风格（%c…）不支持，请改用块风格", num, text[0])
 	case '&':
-		return nil, fmt.Errorf("config yaml: 第 %d 行锚点（&）不支持", num)
+		return nil, errors.Newf("config yaml: 第 %d 行锚点（&）不支持", num)
 	case '*':
-		return nil, fmt.Errorf("config yaml: 第 %d 行别名（*）不支持", num)
+		return nil, errors.Newf("config yaml: 第 %d 行别名（*）不支持", num)
 	case '!':
-		return nil, fmt.Errorf("config yaml: 第 %d 行显式标签（!）不支持", num)
+		return nil, errors.Newf("config yaml: 第 %d 行显式标签（!）不支持", num)
 	case '|', '>':
-		return nil, fmt.Errorf("config yaml: 第 %d 行块标量（%c）不支持，长文本建议放环境变量", num, text[0])
+		return nil, errors.Newf("config yaml: 第 %d 行块标量（%c）不支持，长文本建议放环境变量", num, text[0])
 	}
 	return inferScalar(text), nil
 }

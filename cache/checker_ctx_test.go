@@ -9,11 +9,11 @@ package cache
 //     视为瞬态不进缓存；入口对已取消 ctx 快速返回、不触发共享刷新。
 import (
 	"context"
-	"errors"
-	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // TestNewCheckerNilRefreshPanics 钉住 pkg#356①：必需回调 nil 在构造期 fail-fast。
@@ -66,7 +66,7 @@ func TestCheckLeaderCancelDoesNotAbortSharedRefresh(t *testing.T) {
 		if err := ctx.Err(); err != nil {
 			// 旧形态：刷新跑在 leader 的 ctx 上，取消直接传染进刷新
 			leaderCanceled.Store(true)
-			return fmt.Errorf("refresh aborted: %w", err)
+			return errors.Wrapf(err, "refresh aborted")
 		}
 		return nil
 	}, time.Hour, 0)
@@ -98,7 +98,7 @@ func TestCheckTransientCancelNotCached(t *testing.T) {
 	var calls atomic.Int64
 	c := NewChecker(func(ctx context.Context) error {
 		if calls.Add(1) == 1 {
-			return fmt.Errorf("inner op: %w", context.Canceled)
+			return errors.Wrapf(context.Canceled, "inner op")
 		}
 		return nil
 	}, time.Hour, time.Hour) // failTTL 拉满——若取消被缓存，第二次必然命中缓存
