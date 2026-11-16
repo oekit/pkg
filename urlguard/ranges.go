@@ -1,11 +1,12 @@
 package urlguard
 
 import (
-	"errors"
-	"fmt"
+	stderrors "errors"
 	"net"
 	"slices"
 	"strings"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // 内置拒绝类别的哨兵（#380 拨号面 / #390 写面）：SSRF 防护原语的调用方需要
@@ -17,33 +18,33 @@ var (
 	// ErrBlockedRange 目标地址落在缺省阻断网段（私网/loopback/链路本地/
 	// 保留段等，清单见 BlockedCIDRSpecs）。构造态豁免（WithAllowPrivate /
 	// WithAllowCIDRs / WithAllowDomains）命中时本哨兵不出现。
-	ErrBlockedRange = errors.New("urlguard: address in blocked range")
+	ErrBlockedRange = stderrors.New("urlguard: address in blocked range")
 
 	// ErrBlockedDomain 目标 host 命中阻断域名后缀（.internal/.local/
 	// .localdomain/localhost 族）。WithAllowDomains 命中时不出现。
-	ErrBlockedDomain = errors.New("urlguard: blocked domain suffix")
+	ErrBlockedDomain = stderrors.New("urlguard: blocked domain suffix")
 
 	// ErrExoticLiteral 目标 host 是「宽松解析器会当 IPv4 地址、net.ParseIP
 	// 不认」的 exotic 字面量形态（0x7f000001 / 0177.0.0.1 / 127.1 /
 	// 2130706433 等，含含空段的 fail-closed 形态）。本闸门无条件执行，
 	// 不随构造态豁免放开（pkg#236）。
-	ErrExoticLiteral = errors.New("urlguard: exotic IPv4 literal")
+	ErrExoticLiteral = stderrors.New("urlguard: exotic IPv4 literal")
 
 	// ErrSchemeNotAllowed 目标 URL 的 scheme 不在白名单（缺省 http/https，
 	// 可用 WithAllowedSchemes 调整）——「配置配错」类：消费方的出站配置
 	// 误写了 ftp:// 之类，与 SSRF 尝试（ErrBlockedRange 等）分流到不同
 	// 告警面（#390）。
-	ErrSchemeNotAllowed = errors.New("urlguard: scheme not allowed")
+	ErrSchemeNotAllowed = stderrors.New("urlguard: scheme not allowed")
 
 	// ErrNonASCIIHost 目标 host 含无法确定性折叠的非 ASCII 码点（IDN/圈号
 	// 等，pkg#266 的 fail-closed 口径）——调用方应先自行做 IDNA（punycode）
 	// 转换再传入；这是输入形态问题，不是 SSRF 尝试（#390）。
-	ErrNonASCIIHost = errors.New("urlguard: host contains non-ASCII characters that cannot be deterministically folded (IDN/全角形式 fail-closed)")
+	ErrNonASCIIHost = stderrors.New("urlguard: host contains non-ASCII characters that cannot be deterministically folded (IDN/全角形式 fail-closed)")
 
 	// ErrNotInExactHosts 目标 authority 未命中 WithExactHosts 精确白名单
 	// ——「配置配错」类（白名单清单维护遗漏/环境差异），与防护拦截分流
 	// （#390）。
-	ErrNotInExactHosts = errors.New("urlguard: authority is not in the exact host allowlist")
+	ErrNotInExactHosts = stderrors.New("urlguard: authority is not in the exact host allowlist")
 )
 
 // blockedCIDRSpecs 是缺省阻断网段的**字符串清单形态**——IANA 特殊用途地址
@@ -131,7 +132,7 @@ func ParseCIDRList(specs ...string) ([]*net.IPNet, error) {
 	for _, spec := range specs {
 		_, n, err := net.ParseCIDR(strings.TrimSpace(spec))
 		if err != nil {
-			return nil, fmt.Errorf("urlguard: invalid CIDR %q: %w", spec, err)
+			return nil, errors.Wrapf(err, "urlguard: invalid CIDR %q", spec)
 		}
 		out = append(out, n)
 	}

@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // 发出侧推荐约定头名（#328 设计点 2）：通用发端服务用推荐名（与 GitHub
@@ -215,7 +217,7 @@ func (s *HMACSigner) deliveryID() (string, error) {
 func NewEventID(producer, event string) (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("webhook: 生成幂等事件 ID 的随机源失败: %w", err)
+		return "", errors.Wrapf(err, "webhook: 生成幂等事件 ID 的随机源失败")
 	}
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 10xx
