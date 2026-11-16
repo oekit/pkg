@@ -2,10 +2,10 @@ package distlock
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/internal/logkv"
 )
 
@@ -28,7 +28,7 @@ func distlockLogger() *slog.Logger {
 func WithLock(ctx context.Context, locker Locker, key string, ttl, timeout time.Duration, fn func() error) error {
 	ownerID, err := locker.Lock(ctx, key, ttl, timeout)
 	if err != nil {
-		return fmt.Errorf("lock %s: %w", key, err)
+		return errors.Wrapf(err, "lock %s", key)
 	}
 	defer func() {
 		// 返回值刻意丢弃（ReleaseUncancelable 内部已记 Warn）：释放失败不

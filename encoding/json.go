@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 
+	pkgerrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/stringx"
 )
 
@@ -122,7 +123,7 @@ func unmarshalStrict(decoder *json.Decoder, v any) error {
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err != nil {
-			return fmt.Errorf("invalid trailing data: %w", err)
+			return pkgerrors.Wrapf(err, "invalid trailing data")
 		}
 		return errTrailingData
 	}
