@@ -2,6 +2,12 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.53.0] — 2026-11-18
+
+- 新增零依赖机制原语：errors.RecoverTo defer 一行式 panic 收编（#527）；stringx.RandomToken/RandomTokenOrFallback crypto/rand 令牌三编码（#528）；contextx.OrBackground nil-ctx 兜底口径（#529）；timex.SleepContext 可中断 sleep（#530）；stringx.UUIDv4 RFC4122 v4 单源（#531）；pathx.JoinURL base+path 拼接前导斜杠归一（#532）；errors.Degraded/DegradedError 降级错误载体（#533）；distlock.MaxLifetime 续期最大生命周期三态解析（#534）
+
+关联问题单：pkg#527、pkg#528、pkg#529、pkg#530、pkg#531、pkg#532、pkg#533、pkg#534。
+
 ## [v0.52.0] — 2026-11-16
 
 - feat(errors): 新增 Newf/Wrapf——错误构造单 import 收口（#520）。Newf 格式化构造（无链）、Wrapf 格式化链式包装（err 尾参 %w + args 防御性拷贝）；doc.go 仓规 #378 修订为三形态并存（fmt.Errorf/Newf/Wrapf），Errorf 去留史追加 v0.52.0 修订记录。后续全矩阵 fmt.Errorf 调用点按三形态对位替换。
