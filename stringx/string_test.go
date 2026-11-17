@@ -1,6 +1,7 @@
 package stringx
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"unicode"
@@ -23,15 +24,15 @@ func TestContains(t *testing.T) {
 		{"spaces and semicolon", []string{"a b", "c;d"}, "c;d", true},
 		{"single quote", []string{"it's"}, "it's", true},
 	}
-	// #242：实现转发 slicex.Contains[string] 后，逐项同时钉住两函数一致
-	//（语义单源在 slicex，本包不再有第二份循环体）。
+	// #242：实现转发 stdlib slices.Contains 后，逐项同时钉住两函数一致
+	//（语义单源在 stdlib slices；slicex.Contains 已 Deprecated 委托 stdlib，#536d）。
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := Contains(tt.list, tt.str); got != tt.want {
 				t.Errorf("Contains() = %v, want %v", got, tt.want)
 			}
-			if got := slicex.Contains(tt.list, tt.str); got != tt.want {
-				t.Errorf("slicex.Contains() = %v, want %v（两函数必须一致）", got, tt.want)
+			if got := slices.Contains(tt.list, tt.str); got != tt.want {
+				t.Errorf("slices.Contains() = %v, want %v（两函数必须一致）", got, tt.want)
 			}
 		})
 	}
