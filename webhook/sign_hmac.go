@@ -136,11 +136,17 @@ func SignerWithTimestampHeader(name string) HMACSignerOption {
 	}
 }
 
-// SignerWithClock 时钟注入（假时钟确定性测试；与 cache.RunWithClock 同纪律）。
+// SignerWithClock 时钟注入（假时钟确定性测试；与 cache.Checker 的 WithClock
+// 同口径，#538）。nil 按仓规总则②显式回退默认时钟（time.Now），不把 nil 存进
+// 实例——Sign 的使用点本就对 nil 字段回退 time.Now，此前选项层对 nil panic
+// 是与 cache 侧「nil 回退默认」总则②的口径漂移。
+//
+// 行为变更（#538）：此前 SignerWithClock(nil) 在构造期 panic，现按默认时钟
+// 正常构造。
 func SignerWithClock(now func() time.Time) HMACSignerOption {
 	return func(s *HMACSigner) {
 		if now == nil {
-			panic("webhook: SignerWithClock 的时钟为 nil（fail-fast，仓规总则①）")
+			return
 		}
 		s.now = now
 	}

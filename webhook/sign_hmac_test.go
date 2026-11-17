@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -247,7 +248,6 @@ func TestHMACSigner_FailClosed(t *testing.T) {
 		{"空生产者", func() { _ = NewHMACSigner([]byte("s"), crypto.SHA256, "X-Sig", SignerWithProducer("")) }},
 		{"nil投递ID生成器", func() { _ = NewHMACSigner([]byte("s"), crypto.SHA256, "X-Sig", SignerWithDeliveryID(nil)) }},
 		{"空时间戳header名", func() { _ = NewHMACSigner([]byte("s"), crypto.SHA256, "X-Sig", SignerWithTimestampHeader("")) }},
-		{"nil时钟", func() { _ = NewHMACSigner([]byte("s"), crypto.SHA256, "X-Sig", SignerWithClock(nil)) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -258,5 +258,31 @@ func TestHMACSigner_FailClosed(t *testing.T) {
 			}()
 			tc.fn()
 		})
+	}
+}
+
+// TestSignerWithClockNilFallsBackToDefault 钉住 #538（仓规总则②，与
+// cache.Checker 的 WithClock(nil) 同口径）：SignerWithClock(nil) 不再
+// 构造期 panic，而是显式回退默认时钟（time.Now）——时间戳头按当前墙钟
+// 打出，功能不受影响。
+func TestSignerWithClockNilFallsBackToDefault(t *testing.T) {
+	s := NewHMACSigner([]byte(testSecret), crypto.SHA256, "X-Sig",
+		SignerWithTimestampHeader(DefaultTimestampHeader),
+		SignerWithClock(nil), // 行为变更（#538）：旧形态此处 panic
+	)
+
+	hdr, err := s.Sign([]byte("payload"))
+	if err != nil {
+		t.Fatalf("Sign 不应出错, got %v", err)
+	}
+	raw := hdr.Get(DefaultTimestampHeader)
+	ts, parseErr := strconv.ParseInt(raw, 10, 64)
+	if parseErr != nil {
+		t.Fatalf("时间戳头应为 unix 秒整数, got %q: %v", raw, parseErr)
+	}
+	// 回退的是默认时钟（time.Now）：打出的时间戳必须落在当前墙钟附近。
+	now := time.Now().Unix()
+	if d := ts - now; d < -5 || d > 5 {
+		t.Fatalf("nil 时钟应回退 time.Now，时间戳偏离墙钟 %d 秒 (ts=%d now=%d)", d, ts, now)
 	}
 }
