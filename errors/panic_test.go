@@ -94,3 +94,130 @@ func TestRecovered_DeferIdiom_WrapsWithErrorIdentity(t *testing.T) {
 		t.Fatalf("文本应同时含组件前缀与 panic 类型信息, got %q", err.Error())
 	}
 }
+
+// #527：RecoverTo 一行式 defer 收编的行为契约。
+
+func TestRecoverTo_PanicError_IdentityPreserved(t *testing.T) {
+	cases := []struct {
+		name    string
+		panicV  any
+		wantTxt string // Error() 文本必须包含的片段
+	}{
+		{"error 值", stderrors.New("disk on fire"), "panic: *errors.errorString: disk on fire"},
+		{"string 值", "boom string", "panic: string: boom string"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run := func() (err error) {
+				defer RecoverTo(&err)()
+				panic(tc.panicV)
+			}
+
+			err := run()
+			if err == nil {
+				t.Fatal("panic 值应收编为非 nil error")
+			}
+			if err.Error() != tc.wantTxt {
+				t.Fatalf("Error() = %q, want %q", err.Error(), tc.wantTxt)
+			}
+			var pe *PanicError
+			if !As(err, &pe) {
+				t.Fatal("errors.As 应能取回 *PanicError 载体")
+			}
+			if len(pe.Stack) == 0 {
+				t.Fatal("PanicError.Stack 应非空")
+			}
+			if !strings.Contains(string(pe.Stack), "TestRecoverTo_PanicError_IdentityPreserved") {
+				t.Fatalf("栈应包含 panic 现场帧, got:\n%s", pe.Stack)
+			}
+		})
+	}
+}
+
+func TestRecoverTo_ErrorIdentityUnwrap(t *testing.T) {
+	sentinel := stderrors.New("task failed")
+	run := func() (err error) {
+		defer RecoverTo(&err)()
+		panic(sentinel)
+	}
+
+	err := run()
+	if !Is(err, sentinel) {
+		t.Fatalf("errors.Is 应穿透 *PanicError 命中 panic 出去的原始错误, got %v", err)
+	}
+}
+
+func TestRecoverTo_NoPanic_KeepsBusinessError(t *testing.T) {
+	// 无 panic 时闭包零动作：已赋的业务错误不被触碰；无业务错误时 err
+	// 保持 nil（闭包不会把 nil 写进来）。
+	biz := stderrors.New("biz failure")
+	runWithBiz := func() (err error) {
+		defer RecoverTo(&err)()
+		return biz
+	}
+	if err := runWithBiz(); !Is(err, biz) {
+		t.Fatalf("无 panic 时业务错误应原样返回, got %v", err)
+	}
+
+	runClean := func() (err error) {
+		defer RecoverTo(&err)()
+		return nil
+	}
+	if err := runClean(); err != nil {
+		t.Fatalf("正常返回无错误时 err 应为 nil, got %v", err)
+	}
+}
+
+func TestRecoverTo_DirectAssignment_Overwrites(t *testing.T) {
+	// 直接赋值语义（文档写明）：panic 前已赋业务错误，panic 收编结果覆盖它
+	// ——对齐 bootstrap 五处现有骨架的 `err = perr` 直赋口径。
+	biz := stderrors.New("biz failure")
+	sentinel := stderrors.New("task failed")
+	run := func() (err error) {
+		defer RecoverTo(&err)()
+		err = biz
+		panic(sentinel)
+	}
+
+	err := run()
+	var pe *PanicError
+	if !As(err, &pe) {
+		t.Fatalf("收编结果应覆盖 *errp 为 *PanicError, got %v", err)
+	}
+	if !Is(err, sentinel) {
+		t.Fatalf("覆盖后的 *PanicError 仍应携带 panic 值的 error 身份, got %v", err)
+	}
+	if Is(err, biz) {
+		t.Fatal("panic 前赋的业务错误应已被覆盖（不再直接在链上）")
+	}
+}
+
+func TestRecoverTo_NilErrp_FailFast(t *testing.T) {
+	// 构造期 fail-fast（仓规总则①）：nil errp 在 RecoverTo 调用时立即 panic，
+	// 不等到 panic 收编时才炸。
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("nil errp 应在构造期立即 panic")
+			}
+		}()
+		_ = RecoverTo(nil)
+	}()
+}
+
+func TestRecoverTo_MissingCall_PanicPropagates(t *testing.T) {
+	// 误用护栏：漏掉尾括号（defer RecoverTo(&err) 不调用返回闭包）时
+	// recover 不生效，panic 照常向上传播——文档 ⚠️ 的可观察后果。
+	run := func() (err error) {
+		defer RecoverTo(&err) //nolint:staticcheck // SA9010：本用例对象正是「漏掉 () 不调用返回闭包」的误用形态，panic 应照常传播 // ⚠️ 故意漏掉 ()
+		panic("boom")
+	}
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("漏掉尾括号时 panic 应照常传播（不被收编）")
+		}
+	}()
+	_ = run()
+	t.Fatal("panic 应在上一步传播到这里")
+}
