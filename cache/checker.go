@@ -10,15 +10,8 @@ import (
 	"time"
 
 	"github.com/oekit/pkg/errors"
+	"github.com/oekit/pkg/internal/singleflight"
 )
-
-// refreshCall 一次进行中的刷新：err 先写后 close(done)——等待者经 <-done 的
-// happens-before 安全读取；close 是广播，任意多个等待者都能拿到同一结果
-// （channel 直发只能唤醒一个，第二个等待者会永久挂起）。
-type refreshCall struct {
-	done chan struct{}
-	err  error
-}
 
 // Checker 缓存一次错误型检查的结果：成功缓存 ttl，失败缓存 failTTL（失败多为
 // 瞬时，恢复后不该被旧失败多压一整个正常周期）；刷新进行中后来者合并等待同一
@@ -32,7 +25,11 @@ type Checker struct {
 	mu         sync.Mutex
 	validUntil time.Time
 	cachedErr  error
-	inflight   *refreshCall
+	// flight 共享刷新的并发合并（pkg#537，固定键）：与 SingleFlightCache
+	// 同一套 internal/singleflight 实现——inflight 登记、done 广播唤醒、
+	// 「先摘键后唤醒」「panic 转 error 给等待者再原样抛给首个调用方」
+	// 全部单源，本包不再手写第二份。
+	flight singleflight.Flight[error]
 }
 
 // CheckerOption Checker 可选项（pkg#355：禁裸 Option——多包 co-import 冲突）。
@@ -80,63 +77,84 @@ func NewChecker(refresh func(ctx context.Context) error, ttl, failTTL time.Durat
 // 保留，只剥离取消信号。已取消的调用方在入口直接返回，不触发共享刷新。
 // 刷新自身返回 context.Canceled（回调内部取消）视为瞬态：如实分发给本次
 // 全体调用方，但不写入缓存（不发 failTTL），下次 Check 立即重试。
+//
+// 并发合并与 panic 面由 internal/singleflight.Flight 单源提供（pkg#537，
+// 收敛此前本文件手写的 ~75 行 inflight call + done channel + panic 收编
+// 样板——与 SingleFlightCache 同一套实现、同一套契约）：合并的等待者被
+// ctx 取消时拿到 ctx.Err()；refresh 的 panic 先转成 error 按 failTTL
+// 缓存，再原样抛给首个调用方（等待者拿到 panic 转成的 error，不跟着崩）。
 func (c *Checker) Check(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// 快路径：缓存有效直接返回，不进 flight（不为每次读分配 call/channel）。
 	c.mu.Lock()
-	now := c.now()
-	if now.Before(c.validUntil) {
+	if c.now().Before(c.validUntil) {
 		err := c.cachedErr
 		c.mu.Unlock()
 		return err
 	}
-	if c.inflight != nil {
-		// 刷新进行中：等待同一次刷新的结果，不叠加刷新轮次。
-		call := c.inflight
-		c.mu.Unlock()
-		select {
-		case <-call.done:
-			return call.err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	call := &refreshCall{done: make(chan struct{})}
-	c.inflight = call
 	c.mu.Unlock()
 
-	// 清理必须在 defer 里，且必须覆盖 panic 路径。
-	//
-	// 此前清理写在 refresh 之后：refresh 一旦 panic，`c.inflight = nil` 与
-	// `close(call.done)` 都不会执行 ⇒ inflight 永远挂着、done 永远不关 ⇒
-	// 后续每一次 Check 都卡在 `<-call.done` 上（context.Background() 下是
-	// **永久挂起**，不是报错）——一次 refresh 的 panic 把 Checker 彻底废掉。
-	//
-	// panic 处理与 internal/singleflight 同型：先把 panic 转成 error 交给
-	// 等待者（他们不该跟着崩，但需要知道「这次刷新失败了」），再把 panic
-	// 原样抛给首个调用方（保留原始调用栈）。
+	err, doErr := c.flight.Do(ctx, checkerFlightKey, c.sharedRefresh)
+	if doErr != nil {
+		// 结果在 doErr 而不在结果值里：等待者被 ctx 取消（拿到 ctx.Err()），
+		// 或 fn panic 被 Flight 转成 error 交给等待者——两种形态下
+		// Flight[error] 的结果值都是零值 nil，不可用。
+		return doErr
+	}
+	return err
+}
+
+// checkerFlightKey 共享刷新的固定 flight 键（pkg#537）：每个 Checker 实例
+// 一把 flight，合并的单位是「本次 Check 的共享刷新」，键本身无信息量。
+const checkerFlightKey = "cache.Checker.refresh"
+
+// sharedRefresh 是共享刷新的执行体（singleflight leader 才运行）。
+// 返回 (刷新结果, nil)——Flight[error] 的结果值承载刷新 error，第二个
+// error 恒 nil（等待者的取消/panic 转型错误由 Flight 自己经第二返回值
+// 上报，见 Check）。
+func (c *Checker) sharedRefresh(ctx context.Context) (error, error) {
+	// 双检缓存：拿到 leader 身份后再查一次——调用方在快路径 miss 与获得
+	// leader 权之间，上一次刷新可能恰好完成并入缓存，直接复用不再多刷一轮
+	// （对齐旧实现「缓存检查与 inflight 登记在同一把 mu 下原子完成」的
+	// 合并保证：快路径 miss 不构成多刷一轮的理由）。
+	c.mu.Lock()
+	if c.now().Before(c.validUntil) {
+		err := c.cachedErr
+		c.mu.Unlock()
+		return err, nil
+	}
+	c.mu.Unlock()
+	return c.refreshAndCache(ctx), nil
+}
+
+// refreshAndCache 跑一次刷新并按结果口径缓存（leader 专属路径）。
+//
+// 缓存写入与 panic 面的清理都必须覆盖刷新的**所有**退场路径（pkg#352 前
+// 的教训：清理写在 refresh 之后，refresh 一旦 panic 就不执行，inflight
+// 永挂、等待者永久挂起）。panic 处理与 internal/singleflight 分工（pkg#537）：
+// 这里负责 leader 侧的**缓存面**——先把 panic 转成 error 按 failTTL 缓存
+// （后续调用方在失败窗口内拿到同一错误，与普通刷新失败同口径），再原样
+// re-panic；Flight 的 defer 负责**等待者面**——把 panic 转成 error 唤醒
+// 全体等待者（panic 收编单源 #381，errors.Recovered 保留 error 身份，
+// 栈与类型信息由 PanicError 携带），并把 panic 原样抛给首个调用方
+// （保留原始调用栈）。
+func (c *Checker) refreshAndCache(ctx context.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			// panic 收编单源（#381，errors.Recovered）：error 身份保留
-			// （waiter 可 errors.Is/As 到 refresh 回调 panic 出去的原始错误），
-			// goroutine 栈与 panic 值类型信息由 PanicError 携带——此前 %v
-			// 把身份拍平成文本。
 			perr := errors.Wrapf(errors.Recovered(r), "cache: refresh panic")
 			c.mu.Lock()
 			c.cachedErr = perr
 			c.validUntil = c.now().Add(c.failTTL)
-			c.inflight = nil
 			c.mu.Unlock()
-			call.err = perr
-			close(call.done)
 			panic(r)
 		}
 	}()
 
 	// pkg#352：刷新跑在 WithoutCancel 上——leader 断开不再把共享刷新整个
 	// 拖死；ctx 取值保留，仅剥离取消/超时信号。
-	err := c.refresh(context.WithoutCancel(ctx))
+	err = c.refresh(context.WithoutCancel(ctx))
 
 	c.mu.Lock()
 	c.cachedErr = err
@@ -151,9 +169,6 @@ func (c *Checker) Check(ctx context.Context) error {
 	} else {
 		c.validUntil = c.now().Add(c.ttl)
 	}
-	c.inflight = nil
 	c.mu.Unlock()
-	call.err = err
-	close(call.done)
 	return err
 }
