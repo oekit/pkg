@@ -1,5 +1,7 @@
 // Package container 提供泛型容器微件：并发安全 Map（sync.Map 背书）、
-// SafeMap（RWMutex）、并发安全 Slice、Set、环形缓冲 Ring、阻塞队列 Queue。
+// SafeMap（RWMutex）、并发安全 Slice、Set、环形缓冲 Ring、阻塞队列 Queue、
+// 「值+代次」原子发布单元 VersionedCell（#535，机制层——nil/深拷贝等值
+// 策略归消费方包装层）。
 // 全部零依赖（仅标准库）。
 //
 // 设计参考 go-kratos/kit container（maps/sets/slices）与 go-zero collection
@@ -25,4 +27,8 @@
 //
 //	sl := container.NewSlice[int]()
 //	sl.Append(1, 2, 3)
+//
+//	cell := container.NewVersionedCell(&defaults)
+//	cell.Publish(next)        // 发布方：原子替换，代次 +1
+//	v, gen := cell.Load()     // 读侧：值与代次一致的一对
 package container
