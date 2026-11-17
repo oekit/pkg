@@ -2,6 +2,12 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.54.0] — 2026-11-18
+
+- container 包新增 VersionedCell[T]——值+代次绑同一原子单元的发布机制单源,core/config.Snapshot 与 core/governance.Store 同构范式的下沉件(#535);cache.Checker 手写 mini-singleflight 收敛 internal/singleflight,~75 行样板删除(#537);webhook SignerWithClock(nil) 从 panic 改回退默认时钟,与 cache.WithClock/总则②对齐(行为变更:P 原 panic 场景现正常)(#538);pagination 新增信封计算原语 ComputePages/ServedPage——整数 ceil(弃 float64 精度)与 #233 溢出回显判据单点,gormx#248 服务
+
+关联问题单：pkg#535、pkg#537、pkg#538。
+
 ## [v0.53.0] — 2026-11-18
 
 - 新增零依赖机制原语：errors.RecoverTo defer 一行式 panic 收编（#527）；stringx.RandomToken/RandomTokenOrFallback crypto/rand 令牌三编码（#528）；contextx.OrBackground nil-ctx 兜底口径（#529）；timex.SleepContext 可中断 sleep（#530）；stringx.UUIDv4 RFC4122 v4 单源（#531）；pathx.JoinURL base+path 拼接前导斜杠归一（#532）；errors.Degraded/DegradedError 降级错误载体（#533）；distlock.MaxLifetime 续期最大生命周期三态解析（#534）
