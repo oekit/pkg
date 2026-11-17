@@ -4,18 +4,20 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"hash/fnv"
 )
 
 // Fnv1a64 返回数据的 64 位 FNV-1a 哈希值（非加密哈希，用于缓存分片/内容粗校验）。
 // 跨服务持久化过哈希值的场景请勿更改算法假设（历史名 Hash，2026-09 改为如实命名）。
+//
+// 实现委托 stdlib hash/fnv（httpx#254 单源化：此前为手撸位运算循环——
+// offset basis 14695981039346656037 / prime 1099511628211，与 fnv.New64a
+// 输出逐字节等价，API 与既有哈希值均不变；stdlib 实现由上游背书，
+// 去掉自维护的算法副本）。
 func Fnv1a64(data []byte) uint64 {
-	// FNV-1a 64 位参数：offset basis 14695981039346656037，prime 1099511628211
-	var h uint64 = 14695981039346656037
-	for _, b := range data {
-		h ^= uint64(b)
-		h *= 1099511628211
-	}
-	return h
+	h := fnv.New64a()
+	_, _ = h.Write(data) // fnv 的 Write 无失败路径
+	return h.Sum64()
 }
 
 // Sha256Hex 返回数据的 SHA-256 十六进制字符串。
