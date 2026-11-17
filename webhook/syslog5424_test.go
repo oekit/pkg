@@ -164,8 +164,10 @@ func TestSyslogSink_TCPSendPinned(t *testing.T) {
 	if err := sink.Forward(context.Background(), batch); err != nil {
 		t.Fatalf("投递不应出错, got %v", err)
 	}
-	closeLn() // 关监听触发读 goroutine 收尾
-
+	// 先 read 后关监听：sink Forward 写完即关连接，读 goroutine 读到 EOF 后
+	// 送出缓冲。不能先 closeLn 再 read——若此刻连接还积压在 backlog 未被
+	// Accept，listener 关闭会让 Accept 报错送出 nil、积压连接随之丢失
+	// （Accept 与 Close 的竞态，CI 满载下实测复现的 flake）。
 	raw := read()
 	want := "<86>1 2027-01-15T08:00:00.000Z host01 bianque - audit - {\"id\":\"ev-1\"}\n" +
 		"<86>1 2027-01-15T08:00:00.000Z host01 bianque - audit - {\"id\":\"ev-2\"}\n"
@@ -260,6 +262,15 @@ func TestSyslogSink_ForwarderIntegration(t *testing.T) {
 		t.Fatalf("成功后游标推进, got %d", cur)
 	}
 
+	// 先收首轮帧再断链：sink 写完即关连接，读 goroutine 读到 EOF 后送出
+	// 缓冲。不能先 closeLn 再 read——若此刻连接还积压在 backlog 未被
+	// Accept，listener 关闭会让 Accept 报错送出 nil、积压连接随之丢失
+	// （Accept 与 Close 的竞态，CI 满载下实测复现的 flake）。
+	raw := read()
+	if !strings.Contains(string(raw), `"id":"ev-1"`) {
+		t.Fatal("首轮帧应含 ev-1 载荷")
+	}
+
 	// 第二批事件存在，但断链（先关监听再投递）——游标不动，下轮重发
 	closeLn()
 	src.events = batchOf(1, 2)
@@ -269,9 +280,6 @@ func TestSyslogSink_ForwarderIntegration(t *testing.T) {
 	cur, _ = store.LoadCursor(context.Background())
 	if cur != 1 {
 		t.Fatalf("断链游标不动, got %d", cur)
-	}
-	if !strings.Contains(string(read()), `"id":"ev-1"`) {
-		t.Fatal("首轮帧应含 ev-1 载荷")
 	}
 }
 
@@ -321,7 +329,9 @@ func TestSyslogSink_EmptyNetworkFallsBackTCP(t *testing.T) {
 	if err := sink.Forward(context.Background(), []ForwardEvent{{Seq: 1, Payload: []byte(`{}`)}}); err != nil {
 		t.Fatalf("回退 tcp 不应出错, got %v", err)
 	}
-	closeLn()
+	// 先 read 后关监听（defer closeLn 收尾）：同 TCPSendPinned——sink 写完
+	// 即关连接，读 goroutine 到 EOF 送出缓冲；先 closeLn 会与 Accept 竞态
+	// （积压连接随 listener 关闭丢失，CI flake）。
 	raw := read()
 	if !strings.HasPrefix(string(raw), "<86>1 ") {
 		t.Fatalf("TCP 帧应送达, got %q", raw)
