@@ -91,6 +91,9 @@ func TestVersionedCell_ValueTypeCopiesOnLoad(t *testing.T) {
 	v := 2
 	c.Publish(v)
 	v = 99 // 发布之后再改入参
+	if v != 99 {
+		t.Fatalf("发布方本地改写应生效（证明后续读快照与本地变量无关）")
+	}
 	if got, gen := c.Load(); got != 2 || gen != 1 {
 		t.Fatalf("已发布快照不得被发布方的后续改写波及，实得 (%d, %d)", got, gen)
 	}
