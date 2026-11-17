@@ -97,9 +97,12 @@ func TestSleepContext_DeadlineExceeded(t *testing.T) {
 
 func TestSleepContext_NilCtx_Background(t *testing.T) {
 	// ctx 为 nil 按 Background 处理：正常睡满，不 panic。
+	// 用 nil 变量而非 nil 字面量：staticcheck 的 SA1012 只拦 nil 字面量，
+	// 而本用例的**目的**就是传 nil（contextx/nil_parent_test.go 同款纪律）。
+	var nilCtx context.Context
 	const d = 20 * time.Millisecond
 	start := time.Now()
-	if err := SleepContext(nil, d); err != nil {
+	if err := SleepContext(nilCtx, d); err != nil {
 		t.Fatalf("nil ctx 应按 Background 处理, got %v", err)
 	}
 	if elapsed := time.Since(start); elapsed < d {

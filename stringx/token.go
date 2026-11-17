@@ -91,7 +91,10 @@ func RandomTokenOrFallback(nBytes int, enc TokenEncoding, fallback func() string
 	}
 	b, err := randomTokenBytes(nBytes)
 	if err != nil {
-		return fallback(), nil
+		// 显式降级设计语义：err 为随机源失败时按调用方选择返回 fallback
+		// 结果与 nil error——随值带回 err 会让 `if err != nil` 风格的调用方
+		// 把降级值当失败丢掉（见函数注释）。
+		return fallback(), nil //nolint:nilerr // OrFallback 显式降级变体：随机源失败按调用方选择退 fallback，nil error 是设计语义
 	}
 	return encodeTokenBytes(b, enc)
 }

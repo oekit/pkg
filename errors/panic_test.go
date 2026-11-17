@@ -209,7 +209,7 @@ func TestRecoverTo_MissingCall_PanicPropagates(t *testing.T) {
 	// 误用护栏：漏掉尾括号（defer RecoverTo(&err) 不调用返回闭包）时
 	// recover 不生效，panic 照常向上传播——文档 ⚠️ 的可观察后果。
 	run := func() (err error) {
-		defer RecoverTo(&err) // ⚠️ 故意漏掉 ()
+		defer RecoverTo(&err) //nolint:staticcheck // SA9010：本用例对象正是「漏掉 () 不调用返回闭包」的误用形态，panic 应照常传播 // ⚠️ 故意漏掉 ()
 		panic("boom")
 	}
 
