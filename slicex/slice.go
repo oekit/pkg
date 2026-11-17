@@ -2,29 +2,26 @@ package slicex
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/oekit/pkg/errors"
 )
 
 // Contains 检查切片中是否包含指定元素。
+//
+// Deprecated: 已委托 stdlib slices.Contains（#536d），语义完全一致。新代码请
+// 直接使用 slices.Contains；本符号保留仅为既有调用方兼容。
 func Contains[T comparable](slice []T, target T) bool {
-	for _, v := range slice {
-		if v == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(slice, target)
 }
 
 // Index 返回元素在切片中的索引，不存在返回 -1。
+//
+// Deprecated: 已委托 stdlib slices.Index（#536d），语义完全一致。新代码请
+// 直接使用 slices.Index；本符号保留仅为既有调用方兼容。
 func Index[T comparable](slice []T, target T) int {
-	for i, v := range slice {
-		if v == target {
-			return i
-		}
-	}
-	return -1
+	return slices.Index(slice, target)
 }
 
 // Unique 去重，保持原始顺序。
@@ -115,23 +112,24 @@ func ToMapStrict[T any, K comparable](slice []T, keyFn func(T) K) (map[K]T, erro
 }
 
 // Chunk 将切片分成指定大小的块。
+//
+// ⚠️ **分片与入参共享底层数组**：返回的每个分片都是 slice 的一段视图，
+// 改写分片元素会改写原切片（与 stdlib slices.Chunk 同语义）。同包的
+// Reverse 明确「返回新切片，不修改原始切片」——本函数的口径与之不同，
+// 调用方需要可改写的结果时自行拷贝。
+//
+// size <= 0 返回 nil（兼容面保留旧口径；stdlib slices.Chunk 对 n < 1 是
+// panic，委托前先行拦截）。
+//
+// Deprecated: 已委托 stdlib slices.Chunk + slices.Collect（#536d），分片
+// 语义与别名语义完全一致。新代码请直接使用 slices.Chunk（Go 1.23 起，
+// 返回 iter.Seq[[]T] 迭代器，range 即得各分片）；本符号保留仅为既有调用方
+// 兼容。
 func Chunk[T any](slice []T, size int) [][]T {
 	if size <= 0 {
 		return nil
 	}
-	// ⚠️ **分片与入参共享底层数组**：返回的每个分片都是 slice 的一段视图，
-	// 改写分片元素会改写原切片（与 stdlib slices.Chunk 同语义）。同包的
-	// Reverse 明确「返回新切片，不修改原始切片」——本函数的口径与之不同，
-	// 调用方需要可改写的结果时自行拷贝。
-	var result [][]T
-	for i := 0; i < len(slice); i += size {
-		end := i + size
-		if end > len(slice) {
-			end = len(slice)
-		}
-		result = append(result, slice[i:end])
-	}
-	return result
+	return slices.Collect(slices.Chunk(slice, size))
 }
 
 // Reverse 反转切片（返回新切片，不修改原始切片）。

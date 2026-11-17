@@ -2,7 +2,7 @@ package cron
 
 import (
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"slices"
 	"strconv"
 	"strings"
@@ -599,7 +599,9 @@ func (r RandomDelaySchedule) Next(t time.Time) time.Time {
 		}
 		return t.Add(time.Second - time.Duration(t.Nanosecond())*time.Nanosecond)
 	}
-	jitter := time.Duration(rand.Int63n(int64(delta)))
+	// 随机源与 mathx 同为 math/rand/v2 全局源（#386——v1 全局源已全仓清退）；
+	// Int64N 是 v1 Int63n 的对位替换（n 为 time.Duration，按 int64 取值域）。
+	jitter := time.Duration(rand.Int64N(int64(delta)))
 	next := t.Add(r.Min + jitter)
 	if !next.After(t) {
 		next = next.Add(time.Nanosecond)

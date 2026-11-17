@@ -1,13 +1,13 @@
 package auditchain
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"time"
+
+	"github.com/oekit/pkg/encoding"
 )
 
 // GenesisHash 创世链锚：首行（无前链可衔接）的 PrevHash 取值——64 个 '0'
@@ -53,9 +53,11 @@ func (c *Chain[T]) HashRow(row T) string {
 
 // Hash canonical 串 → 链哈希（sha256 hex，64 字符小写）。与行类型无关——
 // 校验侧对 Record.Canonical 重算哈希也走本函数。
+//
+// 实现委托 encoding.Sha256Hex（#536b）：sha256+hex 的拼装在全仓单源到
+// pkg/encoding 一处，链哈希值保持逐字节不变（同一算法同一编码）。
 func Hash(canonical string) string {
-	sum := sha256.Sum256([]byte(canonical))
-	return hex.EncodeToString(sum[:])
+	return encoding.Sha256Hex([]byte(canonical))
 }
 
 // NormalizeTs 入链时间归一：UTC + 微秒截断。PG timestamptz 精度上限微秒——
