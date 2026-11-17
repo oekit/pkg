@@ -1,7 +1,5 @@
 package pagination
 
-import "math"
-
 const (
 	// DefaultPage 是默认页码。
 	DefaultPage = 1
@@ -41,11 +39,8 @@ func (r *PageRequest) Normalize() {
 // 并发调 Offset/Limit 时是数据竞争(2026-09-06 复审修复)。
 func (r *PageRequest) Offset() int {
 	page, pageSize := r.normalized()
-	// 溢出保护：**乘法前**判，而不是乘法后看结果是否为负——
-	// int 溢出回绕后的结果有一半是正数（实测 page=1<<62+2、pageSize=500 ⇒
-	// 真值 2.3e18 超出 int64 ⇒ 回绕成 +500，被原判据放过去 ⇒ 偏移量完全错误）。
-	// page 来自 query/form 参数（外部可控）⇒ 不能靠「回绕后是否为负」兜底。
-	if page > 1 && pageSize > 0 && page-1 > math.MaxInt/pageSize {
+	// 溢出保护：**乘法前**判（判据单源 offsetOverflows，#233/gormx#248）。
+	if offsetOverflows(page, pageSize) {
 		return 0
 	}
 	offset := (page - 1) * pageSize
