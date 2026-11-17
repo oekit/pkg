@@ -30,6 +30,10 @@
 // 语义不同——它们问「匹配吗 / 合法吗」（面向文件系统），Classify 问
 // 「哪些段是高基数 ID」（折叠改写，面向标签与模板）。
 //
+// JoinURL 把 endpoint/baseURL 与请求 path 拼成完整 URL（#532，只归一分隔符：
+// base 去尾 /、path 补前导 /，query 与其余斜杠原样保留），httpx/nns-endpoint
+// 等出站地址拼接共用。
+//
 // 用法:
 //
 //	pathx.MatchesPath([]string{"vendor/**", "*.test"}, "vendor/foo/bar.go") // true
