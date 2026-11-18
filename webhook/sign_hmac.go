@@ -11,14 +11,13 @@ package webhook
 
 import (
 	"crypto"
-	"crypto/rand"
 	"encoding/base64"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/oekit/pkg/errors"
+	"github.com/oekit/pkg/stringx"
 )
 
 // 发出侧推荐约定头名（#328 设计点 2）：通用发端服务用推荐名（与 GitHub
@@ -217,17 +216,15 @@ func (s *HMACSigner) deliveryID() (string, error) {
 }
 
 // NewEventID 推荐幂等事件 ID 形态（#328 设计点 2）：<producer>-<event>-
-// <uuidv4>（空段跳过——没有 producer 就是 <event>-<uuid>）。uuidv4 取自
-// crypto/rand（pkg 零第三方依赖，不引 uuid 库）。随机源失败显式上抛
-// （仓规总则③）——降级成时间戳 ID 会让重试窗口内的重发无法被识别为同一次投递。
+// <uuidv4>（空段跳过——没有 producer 就是 <event>-<uuid>）。uuidv4 委托
+// stringx.UUIDv4Err 单源（#531/#550 收割；错误返回形态与本函数契约一致）。
+// 随机源失败显式上抛（仓规总则③）——降级成时间戳 ID 会让重试窗口内的重发
+// 无法被识别为同一次投递。
 func NewEventID(producer, event string) (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	id, err := stringx.UUIDv4Err()
+	if err != nil {
 		return "", errors.Wrapf(err, "webhook: 生成幂等事件 ID 的随机源失败")
 	}
-	b[6] = (b[6] & 0x0f) | 0x40 // version 4
-	b[8] = (b[8] & 0x3f) | 0x80 // variant 10xx
-	id := fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 	switch {
 	case producer != "" && event != "":
 		return producer + "-" + event + "-" + id, nil
