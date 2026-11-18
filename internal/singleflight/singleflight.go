@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/oekit/pkg/contextx"
 	"github.com/oekit/pkg/errors"
 )
 
@@ -37,6 +38,10 @@ type call[T any] struct {
 //     调用方无法区分"合法零值"与"执行失败"，会静默污染下游缓存/状态）
 //   - map 中的 key 记录会被清理，不会因 panic 残留导致后续调用死锁
 func (f *Flight[T]) Do(ctx context.Context, key string, fn func(ctx context.Context) (T, error)) (T, error) {
+	// nil ctx 按 Background 处理（同步 concurrency #249）：否则 waiter 路径的
+	// select { case <-ctx.Done(): } 对 nil 接口解引用直接 panic，fn 也收到
+	// nil ctx。该口径已进 singleflighttest 契约套件，两侧实现共同受约束。
+	ctx = contextx.OrBackground(ctx)
 	c := &call[T]{
 		ready: make(chan struct{}),
 	}

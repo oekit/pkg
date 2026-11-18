@@ -49,6 +49,13 @@
 //  4. ttl/timeout 等参数校验口径（ttl 必须为正、timeout<=0 单次尝试等）
 //     属后端行为差异记录在各自 Locker 文档，本包不做运行时校验——契约层
 //     只定形状与哨兵，语义差异逐条声明不装作不存在（etcdx#86 的教训）。
+//  5. ownerID 随机源故障口径（已声明的后端差异，调用方知悉）：redisx 用
+//     stringx.RandomToken **fail-fast**（随机源失败 TryLock 返回错误，不
+//     静默退化）；etcdx/k8s/data 用 RandomTokenOrFallback **显式降级**到
+//     时间戳 ID（保留各自旧形态）。同一 Locker 接口在 crypto/rand 故障
+//     窗口（极罕见）下行为不同：换后端前请确认业务对弱凭据锁的容忍度。
+//     编码值域差异（Std 含 padding vs RawURL）是存量锁 value 形态的历史
+//     保留，不改（改了会把持有中的旧锁变成"非本 owner"）。
 //
 // # 用法（业务侧）
 //

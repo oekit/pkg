@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 
+	"github.com/oekit/pkg/contextx"
 	pkgerrors "github.com/oekit/pkg/errors"
 )
 
@@ -72,9 +73,7 @@ var ErrNilYielder = pkgerrors.NewBizError(1, "pagination: yield 不能为 nil")
 //	    },
 //	)
 func WalkEach[T any](ctx context.Context, budget int, fetch func(ctx context.Context, page int) ([]T, error), yield func(T) bool) error {
-	if ctx == nil { // nil ctx 显式兜底 Background（仓规总则②）
-		ctx = context.Background()
-	}
+	ctx = contextx.OrBackground(ctx) // nil ctx 兜底单源（#529 收割，原为内联形态）
 	if fetch == nil {
 		return ErrNilFetcher
 	}

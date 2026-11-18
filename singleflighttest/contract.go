@@ -29,6 +29,8 @@ type Flight[T any] interface {
 //   - fn error 原样透传给全部调用方
 //   - **一次飞行结束后，新调用必须重新执行 fn**（key 已释放，不得复用上次的
 //     结果）
+//   - **nil ctx 按 Background 处理**：leader/waiter 双路径均不得 nil 解引用
+//     panic（concurrency #249 口径，契约化防 fork 单侧修复漂移）
 func Run[T any](t *testing.T, factory func() Flight[T]) {
 	t.Helper()
 	t.Run("DedupSameKey", func(t *testing.T) { runDedup(t, factory()) })
@@ -39,6 +41,7 @@ func Run[T any](t *testing.T, factory func() Flight[T]) {
 	t.Run("DifferentKeysParallel", func(t *testing.T) { runDifferentKeys(t, factory()) })
 	t.Run("ErrorPropagates", func(t *testing.T) { runError(t, factory()) })
 	t.Run("AfterFlightNewCallRerunsFn", func(t *testing.T) { runAfterFlightReruns(t, factory()) })
+	t.Run("NilCtxTreatedAsBackground", func(t *testing.T) { runNilCtx(t, factory()) })
 }
 
 func runDedup[T any](t *testing.T, f Flight[T]) {
@@ -421,6 +424,65 @@ func runAfterFlightReruns[T any](t *testing.T, f Flight[T]) {
 	}
 	if got := calls.Load(); got != 3 {
 		t.Fatalf("飞行结束后新调用未重新执行 fn (calls=%d，期望 3)——key 未释放", got)
+	}
+}
+
+// runNilCtx 钉住「nil ctx 按 Background 处理，不得 nil 解引用 panic」。
+//
+// 背景（concurrency #249）：waiter 路径的 select { case <-ctx.Done(): } 在
+// ctx 为 nil 接口时直接 panic 打死请求 goroutine；该修复曾单侧落地导致
+// fork 漂移——两侧各自绿灯、契约套件却盖不到（套件不含 nil ctx 用例的盲区）。
+// 本用例把该口径升格为双侧契约：leader 与 waiter 两条路径都要过 nil ctx。
+func runNilCtx[T any](t *testing.T, f Flight[T]) {
+	t.Helper()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+
+	// leader 路径：nil ctx 的首个调用不 panic，fn 收到非 nil ctx。
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, err := f.Do(nil, "k", func(ctx context.Context) (T, error) {
+			if ctx == nil {
+				t.Error("leader 路径 fn 收到 nil ctx")
+			}
+			close(entered)
+			<-release
+			var zero T
+			return zero, nil
+		})
+		leaderDone <- err
+	}()
+	<-entered
+
+	// waiter 路径：nil ctx 的后来者挂上同一 call，等 leader 完成拿共享结果，
+	// 不得在等待分支 nil 解引用 panic。
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, err := f.Do(nil, "k", func(context.Context) (T, error) {
+			t.Error("waiter 不应执行 fn")
+			var zero T
+			return zero, nil
+		})
+		waiterDone <- err
+	}()
+	time.Sleep(20 * time.Millisecond) // 等 waiter 挂上同一 call
+	close(release)
+
+	select {
+	case err := <-leaderDone:
+		if err != nil {
+			t.Fatalf("leader err = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("leader 路径 nil ctx 未返回（panic 或挂死）")
+	}
+	select {
+	case err := <-waiterDone:
+		if err != nil {
+			t.Fatalf("waiter err = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiter 路径 nil ctx 未返回（select <-ctx.Done() nil 解引用 panic 或挂死）")
 	}
 }
 

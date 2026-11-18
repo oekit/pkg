@@ -2,7 +2,18 @@
 //
 // fork 自 github.com/oekit/concurrency/singleflight（stdlib-only 泛型实现）：
 // pkg 是最底层模块（零 oekit 内部依赖），cache.SingleFlightCache 需要它
-// 又不能反向依赖 concurrency，故内部化。concurrency 侧修 bug 时须同步本 fork。
+// 又不能反向依赖 concurrency，故内部化。concurrency 侧修 bug 时须同步本 fork
+// （nil ctx 兜底曾单侧落地漂移过一次，#249 → 本仓已同步并契约化）。
+//
+// 与 concurrency 侧的已知分叉点清单（同步修复时逐项核对）：
+//   - 功能面：concurrency 是超集（DoShared 折叠观测、DoChan channel 形态、
+//     Waiters 计数）；本 fork 只保留 cache 需要的 Do/Forget 最小面
+//   - 骨架：concurrency 已重构为 doCore/waitCall/release/runLeader 四件套；
+//     本 fork 是 Do 内联 defer 形态——语义核心（先摘键后唤醒、
+//     CompareAndDelete、panic 转 error 给 waiter + 原样 re-panic）双侧一致
+//   - panic 收编载体：本侧 *pkg/errors.PanicError；concurrency 侧
+//     *async.PanicError（文档化分工：捕获转换全走 pkg/errors.Recovered 单源，
+//     async 类型只补 Task 标签）
 //
 // 同一个 key 的并发调用只执行一次 fn，其他调用共享结果。
 // 适用于缓存穿透防护、token 刷新、配置加载等场景。

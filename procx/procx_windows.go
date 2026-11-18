@@ -11,6 +11,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/oekit/pkg/contextx"
 	"github.com/oekit/pkg/errors"
 )
 
@@ -107,10 +108,8 @@ func openProcessHandle(pid int) (uintptr, error) {
 // 「TERM→宽限→KILL」退化为立即整树终止；调用方不应在 windows 上期待
 // 优雅收尾（与包文档一致，不伪装成有）。
 func newCmd(ctx context.Context, name string, args []string, grace time.Duration) (*exec.Cmd, *treeState) {
-	_ = grace // 优雅档在 windows 上不存在（见上）
-	if ctx == nil {
-		ctx = context.Background() // 仓规总则②：nil = 显式回退默认值
-	}
+	_ = grace                        // 优雅档在 windows 上不存在（见上）
+	ctx = contextx.OrBackground(ctx) // nil ctx 兜底单源（#529 收割；仓规总则②）
 	st := &treeState{}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Cancel = func() error { return st.cancel(cmd) }

@@ -26,6 +26,7 @@ import (
 
 	pkgerrors "github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/stringx"
+	"github.com/oekit/pkg/timex"
 )
 
 // maxBody 响应体采集上限（异常服务端刷屏防内存放大）。
@@ -379,10 +380,11 @@ func DoJSONWithRetry(ctx context.Context, client *http.Client, reqFn func() (Req
 		if jitter > 0 {
 			delay = addJitter(delay, int64(jitter))
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
+		// 可中断等待单源（#530/#550 收割）：此处原为手写
+		// select{ctx.Done, time.After}——与 SleepContext 逐字同构，且
+		// time.After 在重试高频路径上留 timer 垃圾，NewTimer+Stop 更规整。
+		if err := timex.SleepContext(ctx, delay); err != nil {
+			return err
 		}
 	}
 	return lastErr
@@ -402,7 +404,7 @@ func exponentialDelay(base time.Duration, attempt int, maxDelay time.Duration) t
 		if delay >= maxDelay {
 			break
 		}
-		if delay > time.Duration(1<<62) { // 饱和而非回绕为负
+		if delay >= time.Duration(1<<62) { // 饱和而非回绕为负（>= 与 retry #283 同判据：1<<62 恰值时 *2 回绕成负）
 			delay = time.Duration(1<<63 - 1)
 			break
 		}

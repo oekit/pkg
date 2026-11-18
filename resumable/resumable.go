@@ -2,8 +2,6 @@ package resumable
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	stderrors "errors"
 	"fmt"
 	"io"
@@ -11,6 +9,7 @@ import (
 	"time"
 
 	"github.com/oekit/pkg/errors"
+	"github.com/oekit/pkg/stringx"
 )
 
 // 状态机与存储面的哨兵错误（errors.Is 可判）。
@@ -540,11 +539,12 @@ func (cs *chunkStream) Close() error {
 	return err
 }
 
-// newSessionID 生成会话 id（crypto/rand 16 字节 hex，32 字符）。
+// newSessionID 生成会话 id（16 字节 hex，32 字符）——委托 stringx.RandomToken
+// 单源（#528/#550 收割，原为同语义手写内联段）。
 func newSessionID() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	id, err := stringx.RandomToken(16, stringx.TokenHex)
+	if err != nil {
 		return "", errors.Wrapf(err, "resumable: 生成会话 id")
 	}
-	return hex.EncodeToString(b[:]), nil
+	return id, nil
 }

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // GenerateID 生成基于时间戳的唯一 ID，格式: 20060102150405-<8位hex>。
@@ -27,8 +29,8 @@ func GenerateID() string {
 // b[6]&0x0f|0x40 置版本位、b[8]&0x3f|0x80 置变体位，标准
 // 8-4-4-4-12 连字符格式（小写 hex）。
 //
-// 全矩阵 UUIDv4 的**单源**：kitx/uidgen 与 pkg/webhook（NewEventID 的
-// uuidv4 内联段）后续改为委托本函数，本单只加符号不迁消费方。
+// 全矩阵 UUIDv4 的**单源**：kitx/uidgen 已委托本函数；pkg/webhook
+// （NewEventID）走 [UUIDv4Err] 错误返回变体（其契约是返回 error）。
 //
 // 随机源失败直接 panic（与 tracing/traceid.NewID 同理，仓规总则③）：
 // UUID 的存在意义就是全局唯一，生成失败静默回退（空串/零串/时间戳）会让
@@ -36,12 +38,40 @@ func GenerateID() string {
 // crypto/rand.Read 自 Go 1.24 起保证填满且不返回错误（熵源不可用直接
 // panic 在其内部），此分支仅为显式契约，理论不可达。
 func UUIDv4() string {
+	b, err := uuidv4Bytes()
+	if err != nil {
+		panic(fmt.Sprintf("stringx: UUIDv4 crypto/rand failed: %v", err))
+	}
+	return formatUUIDv4(b)
+}
+
+// UUIDv4Err 是 [UUIDv4] 的错误返回变体（#550 收割）：生成语义逐字相同，
+// 区别仅在随机源失败时返回 error 而非 panic——供 webhook.NewEventID 这类
+// 契约就是「返回 error」的调用方收编（幂等键生成失败必须显式带回调用方，
+// 不该打死进程）。两形态共用同一内核（uuidv4Bytes/formatUUIDv4），不存在
+// 第二份字节布局/格式化实现可漂移。
+func UUIDv4Err() (string, error) {
+	b, err := uuidv4Bytes()
+	if err != nil {
+		return "", errors.Newf("stringx: UUIDv4 crypto/rand failed: %v", err)
+	}
+	return formatUUIDv4(b), nil
+}
+
+// uuidv4Bytes 生成 UUIDv4 的 16 字节随机载荷并置版本/变体位（两种返回
+// 形态的共同内核）。
+func uuidv4Bytes() ([16]byte, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		panic(fmt.Sprintf("stringx: UUIDv4 crypto/rand failed: %v", err))
+		return b, err
 	}
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 10xx
+	return b, nil
+}
+
+// formatUUIDv4 输出标准 8-4-4-4-12 连字符格式（小写 hex）。
+func formatUUIDv4(b [16]byte) string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 

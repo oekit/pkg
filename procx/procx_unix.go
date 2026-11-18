@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"syscall"
 	"time"
+
+	"github.com/oekit/pkg/contextx"
 )
 
 // treeState 是 unix 侧的平台句柄：进程组由 SysProcAttr{Setpgid} 在 Start 时
@@ -21,9 +23,7 @@ func (*treeState) release()      {}
 // ctx 到期时 TERM 整组 + 清扫跨组逃逸后代 → 宽限轮询（树死干净即收手）→
 // KILL 整组（kill(-pgid) 同时覆盖直接子进程与未换组的孙进程）。
 func newCmd(ctx context.Context, name string, args []string, grace time.Duration) (*exec.Cmd, *treeState) {
-	if ctx == nil {
-		ctx = context.Background() // 仓规总则②：nil = 显式回退默认值
-	}
+	ctx = contextx.OrBackground(ctx)               // nil ctx 兜底单源（#529 收割；仓规总则②）
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G702:执行调用方给定命令是本库核心职能（进程执行原语），name/args 由调用方显式提供
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
