@@ -2,6 +2,18 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.55.0] — 2026-11-19
+
+- 第二轮重复逻辑深挖审计（2026-11-19）pkg 侧修复与收割：
+
+- fix: internal/singleflight 同步 concurrency#249 的 nil-ctx 修复——waiter 路径 select <-ctx.Done() 对 nil 接口解引用 panic；singleflighttest 契约套件补 NilCtxTreatedAsBackground 用例（leader/waiter 双路径），该口径升格为双侧契约；fork 纪律升级为分叉点清单（#548）
+- fix: httpjson 指数退避溢出护栏判据 > 改 >=，对齐 retry #283 修复后口径——1<<62 恰值时 *2 回绕负 delay 绕过封顶，「同口径」注释失实一并修正（#549）
+- feat: stringx 新增 UUIDv4Err 错误返回变体——UUIDv4/UUIDv4Err 共用 uuidv4Bytes/formatUUIDv4 内核，全矩阵 UUIDv4 单源闭环（#550）
+- refactor: webhook.NewEventID 委托 UUIDv4Err（幂等键失败契约保留 error 形态）、resumable.newSessionID 委托 RandomToken、httpjson 重试等待段接 timex.SleepContext、pagination/procx（unix+windows）三处手写 nil-ctx 兜底接 contextx.OrBackground（#550）
+- docs: timex 零包内依赖纪律成文；distlock ownerID 随机源故障口径后端差异点名（redisx fail-fast vs etcdx 降级）（#550）
+
+关联问题单：pkg#548、pkg#549、pkg#550。
+
 ## [v0.54.0] — 2026-11-18
 
 - container 包新增 VersionedCell[T]——值+代次绑同一原子单元的发布机制单源,core/config.Snapshot 与 core/governance.Store 同构范式的下沉件(#535);cache.Checker 手写 mini-singleflight 收敛 internal/singleflight,~75 行样板删除(#537);webhook SignerWithClock(nil) 从 panic 改回退默认时钟,与 cache.WithClock/总则②对齐(行为变更:P 原 panic 场景现正常)(#538);pagination 新增信封计算原语 ComputePages/ServedPage——整数 ceil(弃 float64 精度)与 #233 溢出回显判据单点,gormx#248 服务
