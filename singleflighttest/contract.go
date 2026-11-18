@@ -441,6 +441,7 @@ func runNilCtx[T any](t *testing.T, f Flight[T]) {
 	// leader 路径：nil ctx 的首个调用不 panic，fn 收到非 nil ctx。
 	leaderDone := make(chan error, 1)
 	go func() {
+		//nolint:staticcheck // SA1012：传 nil ctx 正是本契约的测试点
 		_, err := f.Do(nil, "k", func(ctx context.Context) (T, error) {
 			if ctx == nil {
 				t.Error("leader 路径 fn 收到 nil ctx")
@@ -458,6 +459,7 @@ func runNilCtx[T any](t *testing.T, f Flight[T]) {
 	// 不得在等待分支 nil 解引用 panic。
 	waiterDone := make(chan error, 1)
 	go func() {
+		//nolint:staticcheck // SA1012：传 nil ctx 正是本契约的测试点
 		_, err := f.Do(nil, "k", func(context.Context) (T, error) {
 			t.Error("waiter 不应执行 fn")
 			var zero T
