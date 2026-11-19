@@ -2,6 +2,14 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.55.1] — 2026-11-20
+
+- fix(pagination): Walk 入口补 nil-ctx 兜底——#529 收割 wave 只修 WalkEach 半边，nil ctx 进 Walk 循环体即 panic（#554）
+fix(cache): Checker.Check 入口补 nil-ctx 兜底——入口 ctx.Err() 在进 singleflight 之前，flight 内兜底救不到（#554）
+fix(procx): MemGroup.Close 入口补 nil-ctx 兜底（Linux 路径 removeMemGroup 的 ctx.Err()/Done() 触点）（#554）
+test(cache): cachetest 契约套件补第 9 场景 nil_ctx_treated_as_background；LocalCache.load 入口联动兜底（#554）
+test(singleflight): internal/singleflight 历史测试副本删除（10 函数 ~300 行，契约套件等价覆盖）；套件正对照补 struct 双实例（#555）
+
 ## [v0.55.0] — 2026-11-19
 
 - 第二轮重复逻辑深挖审计（2026-11-19）pkg 侧修复与收割：
