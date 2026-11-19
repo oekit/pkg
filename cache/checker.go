@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oekit/pkg/contextx"
 	"github.com/oekit/pkg/errors"
 	"github.com/oekit/pkg/internal/singleflight"
 )
@@ -83,7 +84,13 @@ func NewChecker(refresh func(ctx context.Context) error, ttl, failTTL time.Durat
 // 样板——与 SingleFlightCache 同一套实现、同一套契约）：合并的等待者被
 // ctx 取消时拿到 ctx.Err()；refresh 的 panic 先转成 error 按 failTTL
 // 缓存，再原样抛给首个调用方（等待者拿到 panic 转成的 error，不跟着崩）。
+//
+// ctx 传 nil 视同 context.Background()（#554，与「nil ctx 兜底」总则一致）。
 func (c *Checker) Check(ctx context.Context) error {
+	// nil ctx 兜底单源（#529 收割 wave 漏网补齐，#554）：入口的 ctx.Err()
+	// 在进 flight **之前**，flight 内部的 OrBackground 兜底救不到这里，
+	// 必须先归一再做取消检查。
+	ctx = contextx.OrBackground(ctx)
 	if err := ctx.Err(); err != nil {
 		return err
 	}

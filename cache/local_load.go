@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/oekit/pkg/contextx"
 	"github.com/oekit/pkg/errors"
 )
 
@@ -101,6 +102,10 @@ func (c *LocalCache[T]) getOrLoadNoMiss(ctx context.Context, key string, spec lo
 // load 是 getOrLoad 的实现：countMiss=false 时不计入读计数（未命中与命中
 // 都不计，pkg#90 + #250，见 getOrLoadNoMiss），其余行为与计数口径完全一致。
 func (c *LocalCache[T]) load(ctx context.Context, key string, spec loadSpec[T], countMiss bool) (*T, error) {
+	// nil ctx 兜底单源（#529 收割 wave 漏网补齐，#554）：Source/OnStale 是
+	// 实现代调的用户回调，nil 接口不得原样透传（cachetest 契约
+	// nil_ctx_treated_as_background 钉住此口径）。
+	ctx = contextx.OrBackground(ctx)
 	// 1. 非删除式查看：未过期直接返回（null marker 命中 → (nil, nil) 防穿透）。
 	//    过期条目保留在表内——StaleIfError 需要过期真值在回源失败时仍可读
 	//    （惰性删除在此让位，回收交给后台清扫与其他读路径）

@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 
+	"github.com/oekit/pkg/contextx"
 	pkgerrors "github.com/oekit/pkg/errors"
 )
 
@@ -46,12 +47,14 @@ var (
 //     ——这是防呆，不是功能；
 //   - 任何一页 fetch 失败立即返回该页错误（带页码上下文），已聚合的部分
 //     不返回——调用方要么拿到全量要么拿到错误，没有半截结果；
-//   - 逐页做 ctx 取消检查，长翻页调用方传值即可获得取消语义。
+//   - 逐页做 ctx 取消检查，长翻页调用方传值即可获得取消语义。ctx 传 nil
+//     视同 context.Background()（与 WalkEach 同口径，#554）。
 //
 // 不做并发预取：上游 API 多数按页序有 token/游标依赖，收益不值得复杂度。
 // 此前 zentao-mini 的 client_* 五个「翻页直到 len<pageSize」循环各写一份
 // （页长 100/200/500 各异），下沉为一份原语（上游 zentao-mini#22）。
 func Walk[T any](ctx context.Context, pageSize int, fetch func(ctx context.Context, page int) ([]T, error)) ([]T, error) {
+	ctx = contextx.OrBackground(ctx) // nil ctx 兜底单源（#529 收割 wave 漏网补齐，#554）——循环体首行裸 ctx.Err() 对 nil 接口即 panic
 	if pageSize <= 0 {
 		return nil, ErrBadPageSize
 	}

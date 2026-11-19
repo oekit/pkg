@@ -63,6 +63,32 @@ func TestMemGroupAttachValidation(t *testing.T) {
 	}
 }
 
+// TestMemGroupCloseNilCtx 钉住 pkg#554：Close 入口的 nil ctx 兜底——nil 直通
+// Linux 回收轮询的取消检查（removeMemGroup 的 ctx.Err() 与 select
+// <-ctx.Done()）即 panic；兜底放跨平台入口。可兑现宿主走真组路径（轮询循环
+// 真跑一遍），不可兑现宿主用零值组钉入口幂等口径（各平台 Close(nil) 都不
+// panic、多次调用回同一结果）。
+func TestMemGroupCloseNilCtx(t *testing.T) {
+	if capableErr := MemoryLimitCapable(); capableErr == nil {
+		g, createErr := NewMemGroup(1 << 20)
+		if createErr != nil {
+			t.Fatalf("NewMemGroup: %v", createErr)
+		}
+		//nolint:staticcheck // SA1012：传 nil ctx 正是本测试点
+		if err := g.Close(nil); err != nil {
+			t.Fatalf("Close(nil) 应按 Background 处理，got %v", err)
+		}
+	}
+	g := &MemGroup{}
+	//nolint:staticcheck // SA1012：传 nil ctx 正是本测试点
+	first := g.Close(nil)
+	//nolint:staticcheck // SA1012：传 nil ctx 正是本测试点
+	second := g.Close(nil) // sync.Once 幂等：多次 Close 回同一结果
+	if !errors.Is(second, first) {
+		t.Fatalf("多次 Close 应回同一结果，first=%v second=%v", first, second)
+	}
+}
+
 // TestRunWithMemoryLimitFailClosed 钉住 pkg#359 的核心纪律：兑现不了就
 // **拒绝执行**（fail closed），不得静默降级成不限——子进程一个字节都不许跑；
 // 兑现得了才真跑，且跑完无残组。两个分支都断言。
