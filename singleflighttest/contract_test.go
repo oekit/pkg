@@ -28,8 +28,25 @@ import (
 
 // TestRun_AcceptsGoodImplementation 正对照：套件对正确实现是绿的——套件
 // 自身的编排若有误（时序构造错误、断言写反），这层先炸。
+//
+// 双类型实例（int + struct，#555）：泛型实例面此前由两侧各自的手写烟雾测试
+// 承载（internal/singleflight 的 TestFlight_GenericInt/GenericStruct——与
+// concurrency 侧逐字重复的历史副本，#555 收割删除），泛型覆盖自本套件统一
+// 钉住，防「int 实例绿、struct 实例漂移」的单侧盲区。
 func TestRun_AcceptsGoodImplementation(t *testing.T) {
-	Run[int](t, func() Flight[int] { return singleflight.New[int]() })
+	t.Run("Int", func(t *testing.T) {
+		Run[int](t, func() Flight[int] { return singleflight.New[int]() })
+	})
+	t.Run("Struct", func(t *testing.T) {
+		Run[pointStruct](t, func() Flight[pointStruct] { return singleflight.New[pointStruct]() })
+	})
+}
+
+// pointStruct 泛型烟雾的 struct 值类型实例（#555，原 TestFlight_GenericStruct
+// 的 token 形态收敛为最小 point）：Flight[T] 在 struct 值类型上的实例化
+// （零值语义、跨 waiter 的值传递）由套件全场景统一承载。
+type pointStruct struct {
+	X, Y int
 }
 
 // forgetRaceDeletingFlight 是**故意有缺陷**的 Flight：call 收尾无条件删 key。
