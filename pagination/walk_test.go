@@ -94,6 +94,30 @@ func TestWalk_CtxCanceled(t *testing.T) {
 	}
 }
 
+// nil ctx 按 Background 处理（#529 收割 wave 漏网补齐，#554）：修前 nil 接口
+// ctx 在第一轮循环的裸 ctx.Err() 即 nil 解引用 panic；兜底后走完整聚合流程，
+// fetch 收到非 nil ctx。
+func TestWalk_NilCtxTreatedAsBackground(t *testing.T) {
+	var fetchCtx context.Context
+	//nolint:staticcheck // SA1012：传 nil ctx 正是本测试点
+	got, err := Walk(nil, 2, func(ctx context.Context, page int) ([]int, error) {
+		fetchCtx = ctx
+		if page > 2 {
+			return nil, nil
+		}
+		return []int{page * 10, page*10 + 1}, nil
+	})
+	if err != nil {
+		t.Fatalf("nil ctx 应按 Background 走完整聚合流程, got %v", err)
+	}
+	if len(got) != 4 || got[0] != 10 || got[3] != 21 {
+		t.Fatalf("聚合结果异常: %v", got)
+	}
+	if fetchCtx == nil {
+		t.Fatal("fetch 收到 nil ctx——入口必须先归一（OrBackground）再透传")
+	}
+}
+
 // 非法入参哨兵。
 func TestWalk_BadInput(t *testing.T) {
 	if _, err := Walk[int](context.Background(), 0, func(_ context.Context, _ int) ([]int, error) { return nil, nil }); !errors.Is(err, ErrBadPageSize) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/oekit/pkg/contextx"
 	"github.com/oekit/pkg/errors"
 )
 
@@ -96,7 +97,12 @@ func (g *MemGroup) Attach(pid int) error {
 // Close 回收限额组：先杀组内残余进程（树终止后仍留在组里的逃逸后代）、
 // 递归删子组，再删组本身（空组才删得掉）——有限轮询（约 2s）内收敛，
 // 删不掉如实报错。sync.Once 幂等：多次 Close 回同一结果，可放心 defer。
+// ctx 传 nil 视同 context.Background()（#554）。
 func (g *MemGroup) Close(ctx context.Context) error {
+	// nil ctx 兜底单源（#529 收割 wave 漏网补齐，#554）：nil 直通 Linux 回收
+	// 轮询的取消检查（removeMemGroup 的 ctx.Err() 与 select <-ctx.Done()）即
+	// panic；兜底放跨平台入口——非 Linux 桩不触 ctx，但口径两侧一致。
+	ctx = contextx.OrBackground(ctx)
 	g.once.Do(func() {
 		g.mu.Lock()
 		g.closed = true
