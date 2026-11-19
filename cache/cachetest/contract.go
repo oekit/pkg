@@ -61,7 +61,7 @@ func Comparable[T comparable]() Contract[T] {
 	}
 }
 
-// Run 跑完整契约场景（8 个子测试，任何子测试失败即实现违反契约）。
+// Run 跑完整契约场景（9 个子测试，任何子测试失败即实现违反契约）。
 //
 // factory 每个场景调用一次，用套件给定的 source 构造全新被测缓存
 // （source 的行为——返回值/计数——由各场景闭包控制，factory 原样注入即可）；
@@ -77,6 +77,8 @@ func Comparable[T comparable]() Contract[T] {
 //  6. null_marker             Source (nil,nil) → null 标记防穿透，Del 后重新回源
 //  7. refresh                 Refresh 取 source 新值并更新缓存
 //  8. concurrent_mixed_ops    并发混合读写删无 panic（配合 -race 检测数据竞争）
+//  9. nil_ctx_treated_as_background  nil ctx 按 Background 处理，回源/命中/
+//     写删全路径不 panic，Source 收到归一后的非 nil ctx（#554）
 func Run[T any](t *testing.T, c Contract[T], factory func(t *testing.T, source cache.SourceFunc[T]) cache.CacheAside[T]) {
 	t.Helper()
 
@@ -88,6 +90,7 @@ func Run[T any](t *testing.T, c Contract[T], factory func(t *testing.T, source c
 	t.Run("null_marker", func(t *testing.T) { runNullMarker(t, c, factory) })
 	t.Run("refresh", func(t *testing.T) { runRefresh(t, c, factory) })
 	t.Run("concurrent_mixed_ops", func(t *testing.T) { runConcurrent(t, c, factory) })
+	t.Run("nil_ctx_treated_as_background", func(t *testing.T) { runNilCtx(t, c, factory) })
 }
 
 // unusedSource 返回"被调用即失败"的 source，用于不回源的场景。
@@ -413,4 +416,59 @@ func runConcurrent[T any](t *testing.T, c Contract[T], factory func(t *testing.T
 		})
 	}
 	wg.Wait()
+}
+
+// runNilCtx 场景 9：nil ctx 按 Background 处理，不得 nil 解引用 panic（#554，
+// 与 singleflighttest 的 NilCtxTreatedAsBackground 同构——#548 定性「套件不
+// 含 nil ctx 用例=盲区」，cachetest 同构盲区一并收口）。nil 接口值可以一路
+// 传到实现深处才炸（堆栈离「传错了」的调用点很远）；Source 是实现代调的
+// 用户回调，收到的 ctx 必须是归一后的非 nil 值。语义口径：nil ==
+// context.Background()（只做 nil 归一，不复活取消信号）。
+func runNilCtx[T any](t *testing.T, c Contract[T], factory func(t *testing.T, source cache.SourceFunc[T]) cache.CacheAside[T]) {
+	t.Helper()
+	v0 := c.NewValue(0)
+	var sourceCtx context.Context
+	cc := factory(t, func(ctx context.Context, key string) (*T, error) {
+		sourceCtx = ctx
+		return v0, nil
+	})
+
+	// 回源路径（GetOrLoad）：nil ctx 不 panic、回源回填成功，source 收到
+	// 非 nil ctx（nil 已被入口归一——不是把 nil 原样透传给用户回调）。
+	//nolint:staticcheck // SA1012：传 nil ctx 正是本契约的测试点
+	got, err := cc.GetOrLoad(nil, "cachetest-nilctx")
+	if err != nil {
+		t.Fatalf("nil ctx GetOrLoad 应按 Background 处理，got %v", err)
+	}
+	if got == nil || !c.Equal(got, v0) {
+		t.Fatalf("nil ctx GetOrLoad 应回源返回 source 值，got %+v", got)
+	}
+	if sourceCtx == nil {
+		t.Fatal("source 收到 nil ctx——实现必须先归一（OrBackground）再透传回调")
+	}
+
+	// 命中路径（Get）：nil ctx 不 panic，拿到回填值。
+	//nolint:staticcheck // SA1012：传 nil ctx 正是本契约的测试点
+	got, err = cc.Get(nil, "cachetest-nilctx")
+	if err != nil {
+		t.Fatalf("nil ctx Get 应按 Background 处理，got %v", err)
+	}
+	if got == nil || !c.Equal(got, v0) {
+		t.Fatalf("nil ctx Get 应命中回填值，got %+v", got)
+	}
+
+	// 写/存在/删路径：nil ctx 不 panic（写删面与读面同等受约束）。
+	v1 := c.NewValue(1)
+	//nolint:staticcheck // SA1012：传 nil ctx 正是本契约的测试点
+	if err := cc.Set(nil, "cachetest-nilctx-set", v1); err != nil {
+		t.Fatalf("nil ctx Set 应按 Background 处理，got %v", err)
+	}
+	//nolint:staticcheck // SA1012：传 nil ctx 正是本契约的测试点
+	if exists, err := cc.Exists(nil, "cachetest-nilctx-set"); err != nil || !exists {
+		t.Fatalf("nil ctx Exists 应命中写入条目，got (exists=%v, err=%v)", exists, err)
+	}
+	//nolint:staticcheck // SA1012：传 nil ctx 正是本契约的测试点
+	if err := cc.Del(nil, "cachetest-nilctx-set"); err != nil {
+		t.Fatalf("nil ctx Del 应按 Background 处理，got %v", err)
+	}
 }

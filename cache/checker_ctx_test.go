@@ -53,6 +53,30 @@ func TestCheckCanceledCtxAtEntry(t *testing.T) {
 	}
 }
 
+// TestCheckNilCtxTreatedAsBackground 钉住 pkg#554：Check 入口的 nil ctx 兜底
+// ——入口的 ctx.Err() 在进 flight **之前**，flight 内部的 OrBackground 兜底
+// 救不到这里，修前 nil ctx 在入口即 panic。兜底后按 Background 走完整刷新
+// 流程（refresh 收到非 nil ctx），缓存命中快路径同样不 panic。
+func TestCheckNilCtxTreatedAsBackground(t *testing.T) {
+	var refreshCtx context.Context
+	c := NewChecker(func(ctx context.Context) error {
+		refreshCtx = ctx
+		return nil
+	}, time.Minute, 0)
+	//nolint:staticcheck // SA1012：传 nil ctx 正是本测试点
+	if err := c.Check(nil); err != nil {
+		t.Fatalf("nil ctx Check 应按 Background 走刷新流程，得到 %v", err)
+	}
+	if refreshCtx == nil {
+		t.Fatal("refresh 收到 nil ctx——入口必须先归一（OrBackground）再透传")
+	}
+	// 二次调用走缓存命中快路径（不进 flight），nil ctx 同样不得 panic。
+	//nolint:staticcheck // SA1012：传 nil ctx 正是本测试点
+	if err := c.Check(nil); err != nil {
+		t.Fatalf("nil ctx Check 二次调用（缓存命中快路径）得到 %v", err)
+	}
+}
+
 // TestCheckLeaderCancelDoesNotAbortSharedRefresh 钉住 pkg#352 核心场景：
 // leader 断开不把共享刷新整个拖死——刷新收到的 ctx 在 leader 取消后仍
 // err()==nil（WithoutCancel），刷新完成且成功结果正常入缓存。
