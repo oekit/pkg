@@ -219,9 +219,9 @@ func AnyToUint64(v any) uint64 {
 	case json.Number:
 		// 与同族 float32/float64 分支同口径（[#256]）：复用
 		// float64ToUint64Safe 统一钳制，NaN/±Inf/负数/越界一律 0。
-		// 此前这里直接 uint64(fv)，1e22（encoding.Unmarshal 的 UseNumber
-		// 主路径）会产出 uint64 饱和最大值——看起来像合法值，`if id > 0`
-		// 之类校验全部通过；而同一个值走 float64 分支是 0。
+		// 此前这里直接 uint64(fv)，1e22（经 encoding.UnmarshalUseNumber
+		// 进来的 json.Number）会产出 uint64 饱和最大值——看起来像合法值，
+		// `if id > 0` 之类校验全部通过；而同一个值走 float64 分支是 0。
 		if iv, err := val.Int64(); err == nil && iv > 0 {
 			return uint64(iv)
 		}
