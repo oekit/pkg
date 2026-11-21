@@ -146,8 +146,9 @@ func anyToInt64OK(v any) (int64, bool) {
 	case []byte:
 		return strToInt64OK(string(val))
 	case json.Number:
-		// encoding.Unmarshal 使用 UseNumber，数值是 json.Number；
-		// 不处理会导致所有 JSON 数值静默归零
+		// 经 encoding.UnmarshalUseNumber（或调用方自备的 json.Number）进来
+		// 的数值走这里；普通 encoding.Unmarshal 是 float64 分支。两条都
+		// 支持，换入口不改变数值答案。
 		if iv, err := val.Int64(); err == nil {
 			return iv, true
 		}

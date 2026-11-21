@@ -37,9 +37,18 @@ var (
 	ErrChunkTooLarge = stderrors.New("resumable: 分片字节数超过上限")
 	// ErrMissingChunks 完成时分片不齐（收到的缺清单见包装上下文）。
 	ErrMissingChunks = stderrors.New("resumable: 分片不齐")
-	// ErrBadInit 会话参数非法（Hash 空、Size 负、ChunkSize 非正等）。
+	// ErrBadInit 会话参数非法（Hash 空、Size 负、ChunkSize 非正、分片数
+	// 超上限等）。
 	ErrBadInit = stderrors.New("resumable: 会话参数非法")
 )
+
+// DefaultMaxChunks 是 Init 接受的会话分片数上限缺省（#560）。分片数决定
+// 断点对账的登记校验规模与缺片清单长度——Size/ChunkSize 通常来自客户端
+// 声明，不能让它把会话造成「近 2^63 片」的不可执行形态（Size=MaxInt64、
+// ChunkSize=1 的会话一旦建立，ListParts/Complete 就是近乎无限的 Stat
+// 循环）。超出上限的 Init 报 [ErrBadInit]；确有更大对象的部署用
+// [WithMaxChunks] 抬高上限（并自行承担对账成本）。
+const DefaultMaxChunks = 100000
 
 // Status 会话状态机的状态。状态迁移是单点语义（[SessionStore] 保证原子）：
 //
@@ -101,19 +110,24 @@ type Session struct {
 //
 // 计算口径（#407）：`(Size-1)/ChunkSize + 1`——先加后除的写法
 // `(Size+ChunkSize-1)/ChunkSize` 的**分子**在 Size 接近 MaxInt64 时先溢出
-// 回绕到负半区 ⇒ 分片数 ≤ 0 ⇒ reconcile 的 `for i := range n` 空过（齐全
-// 校验形同虚设）、merge 收到 0 字节流、Complete 返回 nil 并交付 0 字节对象。
+// 回绕到负半区 ⇒ 分片数 ≤ 0 ⇒ 对账空过（齐全校验形同虚设）、merge 收到
+// 0 字节流、Complete 返回 nil 并交付 0 字节对象。
 // 先减后除数学等价（Size >= 1 时）且分子恒非负，不存在溢出形态。
 //
 // 结果按 int 表示宽度饱和（32 位平台上 int64 分片数可能超出 int 范围——
-// 饱和到 MaxInt 而不是回绕出负数； Size/ChunkSize 组合超出 int 表示范围
-// 本身就是不可执行的会话，reconcile/Complete 的逐片对账会如实把它算成
-// 缺片，不会静默空过）。
+// 饱和到 MaxInt 而不是回绕出负数；这类不可执行会话经 [Manager.Init] 会被
+// 分片数上限拒绝（[DefaultMaxChunks]），对账不会静默空过）。
 func (s *Session) NumChunks() int {
-	if s.Size == 0 || s.ChunkSize <= 0 {
+	return numChunks(s.Size, s.ChunkSize)
+}
+
+// numChunks 是 NumChunks 的计算体（Init 在会话落库前用同一口径做上限
+// 校验，保证「校验的数」与「运行时用的数」单源）。
+func numChunks(size, chunkSize int64) int {
+	if size == 0 || chunkSize <= 0 {
 		return 0
 	}
-	return int(min((s.Size-1)/s.ChunkSize+1, int64(math.MaxInt)))
+	return int(min((size-1)/chunkSize+1, int64(math.MaxInt)))
 }
 
 // chunkLen 返回 idx 号分片的应有字节数（前置：idx 合法）——非末片是
@@ -199,17 +213,36 @@ type SessionStore interface {
 // Manager 把状态机与两类存储串成上传会话面：会话创建、分片登记、断点
 // 查询、完成、中止、孤儿清扫。构造后并发安全（互斥在两个 store 里）。
 type Manager struct {
-	sessions SessionStore
-	chunks   ChunkStore
+	sessions  SessionStore
+	chunks    ChunkStore
+	maxChunks int // Init 接受的分片数上限（#560，见 WithMaxChunks）
+}
+
+// ManagerOption 是 [NewManager] 的构造选项。
+type ManagerOption func(*Manager)
+
+// WithMaxChunks 设置 Init 接受的分片数上限（缺省 [DefaultMaxChunks]）。
+// 必须 > 0——上限不设防即等于回到全量对账的 DoS 面（fail-fast，仓规总则①）。
+func WithMaxChunks(n int) ManagerOption {
+	return func(m *Manager) {
+		if n <= 0 {
+			panic("resumable: WithMaxChunks 要求 > 0（上限不设防即回到全量对账的 DoS 面）")
+		}
+		m.maxChunks = n
+	}
 }
 
 // NewManager 构造 Manager。任一 store 为 nil 立即 panic（仓规总则①：
 // 构造期非法值 fail-fast——nil store 到第一个调用点才炸就晚了）。
-func NewManager(sessions SessionStore, chunks ChunkStore) *Manager {
+func NewManager(sessions SessionStore, chunks ChunkStore, opts ...ManagerOption) *Manager {
 	if sessions == nil || chunks == nil {
 		panic("resumable: NewManager: store 不可为 nil")
 	}
-	return &Manager{sessions: sessions, chunks: chunks}
+	m := &Manager{sessions: sessions, chunks: chunks, maxChunks: DefaultMaxChunks}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // Init 建会话（或命中秒传）：
@@ -217,10 +250,17 @@ func NewManager(sessions SessionStore, chunks ChunkStore) *Manager {
 //	dedup 命中 → (nil, true, nil)：内容已存在，调用方直接复用既有对象；
 //	否则按 req 建会话（StatusUploading）并返回 (会话, false, nil)。
 //
-// req.ID 空则生成；Hash 空、Size<0、ChunkSize<=0 报 [ErrBadInit]。
+// req.ID 空则生成；Hash 空、Size<0、ChunkSize<=0、分片数超过
+// [Manager] 上限（缺省 [DefaultMaxChunks]）报 [ErrBadInit]。
 func (m *Manager) Init(ctx context.Context, req InitReq, dedup DedupResolver) (*Session, bool, error) {
 	if req.Hash == "" || req.Size < 0 || req.ChunkSize <= 0 {
 		return nil, false, fmt.Errorf("%w: Hash=%q Size=%d ChunkSize=%d", ErrBadInit, req.Hash, req.Size, req.ChunkSize)
+	}
+	// 分片数上限（#560）：先于秒传钩子校验——不可执行的会话参数不因内容
+	// 恰好已存在而被放行成「合法请求」。
+	if n := numChunks(req.Size, req.ChunkSize); n > m.maxChunks {
+		return nil, false, fmt.Errorf("%w: 分片数 %d 超过上限 %d（Size=%d ChunkSize=%d）",
+			ErrBadInit, n, m.maxChunks, req.Size, req.ChunkSize)
 	}
 	if dedup != nil {
 		hit, err := dedup(ctx, req.Hash)
@@ -451,26 +491,36 @@ func (m *Manager) Sweep(ctx context.Context, olderThan time.Duration) (int, erro
 // reconcile 做断点对账（双源取交）：idx 既在 sess.Received（登记）又被
 // Stat 确认存活且字节数吻合 → received；其余 → missing。Stat 出非
 // [ErrChunkNotFound] 的错误视为存储故障，原样上抛（不给假答案）。
+//
+// 只对 sess.Received 里的登记序号做 Stat（#560）：此前是 for i := range n
+// 的逐片 Stat——成本随分片总数线性增长（1TiB/1MiB 每次 ListParts 百万次
+// 对象存储 Stat），Size=MaxInt64/ChunkSize=1 更是近无限循环。未登记的
+// 序号不可能是 received（登记是收片成功的一部分），无需探字节，直接
+// 算术补进 missing；n 另有 Init 的 [DefaultMaxChunks] 上限兜底，缺片清单
+// 本身有界。
 func (m *Manager) reconcile(ctx context.Context, sess *Session) (received, missing []int, err error) {
-	registered := make(map[int]bool, len(sess.Received))
-	for _, i := range sess.Received {
-		registered[i] = true
-	}
 	n := sess.NumChunks()
-	for i := range n {
-		want := sess.chunkLen(i)
-		size, err := m.chunks.Stat(ctx, sess.ID, i)
+	good := make(map[int]bool, len(sess.Received))
+	for _, idx := range sess.Received {
+		if idx < 0 || idx >= n || good[idx] {
+			continue // 越界/重复的脏快照序号不认，也不去 Stat
+		}
+		size, statErr := m.chunks.Stat(ctx, sess.ID, idx)
 		switch {
-		case stderrors.Is(err, ErrChunkNotFound):
-			missing = append(missing, i)
-		case err != nil:
-			return nil, nil, err
-		case size != want:
-			missing = append(missing, i) // 残缺片按缺处理（重传覆盖）
-		case !registered[i]:
-			missing = append(missing, i) // 字节在但没登记：不算已收（登记是收片成功的一部分）
-		default:
+		case statErr != nil && !stderrors.Is(statErr, ErrChunkNotFound):
+			return nil, nil, statErr
+		case statErr == nil && size == sess.chunkLen(idx):
+			good[idx] = true
+			// 字节丢失（ErrChunkNotFound）或残缺（size 不符）落进 missing。
+		}
+	}
+	received = make([]int, 0, len(good))
+	missing = make([]int, 0, n-len(good))
+	for i := range n {
+		if good[i] {
 			received = append(received, i)
+		} else {
+			missing = append(missing, i)
 		}
 	}
 	return received, missing, nil

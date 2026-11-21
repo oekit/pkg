@@ -95,22 +95,60 @@ func TestUnmarshalFromReader(t *testing.T) {
 	}
 }
 
-func TestUnmarshalUseNumber(t *testing.T) {
-	var result any
-	err := Unmarshal([]byte(`{"number":12345678901234567890}`), &result)
-	if err != nil {
-		t.Fatal(err)
+// TestUnmarshalFamilies_NumberSemantics 钉住 #563 的两族语义分界：
+// 普通入口（Unmarshal/UnmarshalFromString/UnmarshalFromReader）与 stdlib
+// 同形——any/map[string]any 下数字是 float64；仅 *UseNumber* 入口保留
+// json.Number 原文（>2^53 不丢精度）。
+func TestUnmarshalFamilies_NumberSemantics(t *testing.T) {
+	plain := []struct {
+		name string
+		fn   func(any) error
+	}{
+		{"Unmarshal", func(v any) error { return Unmarshal([]byte(`{"n":1}`), v) }},
+		{"UnmarshalFromString", func(v any) error { return UnmarshalFromString(`{"n":1}`, v) }},
+		{"UnmarshalFromReader", func(v any) error {
+			return UnmarshalFromReader(strings.NewReader(`{"n":1}`), v)
+		}},
+	}
+	for _, tc := range plain {
+		t.Run(tc.name+"/float64", func(t *testing.T) {
+			var v map[string]any
+			if err := tc.fn(&v); err != nil {
+				t.Fatal(err)
+			}
+			f, ok := v["n"].(float64)
+			if !ok {
+				t.Fatalf("数字类型 = %T, want float64（stdlib 语义）", v["n"])
+			}
+			if f != 1 {
+				t.Fatalf("数字 = %v, want 1", f)
+			}
+		})
 	}
 
-	m, ok := result.(map[string]any)
-	if !ok {
-		t.Fatal("expected map")
+	numbered := []struct {
+		name string
+		fn   func(any) error
+	}{
+		{"UnmarshalUseNumber", func(v any) error { return UnmarshalUseNumber([]byte(`{"n":1}`), v) }},
+		{"UnmarshalFromStringUseNumber", func(v any) error {
+			return UnmarshalFromStringUseNumber(`{"n":1}`, v)
+		}},
 	}
-
-	// UseNumber 应该返回 json.Number 而不是 float64
-	if _, ok := m["number"].(string); !ok {
-		// json.Number 实际上是 string 类型
-		t.Logf("number type: %T", m["number"])
+	for _, tc := range numbered {
+		t.Run(tc.name+"/json.Number", func(t *testing.T) {
+			var v map[string]any
+			if err := tc.fn(&v); err != nil {
+				t.Fatal(err)
+			}
+			num, ok := v["n"].(json.Number)
+			if !ok {
+				t.Fatalf("数字类型 = %T, want json.Number", v["n"])
+			}
+			if num.String() != "1" {
+				t.Fatalf("json.Number = %q, want %q", num.String(), "1")
+			}
+		})
 	}
 }
 
@@ -333,8 +371,8 @@ func TestUnmarshalFromReader_SuccessDoesNotBufferWholeInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("valid padded input should parse: %v", err)
 	}
-	if v, ok := out["k"].(json.Number); !ok || v.String() != "1" {
-		t.Fatalf("out[k] = %#v, want json.Number(\"1\")", out["k"])
+	if v, ok := out["k"].(float64); !ok || v != 1 {
+		t.Fatalf("out[k] = %#v, want float64(1)（普通入口按 stdlib 语义）", out["k"])
 	}
 	delta := m2.TotalAlloc - m1.TotalAlloc
 	// 阈值取 5 倍 pad：修复后 ≈4 倍（json.Decoder 自身缓冲倍增的固有成本，
