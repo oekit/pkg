@@ -92,6 +92,8 @@ func TestInit(t *testing.T) {
 		{Owner: "u", Hash: "", Size: 1, ChunkSize: 1},
 		{Owner: "u", Hash: "h", Size: -1, ChunkSize: 1},
 		{Owner: "u", Hash: "h", Size: 1, ChunkSize: 0},
+		// 分片数超上限（#560）：Size=MaxInt64/ChunkSize=1 是近无限对账的 DoS 形态。
+		{Owner: "u", Hash: "h", Size: math.MaxInt64, ChunkSize: 1},
 	} {
 		if _, _, err := m.Init(ctx, req, nil); !errors.Is(err, ErrBadInit) {
 			t.Errorf("Init(%+v) err = %v, want ErrBadInit", req, err)
@@ -102,6 +104,36 @@ func TestInit(t *testing.T) {
 	if _, _, err := m.Init(ctx, InitReq{ID: "fixed", Hash: "h3", Size: 1, ChunkSize: 1}, nil); !errors.Is(err, ErrSessionExists) {
 		t.Errorf("Init 撞 id err = %v, want ErrSessionExists", err)
 	}
+}
+
+// TestInit_MaxChunks 钉住 #560：Init 拒绝分片数超上限的会话（Size 来自
+// 客户端声明，不能让近 2^63 片的会话落库），上限可用 [WithMaxChunks] 调。
+func TestInit_MaxChunks(t *testing.T) {
+	ctx := context.Background()
+
+	// 缺省上限：MaxInt64/1 ⇒ 2^63-1 片，必拒。
+	m, _, _ := newTestManager()
+	if _, _, err := m.Init(ctx, InitReq{Hash: "h", Size: math.MaxInt64, ChunkSize: 1}, nil); !errors.Is(err, ErrBadInit) {
+		t.Fatalf("MaxInt64/1 err = %v, want ErrBadInit", err)
+	}
+
+	// 可配置：上限 2 时 3 片被拒、2 片放行。
+	small := NewManager(NewMemSessionStore(), NewMemChunkStore(), WithMaxChunks(2))
+	if _, _, err := small.Init(ctx, InitReq{Hash: "h", Size: 3, ChunkSize: 1}, nil); !errors.Is(err, ErrBadInit) {
+		t.Fatalf("3 片（上限 2）err = %v, want ErrBadInit", err)
+	}
+	s, _, err := small.Init(ctx, InitReq{Hash: "h2", Size: 2, ChunkSize: 1}, nil)
+	if err != nil || s.NumChunks() != 2 {
+		t.Fatalf("2 片（上限 2）Init = %+v, %v", s, err)
+	}
+
+	// 上限不设防（<=0）是构造期非法值：fail-fast。
+	defer func() {
+		if recover() == nil {
+			t.Error("WithMaxChunks(0) 应 panic")
+		}
+	}()
+	NewManager(NewMemSessionStore(), NewMemChunkStore(), WithMaxChunks(0))
 }
 
 func TestInitDedup(t *testing.T) {
@@ -235,6 +267,86 @@ func TestListPartsReconcile(t *testing.T) {
 	}
 }
 
+// countingChunkStore 统计 Stat 调用次数（#560：reconcile 不得逐片全扫）。
+type countingChunkStore struct {
+	*MemChunkStore
+	mu    sync.Mutex
+	stats int
+}
+
+func (c *countingChunkStore) Stat(ctx context.Context, id string, idx int) (int64, error) {
+	c.mu.Lock()
+	c.stats++
+	c.mu.Unlock()
+	return c.MemChunkStore.Stat(ctx, id, idx)
+}
+
+func (c *countingChunkStore) statCalls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stats
+}
+
+func (c *countingChunkStore) resetStats() {
+	c.mu.Lock()
+	c.stats = 0
+	c.mu.Unlock()
+}
+
+// TestListParts_ReconcileOnlyStatsRegistered 回归（#560）：reconcile 此前
+// 对 [0,n) 逐片 Stat——大会话每次 ListParts/Complete 都是 O(分片总数) 次
+// 对象存储调用。修后只校验 sess.Received 的登记序号，缺片算术补出；
+// Stat 次数 = 登记数（这里 1），与总片数（1000）无关。
+func TestListParts_ReconcileOnlyStatsRegistered(t *testing.T) {
+	ctx := context.Background()
+	sessions := NewMemSessionStore()
+	chunks := &countingChunkStore{MemChunkStore: NewMemChunkStore()}
+	m := NewManager(sessions, chunks)
+
+	const size = 1000 // 1000 片，只传 1 片
+	s, _, err := m.Init(ctx, InitReq{Owner: "u1", Hash: "h1", Size: size, ChunkSize: 1}, nil)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if perr := m.PutChunk(ctx, s.ID, 0, strings.NewReader("x"), 1); perr != nil {
+		t.Fatalf("PutChunk: %v", perr)
+	}
+	chunks.resetStats() // PutChunk 的写后存活确认不计入
+
+	recv, missing, _, err := m.ListParts(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("ListParts: %v", err)
+	}
+	if !slices.Equal(recv, []int{0}) {
+		t.Fatalf("received = %v, want [0]", recv)
+	}
+	if len(missing) != size-1 {
+		t.Fatalf("missing = %d 片, want %d", len(missing), size-1)
+	}
+	if missing[0] != 1 || missing[len(missing)-1] != size-1 {
+		t.Fatalf("missing 首尾 = %d..%d, want 1..%d", missing[0], missing[len(missing)-1], size-1)
+	}
+	if got := chunks.statCalls(); got != 1 {
+		t.Fatalf("Stat 调用 %d 次, want 1（只校验已登记序号，不做全量扫描）", got)
+	}
+
+	// 登记了但字节丢了：仍只 Stat 这一个登记号，且如实回缺片清单。
+	if derr := chunks.DeletePrefix(ctx, s.ID); derr != nil {
+		t.Fatalf("DeletePrefix: %v", derr)
+	}
+	chunks.resetStats()
+	recv, missing, _, err = m.ListParts(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("ListParts（丢字节）: %v", err)
+	}
+	if len(recv) != 0 || len(missing) != size {
+		t.Fatalf("丢字节后 = %d 收 %d 缺, want 0 收 %d 缺", len(recv), len(missing), size)
+	}
+	if got := chunks.statCalls(); got != 1 {
+		t.Fatalf("丢字节后 Stat 调用 %d 次, want 1", got)
+	}
+}
+
 // brokenStatStore 注入 Stat 故障，验证「读不到 ≠ 没有」。
 type brokenStatStore struct {
 	*MemChunkStore
@@ -251,9 +363,20 @@ func (b *brokenStatStore) Stat(ctx context.Context, id string, idx int) (int64, 
 func TestListPartsStoreError(t *testing.T) {
 	ctx := context.Background()
 	sessions := NewMemSessionStore()
-	store := &brokenStatStore{MemChunkStore: NewMemChunkStore(), statErr: errors.New("disk on fire")}
+	base := NewMemChunkStore()
+	store := &brokenStatStore{MemChunkStore: base}
 	m := NewManager(sessions, store)
 	s := initSession(t, m)
+
+	// #560 后 reconcile 只 Stat 已登记序号：先直接写分片 + 登记进度（绕过
+	// PutChunk 的写后确认），模拟「存储故障期间查询历史会话」。
+	if err := base.Put(ctx, s.ID, 0, strings.NewReader("AAAA")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.AppendReceived(ctx, s.ID, []int{0}); err != nil {
+		t.Fatal(err)
+	}
+	store.statErr = errors.New("disk on fire")
 
 	_, _, _, err := m.ListParts(ctx, s.ID)
 	if err == nil || errors.Is(err, ErrChunkNotFound) {

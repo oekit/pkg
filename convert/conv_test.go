@@ -206,8 +206,8 @@ func TestBoolToBytes(t *testing.T) {
 // TestAnyToUint64_JSONNumberClamped 回归（[#256]）：json.Number 分支此前
 // 绕过 float64ToUint64Safe 直接 uint64(fv)——1e22 饱和成 uint64 最大值
 // （看起来像合法值，`if id > 0` 之类校验全部通过），而同一个值走 float64
-// 分支是 0。encoding.Unmarshal 用 UseNumber，JSON 数值到业务侧就是
-// json.Number——这条是主路径，不是边角。
+// 分支是 0。经 encoding.UnmarshalUseNumber 进来时，JSON 数值到业务侧就是
+// json.Number——这条不是边角（普通 Unmarshal 走 float64 分支）。
 func TestAnyToUint64_JSONNumberClamped(t *testing.T) {
 	tests := []struct {
 		name string

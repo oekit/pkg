@@ -2,6 +2,7 @@ package reflectx
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 )
@@ -193,6 +194,66 @@ func TestDeepCopy_SliceSelfReference(t *testing.T) {
 	if len(inner) != 2 || reflect.ValueOf(inner[0]).Pointer() != reflect.ValueOf(out).Pointer() {
 		t.Fatal("副本自引用未指向副本自身（环闭合语义破坏）")
 	}
+}
+
+// TestDeepCopy_SubSliceWindowsNotTruncated 回归（#561）：Slice 的
+// reflect.Value.Pointer() 是首元素地址、不区分长度——s[:1] 与 s[:3] 指针
+// 相同。visited 只按指针记忆时，结构体同含两个窗口会撞键：后访问者命中
+// 先访问者的副本（长度不同），长窗口被静默截断成短窗口。
+// 钉住：两个窗口都按各自长度独立拷贝，元素完整，互不别名。
+func TestDeepCopy_SubSliceWindowsNotTruncated(t *testing.T) {
+	s := make([]int, 3)
+	s[0], s[1], s[2] = 1, 2, 3
+
+	// 字段顺序决定访问顺序：短窗口先登记时，旧实现把长窗口截断成 len 1；
+	// 长窗口先登记时，旧实现把短窗口错误张开成 len 3（别名同一副本）。
+	t.Run("短窗口在前", func(t *testing.T) {
+		src := struct {
+			A []int // s[:1]
+			B []int // s[:3]
+		}{s[:1], s[:3]}
+		cp := DeepCopy(src)
+		if got := len(cp.B); got != 3 {
+			t.Fatalf("长窗口被截断：len(cp.B) = %d, want 3", got)
+		}
+		if !slices.Equal(cp.B, []int{1, 2, 3}) {
+			t.Fatalf("长窗口元素失真: %v, want [1 2 3]", cp.B)
+		}
+		if len(cp.A) != 1 || !slices.Equal(cp.A, []int{1}) {
+			t.Fatalf("短窗口失真: %v, want [1]", cp.A)
+		}
+		// 两个窗口是独立副本：改长窗口不波及短窗口/源（避免错误别名）。
+		cp.B[0] = 99
+		if cp.A[0] != 1 || src.A[0] != 1 {
+			t.Fatalf("窗口间/与源仍别名: cp.A=%v src.A=%v", cp.A, src.A)
+		}
+	})
+	t.Run("长窗口在前", func(t *testing.T) {
+		src := struct {
+			B []int // s[:3]
+			A []int // s[:1]
+		}{s[:3], s[:1]}
+		cp := DeepCopy(src)
+		if !slices.Equal(cp.B, []int{1, 2, 3}) {
+			t.Fatalf("长窗口元素失真: %v", cp.B)
+		}
+		if len(cp.A) != 1 || !slices.Equal(cp.A, []int{1}) {
+			t.Fatalf("短窗口被错误张开/别名: len=%d %v, want [1]", len(cp.A), cp.A)
+		}
+	})
+	t.Run("零长窗口", func(t *testing.T) {
+		src := struct {
+			Z []int // s[:0]
+			B []int // s[:3]
+		}{s[:0], s[:3]}
+		cp := DeepCopy(src)
+		if len(cp.Z) != 0 {
+			t.Fatalf("零长窗口丢形状: %v", cp.Z)
+		}
+		if !slices.Equal(cp.B, []int{1, 2, 3}) {
+			t.Fatalf("长窗口被零长窗口截断: %v", cp.B)
+		}
+	})
 }
 
 func TestDeepCopy_MutualMapReference(t *testing.T) {

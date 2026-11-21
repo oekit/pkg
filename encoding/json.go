@@ -27,9 +27,14 @@ func MarshalToString(v any) (string, error) {
 }
 
 // Unmarshal 将 JSON 字节反序列化到 v。
-// 使用 UseNumber 模式解析数字，避免精度丢失。
-// 与 encoding/json.Unmarshal 语义一致：整个输入必须是单一 JSON 值，
-// 尾部残留数据（截断修复失败/拼接脏数据）视为错误而非静默忽略。
+//
+// 数字语义与 [encoding/json.Unmarshal] 一致：解到 any/map[string]any 时
+// 数字是 float64（超过 2^53 的整数会丢精度）。需要保留原文字面量的场景
+// 用 [UnmarshalUseNumber]——「通名同形」的普通入口不再隐式 UseNumber
+// （#563：此前两个族逐字等价，迁移方按 stdlib 语义断言 float64 会失败）。
+//
+// 与 encoding/json.Unmarshal 的差异只在尾部校验：整个输入必须是单一
+// JSON 值，尾部残留数据（截断修复失败/拼接脏数据）视为错误而非静默忽略。
 func Unmarshal(data []byte, v any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := unmarshalStrict(decoder, v); err != nil {
@@ -39,7 +44,7 @@ func Unmarshal(data []byte, v any) error {
 }
 
 // UnmarshalFromString 将 JSON 字符串反序列化到 v。
-// 语义同 Unmarshal：尾部残留数据视为错误。
+// 数字语义同 Unmarshal（any 下为 float64）；尾部残留数据视为错误。
 func UnmarshalFromString(str string, v any) error {
 	decoder := json.NewDecoder(strings.NewReader(str))
 	if err := unmarshalStrict(decoder, v); err != nil {
@@ -55,6 +60,7 @@ func UnmarshalFromString(str string, v any) error {
 // 该类型解析。尾部残留数据视为错误（同 Unmarshal）。
 func UnmarshalUseNumber(b []byte, v any) error {
 	decoder := json.NewDecoder(bytes.NewReader(b))
+	decoder.UseNumber()
 	if err := unmarshalStrict(decoder, v); err != nil {
 		return formatError(string(b), err)
 	}
@@ -65,6 +71,7 @@ func UnmarshalUseNumber(b []byte, v any) error {
 // 语义同 UnmarshalUseNumber：数字保留为 json.Number，防 >2^53 精度丢失。
 func UnmarshalFromStringUseNumber(s string, v any) error {
 	decoder := json.NewDecoder(strings.NewReader(s))
+	decoder.UseNumber()
 	if err := unmarshalStrict(decoder, v); err != nil {
 		return formatError(s, err)
 	}
@@ -78,7 +85,7 @@ func UnmarshalFromStringUseNumber(s string, v any) error {
 // （Builder 倍增扩容 + 一次 String() 拷贝 ≈ 输入的 6 倍），8 MiB 报文吃掉
 // ~50 MiB 堆（[#260]）。现在只驻留前 maxExcerpt 字节。
 //
-// 与 Unmarshal 语义一致：尾部残留数据视为错误。
+// 数字语义同 Unmarshal（any 下为 float64）；尾部残留数据视为错误。
 func UnmarshalFromReader(reader io.Reader, v any) error {
 	head := &excerptWriter{max: maxExcerpt}
 	decoder := json.NewDecoder(io.TeeReader(reader, head))
@@ -109,15 +116,13 @@ func (w *excerptWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func unmarshalUseNumber(decoder *json.Decoder, v any) error {
-	decoder.UseNumber()
-	return decoder.Decode(v)
-}
-
 // unmarshalStrict 解析首个 JSON 值后继续读，尾部必须是 EOF——
 // 否则 Decode 只消费第一个值，"{...} garbage" 会静默成功。
+//
+// 数字语义由调用方在 decoder 上决定（UseNumber 变体先调 decoder.UseNumber，
+// 普通入口保持 stdlib 的 float64 语义）。
 func unmarshalStrict(decoder *json.Decoder, v any) error {
-	if err := unmarshalUseNumber(decoder, v); err != nil {
+	if err := decoder.Decode(v); err != nil {
 		return err
 	}
 	var extra any

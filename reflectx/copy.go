@@ -23,14 +23,14 @@ import "reflect"
 // 仅用于低频路径（配置合并、页快照等）——每层反射分配的开销不适合热路径。
 // 调用方持有 reflect.Value 时用本函数；只有具体类型时 DeepCopy 更顺手。
 func DeepCopyValue(v reflect.Value) reflect.Value {
-	return deepCopyVisited(v, map[uintptr]reflect.Value{})
+	return deepCopyVisited(v, map[copyKey]reflect.Value{})
 }
 
 // DeepCopy 是 DeepCopyValue 的泛型糖：按 T 的静态反射视图深拷贝 v
 // （nil 接口也拿得到类型），返回独立副本。
 func DeepCopy[T any](v T) T {
 	rv := reflect.ValueOf(&v).Elem()
-	out := deepCopyVisited(rv, map[uintptr]reflect.Value{})
+	out := deepCopyVisited(rv, map[copyKey]reflect.Value{})
 	if !out.IsValid() {
 		var zero T
 		return zero
@@ -44,8 +44,23 @@ func DeepCopy[T any](v T) T {
 	return res.(T)
 }
 
-// deepCopyVisited 是 DeepCopyValue 的递归体；visited 键为 src 指针地址
-// （拷贝期间 src 不被分配/移动，地址即身份），值为对应的新拷贝。
+// copyKey 是 visited 的节点身份键：(指针, 长度, 类型)。
+//
+// 为什么不能只用指针（#561）：Slice 的 [reflect.Value.Pointer] 是**首元素
+// 地址**、不区分长度——s := make([]int, 3) 的 s[:1] 与 s[:3] 指针相同。
+// 只按指针记忆时，结构体同含两个窗口会撞键：后访问者命中先访问者的副本
+// （长度不同），被静默截断或错误别名。键补上 Len 后两个窗口各得独立副本；
+// 同一 header 的环（s[0]=s）ptr/len 相同，仍能正常闭合。类型进键是防御
+// 零长/零大小元素的指针重合（[]int{} 与 []string{} 的 Pointer 可能相同），
+// 避免把一种类型的副本 Set 到另一种类型的槽位而 panic。
+type copyKey struct {
+	ptr uintptr
+	len int
+	typ reflect.Type
+}
+
+// deepCopyVisited 是 DeepCopyValue 的递归体；visited 键为 src 节点身份
+// （拷贝期间 src 不被分配/移动，指针+长度+类型即身份），值为对应的新拷贝。
 //
 // 环防护覆盖 Pointer/Map/Slice 三类引用分支（#426）：此前只有 Pointer 登记
 // visited——不经指针也能成环（m["self"]=m 的 map 自引用、s[0]=s 的 slice
@@ -53,7 +68,7 @@ func DeepCopy[T any](v T) T {
 // 进程，不是可恢复错误。reflect.Value.Pointer() 对 Map（底层存储指针）与
 // Slice（首元素地址，len>=1 才可能自引用）同样可用，三类分支统一
 // 「先注册再下探」：环上第二次访问直接返回已拷贝节点，结构共享原样保留。
-func deepCopyVisited(v reflect.Value, visited map[uintptr]reflect.Value) reflect.Value {
+func deepCopyVisited(v reflect.Value, visited map[copyKey]reflect.Value) reflect.Value {
 	if !v.IsValid() {
 		return v
 	}
@@ -62,11 +77,12 @@ func deepCopyVisited(v reflect.Value, visited map[uintptr]reflect.Value) reflect
 		if v.IsNil() {
 			return v
 		}
-		if out, ok := visited[v.Pointer()]; ok {
+		key := copyKey{ptr: v.Pointer(), len: v.Len(), typ: v.Type()}
+		if out, ok := visited[key]; ok {
 			return out // 环闭合（#426）：返回已拷贝节点
 		}
 		out := reflect.MakeMapWithSize(v.Type(), v.Len())
-		visited[v.Pointer()] = out // 先注册再下探
+		visited[key] = out // 先注册再下探
 		iter := v.MapRange()
 		for iter.Next() {
 			out.SetMapIndex(deepCopyVisited(iter.Key(), visited), deepCopyVisited(iter.Value(), visited))
@@ -76,11 +92,14 @@ func deepCopyVisited(v reflect.Value, visited map[uintptr]reflect.Value) reflect
 		if v.IsNil() {
 			return v
 		}
-		if out, ok := visited[v.Pointer()]; ok {
+		// Len 进键（#561）：同一底层数组的不同长度窗口是不同节点，不能互相
+		// 命中（否则长窗口被短窗口的副本截断）。
+		key := copyKey{ptr: v.Pointer(), len: v.Len(), typ: v.Type()}
+		if out, ok := visited[key]; ok {
 			return out // 环闭合（#426）：返回已拷贝节点
 		}
 		out := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
-		visited[v.Pointer()] = out // 先注册再下探
+		visited[key] = out // 先注册再下探
 		for i := range v.Len() {
 			out.Index(i).Set(deepCopyVisited(v.Index(i), visited))
 		}
@@ -109,11 +128,12 @@ func deepCopyVisited(v reflect.Value, visited map[uintptr]reflect.Value) reflect
 		if v.IsNil() {
 			return v
 		}
-		if out, ok := visited[v.Pointer()]; ok {
+		key := copyKey{ptr: v.Pointer(), typ: v.Type()}
+		if out, ok := visited[key]; ok {
 			return out // 环闭合（core#102）：返回已拷贝节点，结构共享
 		}
 		out := reflect.New(v.Type().Elem())
-		visited[v.Pointer()] = out // 先注册再下探：自引用环在此终止
+		visited[key] = out // 先注册再下探：自引用环在此终止
 		out.Elem().Set(deepCopyVisited(v.Elem(), visited))
 		return out
 	case reflect.Interface:
