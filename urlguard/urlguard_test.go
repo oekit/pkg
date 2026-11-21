@@ -71,6 +71,42 @@ func TestCheckURL_Schemes(t *testing.T) {
 	}
 }
 
+// TestWithAllowedSchemes_ReplacesDefaults 钉住 #562：WithAllowedSchemes 是
+// **替换**语义，不是追加——配置 "https" 后缺省 http 必须被拒（服务禁明文
+// http 的收窄策略不能静默失效）；空参数 = deny-all，与未配置（缺省
+// http/https）区分。
+func TestWithAllowedSchemes_ReplacesDefaults(t *testing.T) {
+	onlyHTTPS := mustGuard(t, WithAllowedSchemes("https"))
+	if err := onlyHTTPS.CheckURL("https://example.com/hook"); err != nil {
+		t.Fatalf("配 https 后 https:// 应放行，got %v", err)
+	}
+	if err := onlyHTTPS.CheckURL("http://example.com/hook"); !errors.Is(err, ErrSchemeNotAllowed) {
+		t.Fatalf("配 https 后 http:// 应被 ErrSchemeNotAllowed 拒绝（追加语义回归），got %v", err)
+	}
+
+	// "新增 scheme" 也不再隐式保留缺省集：ssh 白名单里没有 http/https。
+	sshOnly := mustGuard(t, WithAllowedSchemes("ssh"))
+	if err := sshOnly.CheckURL("http://example.com/hook"); !errors.Is(err, ErrSchemeNotAllowed) {
+		t.Fatalf("配 ssh 后 http:// 应被拒（缺省集已被替换），got %v", err)
+	}
+
+	// 空参数 = 一个都不允许（fail-closed deny-all），不是「恢复缺省」。
+	denyAll := mustGuard(t, WithAllowedSchemes())
+	for _, raw := range []string{"http://example.com/hook", "https://example.com/hook"} {
+		if err := denyAll.CheckURL(raw); !errors.Is(err, ErrSchemeNotAllowed) {
+			t.Fatalf("空白名单应拒绝 %s，got %v", raw, err)
+		}
+	}
+
+	// 未配置时缺省 http/https 照旧。
+	def := mustGuard(t)
+	for _, raw := range []string{"http://example.com/hook", "https://example.com/hook"} {
+		if err := def.CheckURL(raw); err != nil {
+			t.Fatalf("未配置 scheme 白名单时 %s 应放行，got %v", raw, err)
+		}
+	}
+}
+
 func TestCheckIP_MappedNormalized(t *testing.T) {
 	g := mustGuard(t)
 	if err := g.CheckIP(net.ParseIP("::ffff:10.0.0.1")); err == nil {

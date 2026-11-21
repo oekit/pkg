@@ -13,10 +13,14 @@ import (
 // 重扫或接受部分结果——被预算截断的行走**不完整**，静默当全量用是消费方的
 // 事故（上游生态的无预算全量扫描形态后来自己都要在 doc 里提醒「列表多
 // 时每次都是全量扫描」，预算是防失控护栏，不是可选优化）。
-var ErrBudgetExceeded = pkgerrors.NewBizError(1, "pagination: 页数预算耗尽（行走未自然结束）")
+//
+// 普通 error、不是 BizError（#565）：本包不决定 HTTP 映射，见 walk.go
+// 哨兵块注释。
+var ErrBudgetExceeded = pkgerrors.New("pagination: 页数预算耗尽（行走未自然结束）")
 
 // ErrNilYielder 是 WalkEach 的 yield 回调为 nil 哨兵（同 ErrNilFetcher 口径）。
-var ErrNilYielder = pkgerrors.NewBizError(1, "pagination: yield 不能为 nil")
+// 普通 error、不是 BizError（#565）。
+var ErrNilYielder = pkgerrors.New("pagination: yield 不能为 nil")
 
 // WalkEach 按页行走第三方分页 API 的**流式形态**（#211）——与 Walk
 // （翻页聚合单源）同族两个入口：
@@ -47,8 +51,9 @@ var ErrNilYielder = pkgerrors.NewBizError(1, "pagination: yield 不能为 nil")
 //     原地覆写）不会造成别名误判；正常等长页序列（内容页页不同）不误判，
 //     无进展收手不算自然结束、不报预算哨兵；
 //   - budget 是页数上限（防失控护栏）：fetch 页数达到 budget 仍未走到
-//     短页/无进展时返回 ErrBudgetExceeded。budget <= 0 表示无预算（不
-//     建议——对照 Walk 的 MaxWalkPages 硬防呆）；
+//     短页/无进展时返回 ErrBudgetExceeded。budget <= 0 套用 [MaxWalkPages]
+//     默认上限（10000，与 Walk 同口径的硬防呆）——零值/漏配不再等于
+//     「无预算」，上游忽略 page 恒返整页时不会永久空转；
 //   - yield 返回 false 提前终止，返回 nil（主动终止不是错误）；
 //   - fetch 返回错误中止行走，错误带页码上下文包装（errors.Is 链路保持）；
 //   - 不做并发预取（同 Walk——上游 API 多数按页序有 token/游标依赖）。
@@ -80,10 +85,16 @@ func WalkEach[T any](ctx context.Context, budget int, fetch func(ctx context.Con
 	if yield == nil {
 		return ErrNilYielder
 	}
+	// budget <= 0（零值/漏配/负数）套用 MaxWalkPages 默认上限（#565）：
+	// 此前 budget<=0 表示「无预算」，上游忽略 page 恒返整页时永久空转；
+	// 与 Walk 的 10000 页硬防呆同口径，零值不再是无保护状态。
+	if budget <= 0 {
+		budget = MaxWalkPages
+	}
 
 	prevLen := -1
 	var prev []T
-	for page := 1; budget <= 0 || page <= budget; page++ {
+	for page := 1; page <= budget; page++ {
 		// 页间取消检查（#286）：长行走拿到取消信号即中止
 		if err := ctx.Err(); err != nil {
 			return pkgerrors.Wrap(err, "pagination.WalkEach ctx", "page", page)

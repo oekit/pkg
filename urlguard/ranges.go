@@ -31,9 +31,9 @@ var (
 	ErrExoticLiteral = stderrors.New("urlguard: exotic IPv4 literal")
 
 	// ErrSchemeNotAllowed 目标 URL 的 scheme 不在白名单（缺省 http/https，
-	// 可用 WithAllowedSchemes 调整）——「配置配错」类：消费方的出站配置
-	// 误写了 ftp:// 之类，与 SSRF 尝试（ErrBlockedRange 等）分流到不同
-	// 告警面（#390）。
+	// 可用 WithAllowedSchemes 覆盖；该选项替换缺省集，配 "https" 即只允许
+	// https）——「配置配错」类：消费方的出站配置误写了 ftp:// 之类，与
+	// SSRF 尝试（ErrBlockedRange 等）分流到不同告警面（#390）。
 	ErrSchemeNotAllowed = stderrors.New("urlguard: scheme not allowed")
 
 	// ErrNonASCIIHost 目标 host 含无法确定性折叠的非 ASCII 码点（IDN/圈号

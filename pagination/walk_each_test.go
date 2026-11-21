@@ -93,6 +93,24 @@ func TestWalkEach_BudgetExceeded(t *testing.T) {
 	}
 }
 
+// budget=0/负数时不再是「无预算」空转（#565）：套用 MaxWalkPages 默认
+// 上限，上游恒返内容不同的整页时在默认上限处报 ErrBudgetExceeded。
+func TestWalkEach_NonPositiveBudgetDefaultsToMaxWalkPages(t *testing.T) {
+	for _, budget := range []int{0, -1} {
+		pages := 0
+		err := WalkEach(context.Background(), budget, func(_ context.Context, page int) ([]int, error) {
+			pages++
+			return []int{page}, nil // 恒返整页且内容随页变化（无进展检测不触发）
+		}, func(int) bool { return true })
+		if !errors.Is(err, ErrBudgetExceeded) {
+			t.Fatalf("budget=%d：want ErrBudgetExceeded, got %v", budget, err)
+		}
+		if pages != MaxWalkPages {
+			t.Fatalf("budget=%d：应在默认上限 %d 页处停止, got %d", budget, MaxWalkPages, pages)
+		}
+	}
+}
+
 // budget 恰好覆盖到短页：不报预算哨兵。
 func TestWalkEach_BudgetCoversShortPage(t *testing.T) {
 	var requested []int
@@ -105,8 +123,9 @@ func TestWalkEach_BudgetCoversShortPage(t *testing.T) {
 	}
 }
 
-// budget <= 0 表示无预算（不建议）：短页仍自然终止。
-func TestWalkEach_ZeroBudgetUnlimited(t *testing.T) {
+// budget <= 0 时套用 MaxWalkPages 默认上限（#565）：正常短页仍自然终止，
+// 零值不等于「无预算」。
+func TestWalkEach_ZeroBudgetStillStopsOnShortPage(t *testing.T) {
 	var requested []int
 	err := WalkEach(context.Background(), 0, pagedFetcher(70, 30, &requested), func(int) bool { return true })
 	if err != nil {

@@ -9,6 +9,21 @@ import (
 	"github.com/oekit/pkg/internal/singleflight"
 )
 
+// sharedLoadTimeout 是 GetOrLoad 合并回源（leader 执行、全体 waiter 共享）
+// 的执行上界（#566）。
+//
+// 共享回源跑在 context.WithoutCancel 上：leader 断开/超时不再把取消传染
+// 给同批 waiter，也不至于让一次回源因最早到达的请求退出而失败。但
+// WithoutCancel 也剥掉了 deadline——没有上界时，一个 hung source 会永久
+// 占住 flight 键，所有后续同 key 调用（包括预算更长的健康请求）一起挂死。
+//
+// 取值理由（仓规「跨区间取值须在包文档声明理由」）：共享加载是读热路径，
+// 30s 位于探测类（≤10s）与治理类（≤60s）之间——给慢依赖留出余量，又不让
+// 故障源占键一个完整治理周期。超时是 context deadline，行为良好的 Source
+// 会随 ctx.Done() 退出；无视 ctx 的 Source 仍受 flight 键随函数返回释放的
+// 保护（超时后该轮不再阻塞新调用）。
+const sharedLoadTimeout = 30 * time.Second
+
 // noMissLoader 是包内能力接口：回源加载且**不计入读计数**（pkg#90、#250）。
 //
 // 存在的理由：装饰器的前置检查（Peek）已经把这次逻辑读计入内层计数
@@ -66,6 +81,21 @@ func (sf *SingleFlightCache[T]) Get(ctx context.Context, key string) (*T, error)
 // 命中语义与内层的 Peek 一致：hit=false 表示未命中（不存在/已过期/null
 // marker）；hit=true 时返回值可能为 nil（命中但值为 nil）。
 func (sf *SingleFlightCache[T]) Peek(ctx context.Context, key string) (*T, bool, error) {
+	return sf.peek(ctx, key)
+}
+
+// GetEx 获取缓存并区分「未命中」与「命中但值为 nil」（HitGetter 能力转发，
+// #566）。装饰器不得让消费方因多包一层而丢失命中语义：内层实现 HitGetter
+// 时原样委托；否则退回本包的非删除式读取（PeekGetter 优先，其次 Get）——
+// 命中判定仍由内层能力决定。
+//
+// 内层既无 HitGetter 也无 PeekGetter 时退化为「值非 nil 才算命中」，无法
+// 区分 nil 真值（与 Peek 的退化口径一致：能力缺失是内层的事实，不是装饰器
+// 引入的偏差）；需要严格 nil 真值语义时不要包装这类后端。
+func (sf *SingleFlightCache[T]) GetEx(ctx context.Context, key string) (*T, bool, error) {
+	if hg, ok := sf.inner.(HitGetter[T]); ok {
+		return hg.GetEx(ctx, key)
+	}
 	return sf.peek(ctx, key)
 }
 
@@ -172,6 +202,12 @@ func (sf *SingleFlightCache[T]) loadOnce(ctx context.Context, key string, path s
 //
 // 合并语义（pkg#353）：本方法全体调用方语义同一（构造期 Source + 默认 TTL），
 // 按 key 合并安全。
+//
+// 共享回源的生命周期（#566）：flight 闭包在 context.WithoutCancel(ctx) 上
+// 执行并套 [sharedLoadTimeout] 上界——leader 断开/超时不再把取消传染给同批
+// waiter（同 Checker 的共享刷新纪律，pkg#352），hung source 也不会永久占住
+// flight 键。首轮结果仍由全体调用方共享（含 leader 自己：它拿到的是共享
+// 回源的结果，不是自己 ctx 的取消）。
 func (sf *SingleFlightCache[T]) GetOrLoad(ctx context.Context, key string) (*T, error) {
 	// 1. 先查缓存（命中即返——含值为 nil 的真值命中，#203）
 	value, hit, err := sf.peek(ctx, key)
@@ -186,7 +222,11 @@ func (sf *SingleFlightCache[T]) GetOrLoad(ctx context.Context, key string) (*T, 
 	//    （pkg#90：内层支持「加载不计未命中」时走该路径——前置检查已计过同一次
 	//    未命中，加载路径再计一次会把一次未命中计成两次，命中率指标失真）
 	val, err := sf.flight.Do(ctx, key, func(ctx context.Context) (*T, error) {
-		return sf.loadOnce(ctx, key, sfDefault, nil, nil, 0)
+		// #566：共享回源与 leader 生命周期解耦（取值保留、取消/超时剥离），
+		// 再套有界超时——等待者不被先到者的断开连坐，故障源也不永久占键。
+		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sharedLoadTimeout)
+		defer cancel()
+		return sf.loadOnce(loadCtx, key, sfDefault, nil, nil, 0)
 	})
 	if err != nil {
 		return nil, err
@@ -284,20 +324,46 @@ func (sf *SingleFlightCache[T]) Stats() Stats {
 }
 
 // MGet 批量获取：内层具备批量能力时直接委托（装饰器不得退化批量）；
-// 内层无批量能力时退化为逐键 Get。
+// 内层无批量能力时退化为逐键读取。
+//
+// 退化路径的命中语义（#566）：逐键走 GetEx（内层具备 HitGetter/PeekGetter
+// 时可区分「命中 nil 真值」与「缺席」），map 里保留**键在场、值为 nil**
+// 的真值命中——此前用 `if v != nil` 过滤会把 nil 真值命中整键丢掉，违反
+// BatchGetter「map 只含命中真值的键」契约（nil 值条目也是命中真值）。
+// 内层既无 HitGetter 也无 PeekGetter 时无法区分二者，nil 真值命中仍会
+// 退化成缺席（能力缺失是内层的事实；需要严格语义时不要包装这类后端）。
 func (sf *SingleFlightCache[T]) MGet(ctx context.Context, keys ...string) (map[string]*T, error) {
 	if bg, ok := sf.inner.(BatchGetter[T]); ok {
 		return bg.MGet(ctx, keys...)
 	}
 	out := make(map[string]*T, len(keys))
 	for _, key := range keys {
-		v, err := sf.Get(ctx, key)
+		v, hit, err := sf.GetEx(ctx, key)
 		if err != nil {
 			return nil, err
 		}
-		if v != nil {
+		if hit {
 			out[key] = v
 		}
+	}
+	return out, nil
+}
+
+// MGetEx 批量获取并区分「未命中」与「命中但值为 nil」（BatchHitGetter 能力
+// 转发，#566）。内层具备批量命中能力时原样委托；否则退化为逐键 GetEx——
+// 对**每个请求键**各给一条 BatchEntry（缺席键 Hit=false），nil 真值命中在
+// 内层能区分时如实给 Hit=true。
+func (sf *SingleFlightCache[T]) MGetEx(ctx context.Context, keys ...string) (map[string]BatchEntry[T], error) {
+	if bhg, ok := sf.inner.(BatchHitGetter[T]); ok {
+		return bhg.MGetEx(ctx, keys...)
+	}
+	out := make(map[string]BatchEntry[T], len(keys))
+	for _, key := range keys {
+		v, hit, err := sf.GetEx(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		out[key] = BatchEntry[T]{Value: v, Hit: hit}
 	}
 	return out, nil
 }
@@ -323,10 +389,35 @@ func (sf *SingleFlightCache[T]) Refresh(ctx context.Context, key string) (*T, er
 	return val, nil
 }
 
+// Sweep 手动清扫过期条目（Sweeper 能力转发，#566）：内层具备 Sweeper 时
+// 原样委托；否则返回 0——能力缺失是内层的事实（没有可手动清扫的过期表），
+// 与 Stats 的零值快照同口径。
+func (sf *SingleFlightCache[T]) Sweep(ctx context.Context) int {
+	if sw, ok := sf.inner.(Sweeper); ok {
+		return sw.Sweep(ctx)
+	}
+	return 0
+}
+
+// Close 释放内层资源（生命周期转发，#566）：内层提供 Close(ctx) error 时
+// 原样委托；否则返回 nil——装饰器自身没有后台 goroutine/外部资源。幂等性
+// 由内层按仓规 Close 契约保证。
+func (sf *SingleFlightCache[T]) Close(ctx context.Context) error {
+	if c, ok := sf.inner.(interface{ Close(context.Context) error }); ok {
+		return c.Close(ctx)
+	}
+	return nil
+}
+
 // 编译期能力契约：SingleFlightCache 具备观测计数能力（pkg#76）、按调用
-// 注入回源的能力（pkg#77）与 NX 写入能力（NXSetter）——装饰器不丢能力。
+// 注入回源的能力（pkg#77）、NX 写入能力（NXSetter）以及读命中/批量命中/
+// 手动清扫/关闭能力（#566）——装饰器不丢能力。
 var (
-	_ StatsProvider       = (*SingleFlightCache[int])(nil)
-	_ SourceInjector[int] = (*SingleFlightCache[int])(nil)
-	_ NXSetter[int]       = (*SingleFlightCache[int])(nil)
+	_ StatsProvider                             = (*SingleFlightCache[int])(nil)
+	_ SourceInjector[int]                       = (*SingleFlightCache[int])(nil)
+	_ NXSetter[int]                             = (*SingleFlightCache[int])(nil)
+	_ HitGetter[int]                            = (*SingleFlightCache[int])(nil)
+	_ BatchHitGetter[int]                       = (*SingleFlightCache[int])(nil)
+	_ Sweeper                                   = (*SingleFlightCache[int])(nil)
+	_ interface{ Close(context.Context) error } = (*SingleFlightCache[int])(nil)
 )
