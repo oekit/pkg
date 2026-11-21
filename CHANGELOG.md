@@ -2,6 +2,20 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.56.0] — 2026-11-21
+
+- 第三轮设计/缺陷审计（2026-11-21）pkg 修复波：
+
+- fix: resumable 分片数上限（DefaultMaxChunks=100000 + WithMaxChunks）与 reconcile 改登记序扫描——Size=MaxInt64 零成本 ListParts 远程 DoS 封死，百万级 Stat 不再全量（#560）
+- fix: reflectx.DeepCopy 环防护键改 (ptr,len,type)——子切片窗口（s[:1]/s[:3]）不再撞键截断/错误别名（#561）
+- fix: urlguard WithAllowedSchemes 改替换语义（WithAllowedSchemes("https") 真正拒绝 http，空参=deny-all）——**行为变更**：此前只能放宽不能收窄（#562）
+- fix: encoding 五入口分族——Unmarshal/FromString/FromReader 回归 float64（stdlib 同形），仅 *UseNumber* 变体用 json.Number——**行为变更**：此前五个入口全为 json.Number，依赖隐式 UseNumber 的调用方改用显式变体（#563）
+- fix: sse Event.Type 单行化封死帧注入、Data 按 CRLF/CR/LF 归一、事件 ID 文档从 1 起、新增 ReplayFuncCtx/ResponderCtx 可取消回放（#564）
+- fix: pagination 五个 sentinel 由 BizError(1)→HTTP400 改 errors.Is 身份（对外映射归 delivery 层）；WalkEach budget<=0 套 MaxWalkPages 兜底（#565）
+- fix: cache SingleFlightCache 补齐 GetEx/MGetEx/Sweep/Close 能力转发；MGet 退化保留 nil 真值命中；GetOrLoad 共享回源跑 WithoutCancel+有界超时（leader 断开不再连坐 waiter）（#566）
+
+关联问题单：pkg#560、pkg#561、pkg#562、pkg#563、pkg#564、pkg#565、pkg#566。
+
 ## [v0.55.1] — 2026-11-20
 
 - fix(pagination): Walk 入口补 nil-ctx 兜底——#529 收割 wave 只修 WalkEach 半边，nil ctx 进 Walk 循环体即 panic（#554）
