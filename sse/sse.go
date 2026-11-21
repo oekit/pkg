@@ -16,14 +16,55 @@ const defaultHeartbeatComment = ": keepalive"
 // Event 单个流事件。ID 是宿主分配的单调递增游标：既是 SSE `id:` 帧
 // （EventSource 重连时自动回传为 Last-Event-ID 头），也是「订阅先于
 // 回放」的重叠去重键——见包文档「订阅先于回放」。
+//
+// ID 必须从 **1** 开始单调递增分配（#564）：0 保留给「无游标」哨兵
+// （Last-Event-ID 缺省 = 0 = 全量回放起点），不是合法事件 ID——ID=0 的
+// 事件在回放与实时面都会被去重游标丢弃。宿主按 0 起分配时首个事件永远
+// 发不出去，且重连仍跳过它，属于静默丢数据。
 type Event struct {
 	ID   uint64
-	Type string // SSE `event:` 帧；空则不发该帧
-	Data string // SSE `data:` 帧；含 \n 时按行拆成多条 data 行
+	Type string // SSE `event:` 帧；空则不发该帧。含 CR/LF 时替换为空格（单行化，防帧注入）
+	Data string // SSE `data:` 帧；按 CRLF/CR/LF 归一后逐行拆成多条 data 行
+}
+
+// sanitizeEventType 把 SSE 行终止符（\r/\n）替换为空格，保证 `event:` 帧
+// 恒为单行（#564）。
+//
+// 为什么是替换而不是 panic：Type 常由宿主实体名派生，运行期数据里的一个
+// 换行不应把整条连接炸掉；而原样写入会让 `x\nid: 999999` 注入一个额外的
+// `id:` 帧——客户端把 Last-Event-ID 跳到 999999，重连后 999999 之前的
+// 事件永久丢失（静默丢数据）。单行化是 fail-closed 的确定性降级：帧结构
+// 不可被数据破坏，事件类型退化成带空格的可读字符串。
+func sanitizeEventType(typ string) string {
+	if !strings.ContainsAny(typ, "\r\n") {
+		return typ
+	}
+	sanitized := []byte(typ)
+	for i, c := range sanitized {
+		if c == '\r' || c == '\n' {
+			sanitized[i] = ' '
+		}
+	}
+	return string(sanitized)
+}
+
+// splitEventData 按 SSE 规范的行终止符拆分 Data：CRLF、单独 CR、单独 LF
+// 都是行边界（#564）。此前只按 "\n" 拆——裸 CR 不分行、CRLF 会在 data
+// 行尾残留 "\r"，客户端按规范解析出的内容与宿主给出的不一致。
+//
+// 返回值至少含一个元素（空 Data 产出一条空 data 行，与历史行为一致）。
+func splitEventData(data string) []string {
+	if !strings.ContainsRune(data, '\r') {
+		return strings.Split(data, "\n")
+	}
+	data = strings.ReplaceAll(data, "\r\n", "\n")
+	data = strings.ReplaceAll(data, "\r", "\n")
+	return strings.Split(data, "\n")
 }
 
 // frame 按 SSE 文本协议序列化：id/event/data 各一行、数据多行拆分、
-// 空行结尾（事件分帧符）。
+// 空行结尾（事件分帧符）。event 帧经单行化（sanitizeEventType），data 按
+// CRLF/CR/LF 归一拆行（splitEventData）——宿主数据不得破坏帧结构。
 func (e Event) frame() []byte {
 	b := make([]byte, 0, 32+len(e.Data))
 	b = append(b, "id: "...)
@@ -31,10 +72,10 @@ func (e Event) frame() []byte {
 	b = append(b, '\n')
 	if e.Type != "" {
 		b = append(b, "event: "...)
-		b = append(b, e.Type...)
+		b = append(b, sanitizeEventType(e.Type)...)
 		b = append(b, '\n')
 	}
-	for _, line := range strings.Split(e.Data, "\n") {
+	for _, line := range splitEventData(e.Data) {
 		b = append(b, "data: "...)
 		b = append(b, line...)
 		b = append(b, '\n')

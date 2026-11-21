@@ -1,9 +1,10 @@
 // Package sse 提供 SSE（Server-Sent Events）的游标回放内核与 net/http
 // 应答器：游标窗口回放 + 「订阅先于回放」按事件 ID 去重 + 心跳注释帧。
-// 传输无关的 [ParseCursor]/[Cursor]/[ReplaySince] 是内核导出面，任何
-// 传输的响应端都可组合复用；[Responder] 是 net/http 的薄适配（响应头
-// 四件套 + 写帧 + 心跳），宿主只注入取数与广播两处业务差异（[ReplayFunc]
-// 取游标窗口、[Source] 供实时帧）。stdlib-only（pkg 零第三方依赖红线）。
+// 传输无关的 [ParseCursor]/[Cursor]/[ReplaySince]（ctx 感知形态
+// [ReplaySinceCtx]）是内核导出面，任何传输的响应端都可组合复用；
+// [Responder] 是 net/http 的薄适配（响应头四件套 + 写帧 + 心跳），宿主只
+// 注入取数与广播两处业务差异（[ReplayFunc]/[ReplayFuncCtx] 取游标窗口、
+// [Source] 供实时帧）。stdlib-only（pkg 零第三方依赖红线）。
 //
 // # 定位与分工
 //
@@ -27,8 +28,9 @@
 //     尾部可能是同一批事件。去重边界以**事件 ID** 为准：回放结束后，
 //     凡 `ID <= 已回放最大游标` 的实时帧一律跳过（幂等跳帧）。因此：
 //
-//     1. 事件 ID 必须由宿主**单调递增**分配（与 SSE `id:` 帧语义一致，
-//     同时是断线重连的游标）；
+//     1. 事件 ID 必须由宿主从 **1** 开始**单调递增**分配（与 SSE `id:` 帧
+//     语义一致，同时是断线重连的游标）。0 保留给「无游标」——Last-Event-ID
+//     缺省值，不是合法事件 ID（#564）；
 //     2. [ReplayFunc] 必须按 ID 升序返回、且只返回 `ID > after` 的事件；
 //     3. 去重只保证「同一 ID 不写两次」，不保证「宿主重复广播不同 ID
 //     的同一逻辑事件」——那是宿主事件模型的职责。
@@ -40,17 +42,19 @@
 //
 // # 传输无关内核（任何响应端必须遵循的装配纪律）
 //
-// [ParseCursor]、[Cursor]、[ReplaySince] 把游标判定与回放/去重语义从
-// net/http 中解耦出来。**任何传输的响应端**（net/http、Hertz、WebSocket
-// 网关等）都应遵循同一纪律，且不得另写一套：
+// [ParseCursor]、[Cursor]、[ReplaySince]/[ReplaySinceCtx] 把游标判定与
+// 回放/去重语义从 net/http 中解耦出来。**任何传输的响应端**（net/http、
+// Hertz、WebSocket 网关等）都应遵循同一纪律，且不得另写一套：
 //
 //  1. **先订阅、再按游标回放**：游标头经 [ParseCursor] 解析（空 = 0 从
 //     头、非法 = 400），然后先 [Source.Subscribe] 建立实时面，再调用
-//     [ReplaySince] 取窗口——顺序反了会留下丢帧缝隙；
+//     [ReplaySinceCtx]（无 ctx 场景可用 [ReplaySince]）取窗口——顺序反了
+//     会留下丢帧缝隙；
 //  2. **按 Event.ID 去重**：回放事件先写；实时帧一律经 [Cursor.Accept]
-//     判定，`ID <= 已回放最大 ID` 的帧跳过（订阅/回放重叠与同 ID 重复
-//     广播都只写一次）；
-//  3. 事件 ID 必须由宿主单调递增分配，[ReplayFunc] 按 ID 升序返回。
+//     判定，`ID <= 已回放最大 ID` 的帧（含 ID=0 哨兵）跳过（订阅/回放
+//     重叠与同 ID 重复广播都只写一次）；
+//  3. 事件 ID 必须由宿主从 1 开始单调递增分配，[ReplayFunc]/
+//     [ReplayFuncCtx] 按 ID 升序返回。
 //
 // 骨架（传输层只替换 write 与心跳）：
 //
@@ -58,7 +62,7 @@
 //	if !ok { /* 400 */ }
 //	live, cancel := src.Subscribe()
 //	defer cancel()
-//	backlog, cursor := sse.ReplaySince(after, replay)
+//	backlog, cursor := sse.ReplaySinceCtx(req.Context(), after, replay)
 //	for _, e := range backlog { write(e) }
 //	for e := range live {
 //	    if cursor.Accept(e) { write(e) }
@@ -87,10 +91,10 @@
 // # 用法
 //
 //	hub := sse.NewHub() // 实时面：进程内广播枢纽
-//	replay := func(after uint64) []sse.Event { // 取数面：宿主 DB
-//	    return db.EventsAfter(after)
+//	replay := func(ctx context.Context, after uint64) []sse.Event { // 取数面：宿主 DB
+//	    return db.EventsAfter(ctx, after) // 客户端断开时 ctx 取消，查询随之中止
 //	}
-//	mux.Handle("/events", sse.NewResponder(hub, replay))
+//	mux.Handle("/events", sse.NewResponderCtx(hub, replay))
 //
 //	// 事件落库成功后广播实时面：
 //	hub.Emit(sse.Event{ID: next, Type: "run.step", Data: string(json)})

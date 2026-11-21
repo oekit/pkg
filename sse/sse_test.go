@@ -368,10 +368,149 @@ func TestEventFrameFormat(t *testing.T) {
 	}
 }
 
+// TestEventFrame_TypeSingleLine 钉住 #564(a)：event: 帧恒为单行。Type 含
+// CR/LF 时替换为空格——原样写入可注入额外帧（如 "x\nid: 999999" 把客户端
+// Last-Event-ID 跳到 999999，重连后游标之前的事件永久丢失）。
+func TestEventFrame_TypeSingleLine(t *testing.T) {
+	got := string(Event{ID: 1, Type: "x\nid: 999999\r", Data: "d"}.frame())
+	want := "id: 1\nevent: x id: 999999 \ndata: d\n\n"
+	if got != want {
+		t.Fatalf("Type 应单行化，frame = %q，应为 %q", got, want)
+	}
+	// 注入形态不得产生第二个 id 帧：按行首统计 id: 只允许 1 条。
+	if n := strings.Count("\n"+got, "\nid: "); n != 1 {
+		t.Fatalf("帧中出现 %d 条 id: 行（注入未被中和），frame = %q", n, got)
+	}
+
+	// 常规单行 Type 不受影响。
+	if got := string(Event{ID: 2, Type: "run.step", Data: "d"}.frame()); got != "id: 2\nevent: run.step\ndata: d\n\n" {
+		t.Fatalf("常规 Type 不应被改写，frame = %q", got)
+	}
+}
+
+// TestEventFrame_DataLineTerminators 钉住 #564(a)：Data 按 SSE 规范把
+// CRLF / CR / LF 都当行边界——此前只拆 "\n"，裸 CR 不分行、CRLF 会在
+// data 行尾残留 "\r"。
+func TestEventFrame_DataLineTerminators(t *testing.T) {
+	got := string(Event{ID: 1, Data: "a\r\nb\rc\nd"}.frame())
+	want := "id: 1\ndata: a\ndata: b\ndata: c\ndata: d\n\n"
+	if got != want {
+		t.Fatalf("data 行终止符归一后 frame = %q，应为 %q", got, want)
+	}
+
+	// 尾随 CRLF 与尾随 LF 同口径：产生一个空 data 行。
+	if got := string(Event{ID: 2, Data: "x\r\n"}.frame()); got != "id: 2\ndata: x\ndata: \n\n" {
+		t.Fatalf("尾随 CRLF 应等价于尾随 LF，frame = %q", got)
+	}
+}
+
+// TestReplaySince_SkipsZeroID 钉住 #564(b)：0 是「无游标」哨兵，不是合法
+// 事件 ID——回放窗口里 ID=0 的帧一律跳过，游标不因它推进/回退。
+func TestReplaySince_SkipsZeroID(t *testing.T) {
+	events, cur := ReplaySince(0, func(uint64) []Event {
+		return []Event{
+			{ID: 0, Data: "zero"},
+			{ID: 1, Data: "one"},
+			{ID: 0, Data: "zero-again"},
+			{ID: 2, Data: "two"},
+		}
+	})
+	want := []Event{{ID: 1, Data: "one"}, {ID: 2, Data: "two"}}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("ID=0 应被跳过，got %+v，应为 %+v", events, want)
+	}
+	if got := cur.Last(); got != 2 {
+		t.Fatalf("游标 = %d，应为 2", got)
+	}
+}
+
+// TestReplaySinceCtx 钉住 #564(c)：ctx 感知回放收到调用方 ctx 与 after；
+// ctx 已取消时不调用 replay（空窗口、游标停在 after）；nil ctx 兜底
+// Background。
+func TestReplaySinceCtx(t *testing.T) {
+	type ctxKey struct{}
+	ctx := context.WithValue(context.Background(), ctxKey{}, "v")
+	var gotCtx context.Context
+	var gotAfter uint64
+	events, cur := ReplaySinceCtx(ctx, 4, func(c context.Context, after uint64) []Event {
+		gotCtx, gotAfter = c, after
+		return []Event{{ID: 5, Data: "five"}}
+	})
+	if gotCtx != ctx {
+		t.Fatal("replay 应收到调用方原 ctx（含取值），不得重新包装/丢弃")
+	}
+	if gotAfter != 4 {
+		t.Fatalf("replay after = %d，应为 4", gotAfter)
+	}
+	if !reflect.DeepEqual(events, []Event{{ID: 5, Data: "five"}}) || cur.Last() != 5 {
+		t.Fatalf("回放结果 = %+v / 游标 %d，应为 ID 5", events, cur.Last())
+	}
+
+	// 已取消：不调用 replay，返回空窗口。
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	calls := 0
+	events, cur = ReplaySinceCtx(canceled, 7, func(context.Context, uint64) []Event {
+		calls++
+		return []Event{{ID: 8, Data: "eight"}}
+	})
+	if calls != 0 {
+		t.Fatalf("ctx 已取消仍调用 replay %d 次，应直接返回", calls)
+	}
+	if len(events) != 0 || cur.Last() != 7 {
+		t.Fatalf("取消路径应空窗口且游标 7，got %+v / %d", events, cur.Last())
+	}
+
+	// nil ctx 视同 Background，replay 收到非 nil ctx。
+	var gotNilFallback context.Context
+	//nolint:staticcheck // SA1012：传 nil ctx 正是本测试点
+	_, _ = ReplaySinceCtx(nil, 0, func(c context.Context, _ uint64) []Event {
+		gotNilFallback = c
+		return nil
+	})
+	if gotNilFallback == nil {
+		t.Fatal("nil ctx 应兜底为 context.Background() 再传给 replay")
+	}
+}
+
+// TestResponderCtx_ReplaySeesRequestCancellation 钉住 #564(c)：net/http
+// 应答器把 req.Context() 交给 ReplayFuncCtx——客户端断开后回放 ctx 关闭，
+// 宿主取数可随连接取消（此前 ReplayFunc 无 ctx，回放只能空跑完）。
+func TestResponderCtx_ReplaySeesRequestCancellation(t *testing.T) {
+	hub := NewHub()
+	replayCtxCh := make(chan context.Context, 1)
+	afterCh := make(chan uint64, 1)
+	srv := httptest.NewServer(NewResponderCtx(hub, func(ctx context.Context, after uint64) []Event {
+		replayCtxCh <- ctx
+		afterCh <- after
+		return nil
+	}, WithHeartbeat(time.Hour)))
+	defer srv.Close()
+
+	resp, cancel, _ := connect(t, srv.URL, http.Header{"Last-Event-ID": {"7"}})
+	defer func() { _ = resp.Body.Close() }()
+
+	replayCtx := <-replayCtxCh
+	if got := <-afterCh; got != 7 {
+		t.Fatalf("回放 after = %d，应为游标 7", got)
+	}
+	if err := replayCtx.Err(); err != nil {
+		t.Fatalf("回放开始时 ctx 不应已取消，got %v", err)
+	}
+
+	cancel() // 客户端断开
+	select {
+	case <-replayCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("客户端断开后回放 ctx 未取消——Responder 没把 req.Context() 交给回放")
+	}
+}
+
 // TestConstructorFailFast 构造期非法值 fail-fast（仓规总则①）。
 func TestConstructorFailFast(t *testing.T) {
 	hub := NewHub()
 	replay := ReplayFunc(func(uint64) []Event { return nil })
+	replayCtx := ReplayFuncCtx(func(context.Context, uint64) []Event { return nil })
 	mustPanic := func(name string, f func()) {
 		t.Helper()
 		defer func() {
@@ -383,12 +522,15 @@ func TestConstructorFailFast(t *testing.T) {
 	}
 	mustPanic("nil Source", func() { _ = NewResponder(nil, replay) })
 	mustPanic("nil ReplayFunc", func() { _ = NewResponder(hub, nil) })
+	mustPanic("nil Source（ctx）", func() { _ = NewResponderCtx(nil, replayCtx) })
+	mustPanic("nil ReplayFuncCtx", func() { _ = NewResponderCtx(hub, nil) })
 	mustPanic("心跳非正数", func() { _ = NewResponder(hub, replay, WithHeartbeat(0)) })
 	mustPanic("心跳负数", func() { _ = NewResponder(hub, replay, WithHeartbeat(-time.Second)) })
 	mustPanic("注释无冒号", func() { _ = NewResponder(hub, replay, WithHeartbeatComment("ping")) })
 	mustPanic("注释含换行", func() { _ = NewResponder(hub, replay, WithHeartbeatComment(": a\nb")) })
 	mustPanic("缓冲非正数", func() { _ = NewHub(WithSubscriberBuffer(0)) })
 	mustPanic("nil 回放内核入参", func() { _, _ = ReplaySince(0, nil) })
+	mustPanic("nil ctx 回放内核入参", func() { _, _ = ReplaySinceCtx(context.Background(), 0, nil) })
 }
 
 // TestCursorAccept 契约：去重游标只接受 ID 严格大于已见最大 ID 的事件；

@@ -10,7 +10,11 @@
 //     NoBackgroundSweep 关闭后台清扫协程（改由调用方 Sweep 手动回收）；
 //     CloneOnRead 让读命中返回副本；GetEx 区分「不存在」与「有值但值为 nil」）
 //   - SingleFlightCache[T]：装饰器，并发回源合并防击穿（内部 singleflight
-//     fork 于 concurrency/singleflight，见 internal/singleflight）
+//     fork 于 concurrency/singleflight，见 internal/singleflight）；合并回源
+//     跑在 context.WithoutCancel + 30s 上界（sharedLoadTimeout）上——leader
+//     断开不把取消传染给同批等待者，hung source 也不永久占住 flight 键
+//     （#566；30s 位于探测类 ≤10s 与治理类 ≤60s 之间的取值理由见
+//     singleflight.go 常量注释）
 //   - Checker：进程内检查缓存原语（TTL 缓存 + 刷新合并 + 失败短 TTL）
 //   - 缓存键构造：Key / HashKey / UserKey / TenantKey
 //   - cachetest 子包：CacheAside 实现的契约测试套件

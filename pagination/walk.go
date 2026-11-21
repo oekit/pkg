@@ -13,14 +13,22 @@ import (
 const MaxWalkPages = 10000
 
 var (
+	// 哨兵只承载 errors.Is 身份，一律用普通 error（#565）：pagination 是
+	// 底层库，不替 delivery 层决定 HTTP 映射。此前五个哨兵全用
+	// NewBizError(1, ...)，被 middleware 的 defaultStatusMapper 统一落成
+	// HTTP 400——「上游分页契约损坏」「调用方编程错误」「预算耗尽」三种
+	// 语义完全不同的错误共享同一 wire code，监控记成 4xx 不告警，客户端
+	// 被引导去改请求。对外状态码由 delivery 层按场景包装（上游违约 →
+	// 5xx/502、调用方参数 → 4xx）。
+
 	// ErrBadPageSize pageSize 非法（<=0）。
-	ErrBadPageSize = pkgerrors.NewBizError(1, "pagination: pageSize 必须为正数")
+	ErrBadPageSize = pkgerrors.New("pagination: pageSize 必须为正数")
 	// ErrNilFetcher fetch 回调为 nil。
-	ErrNilFetcher = pkgerrors.NewBizError(1, "pagination: fetch 不能为 nil")
+	ErrNilFetcher = pkgerrors.New("pagination: fetch 不能为 nil")
 	// ErrTooManyPages 页数超出 MaxWalkPages——上游违反短页契约（越界页恒返
 	// **内容不同**的整页）或数据量真的越界，两者都需要人来看。「恒返同一批
 	// 整页」的伪翻页形态由无进展检测收口（#285，返回已收集数据不报错）。
-	ErrTooManyPages = pkgerrors.NewBizError(1, "pagination: 页数超出上限（疑似上游恒返整页）")
+	ErrTooManyPages = pkgerrors.New("pagination: 页数超出上限（疑似上游恒返整页）")
 )
 
 // Walk 翻页聚合单源：以固定 pageSize 从第 1 页起逐页调 fetch，把全部元素

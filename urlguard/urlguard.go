@@ -117,7 +117,8 @@ type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 var blockedDomainSuffixes = []string{"localhost", "internal", "local", "localdomain"}
 
 // defaultSchemes 是 CheckURL 缺省允许的 scheme。出站 webhook 场景下 file://、
-// gopher:// 等一律拒绝；需要其它 scheme 用 WithAllowedSchemes 显式放行。
+// gopher:// 等一律拒绝；需要收窄或替换白名单用 WithAllowedSchemes 显式覆盖
+// （该选项是替换语义，配了就**不再**保留缺省 http/https）。
 var defaultSchemes = []string{"http", "https"}
 
 // Guard 是 SSRF 防护器：New 之后只读，可并发共享。
@@ -127,6 +128,7 @@ type Guard struct {
 	allowCIDRs    []*net.IPNet
 	allowDomains  map[string]struct{} // 小写；命中语义 = 等于或点分后缀
 	schemes       map[string]struct{} // 小写
+	schemesSet    bool                // WithAllowedSchemes 是否显式配置（true = 不再装缺省集）
 	lookup        func(ctx context.Context, host string) ([]net.IP, error)
 
 	// 精确 host 白名单（WithExactHosts）：与 allowDomains 是不同维度——
@@ -220,11 +222,18 @@ func WithAllowDomains(domains ...string) GuardOption {
 }
 
 // WithAllowedSchemes 覆盖 CheckURL 的 scheme 白名单（缺省 http/https）。
+//
+// **替换语义**（#562）：本选项配置后，缺省 http/https 不再保留，只允许参数
+// 列出的 scheme——WithAllowedSchemes("https") 表示「只允许 https」，http://
+// 会被 ErrSchemeNotAllowed 拒绝（此前是追加语义：静默保留缺省 http/https，
+// 「只允许 https」这类收窄策略写了等于没写）。多次传入时**最后一次生效**。
+//
+// 参数为空 = 一个 scheme 都不允许（fail-closed 的 deny-all），与「未配置」
+// （缺省 http/https）是两种不同状态，由构造期的 schemesSet 标志区分。
 func WithAllowedSchemes(schemes ...string) GuardOption {
 	return func(g *Guard) {
-		if g.schemes == nil {
-			g.schemes = map[string]struct{}{}
-		}
+		g.schemesSet = true
+		g.schemes = make(map[string]struct{}, len(schemes))
 		for _, s := range schemes {
 			if s = strings.ToLower(strings.TrimSpace(s)); s != "" {
 				g.schemes[s] = struct{}{}
@@ -332,15 +341,19 @@ func WithCheckHostFunc(fn func(host string) error) GuardOption {
 // New 构造 Guard。CIDR 文法非法时报错（fail-fast，不带病运行）。
 func New(opts ...GuardOption) (*Guard, error) {
 	g := &Guard{
-		schemes: map[string]struct{}{},
-		lookup:  defaultLookup,
-	}
-	for _, s := range defaultSchemes {
-		g.schemes[s] = struct{}{}
+		lookup: defaultLookup,
 	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(g)
+		}
+	}
+	// scheme 白名单（#562）：未显式配置时装缺省 http/https；WithAllowedSchemes
+	// 是替换语义（schemesSet=true 时由选项自己装入，可能是空集 = deny-all）。
+	if !g.schemesSet {
+		g.schemes = make(map[string]struct{}, len(defaultSchemes))
+		for _, s := range defaultSchemes {
+			g.schemes[s] = struct{}{}
 		}
 	}
 	for _, raw := range g.rawAllowCIDRs {

@@ -131,13 +131,18 @@ func TestWalk_BadInput(t *testing.T) {
 // 契约违例防呆：上游越界页恒返**内容不同**的整页 → 撞 MaxWalkPages 而非
 // 死循环（内容随页变化的整页不受 #285 无进展检测影响——它只认逐值相同）。
 func TestWalk_TooManyPages(t *testing.T) {
-	// MaxWalkPages 全跑一遍太慢，用小页数验证防呆路径存在即可——
-	// 直接走循环语义：恒返整页时 Walk 必然报 ErrTooManyPages。
+	// 恒返整页时 Walk 必然在 MaxWalkPages 页后报 ErrTooManyPages；
+	// 页数一并钉住（#565 要求 10001 页触发、实际 fetch 恰 10000 次）。
+	pages := 0
 	_, err := Walk(context.Background(), 1, func(_ context.Context, page int) ([]int, error) {
+		pages++
 		return []int{page}, nil // 永远满页且内容随页变化
 	})
 	if !errors.Is(err, ErrTooManyPages) {
 		t.Fatalf("want ErrTooManyPages, got %v", err)
+	}
+	if pages != MaxWalkPages {
+		t.Fatalf("应在 MaxWalkPages=%d 页后停止, got %d", MaxWalkPages, pages)
 	}
 }
 
