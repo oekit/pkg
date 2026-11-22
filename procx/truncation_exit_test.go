@@ -136,4 +136,3 @@ func TestRunDetailedTruncatedWithOnLine(t *testing.T) {
 		t.Fatal("OnLine 路径 StdoutTruncated 不得丢")
 	}
 }
-

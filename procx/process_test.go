@@ -115,12 +115,12 @@ func TestRun(t *testing.T) {
 
 	// 超时 → ErrTimeout sentinel
 	sleep := filepath.Join(dir, "sleep")
-	if err := os.WriteFile(sleep, []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
-		t.Fatal(err)
+	if werr := os.WriteFile(sleep, []byte("#!/bin/sh\nsleep 30\n"), 0o755); werr != nil {
+		t.Fatal(werr)
 	}
-	if _, err := RunDetailed(context.Background(), RunRequest{
+	if _, terr := RunDetailed(context.Background(), RunRequest{
 		Argv: []string{sleep}, Timeout: 150 * time.Millisecond,
-	}); !errors.Is(err, ErrTimeout) {
+	}); !errors.Is(terr, ErrTimeout) {
 		t.Fatalf("超时应 errors.Is ErrTimeout: %v", err)
 	}
 

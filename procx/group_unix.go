@@ -17,6 +17,7 @@ type unixGroup struct{ cmd *exec.Cmd }
 // newGroupCmd 建组装配：Setpgid 让子进程成为新组的组长，于是它的所有
 // 后代都落在同一个 pgid 下，`kill(-pid, sig)` 一次送达整棵树。
 func newGroupCmd(cctx context.Context, dir string, argv, env []string) (*exec.Cmd, processGroup) {
+	//nolint:gosec // G204：本包职责即执行外部命令，argv 调用方装配（无 shell、直传 exec，注入面在 RunRequest 文档声明）
 	cmd := exec.CommandContext(cctx, argv[0], argv[1:]...)
 	if dir != "" {
 		cmd.Dir = dir

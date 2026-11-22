@@ -310,7 +310,6 @@ func RunDetailed(ctx context.Context, req RunRequest) (RunResult, error) {
 	return execCLI(ctx, req.Dir, req.Argv, ChildEnv(req.Env), timeout, req.OnLine, req.MaxStdout, req.Stdin)
 }
 
-
 // newCappedBuffer 测试与 execCLI 共用的限容缓冲构造（limit<=0 → maxChildStdout
 // 缺省，runtime 语义；与 Run 形态「limit<=0 = 不限容」的口径在调用点显式区分）。
 func newCappedBuffer(limit int) *cappedBuffer {
