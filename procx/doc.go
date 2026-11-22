@@ -111,4 +111,23 @@
 //	    procx.WithGrace(2*time.Second),                 //   宽限可调
 //	    procx.WithOutputLimit(64<<10),                  //   输出各限 64KB，截断可判定
 //	    procx.WithEnv(nil))                             //   白名单环境（默认拒绝）
+//
+// # 第二执行族：RunDetailed（agent CLI 纪律，自 oagentkit/runtime procx 下沉）
+//
+// [RunDetailed] 是 2026-11 跨 org procx 双源收敛的产物（pkg#284 决策的完成
+// 形态）：oagentkit/runtime 的 acpx CLI agent 执行纪律整族迁入本包，runtime
+// 侧退化为委托壳。它与 Run 服务不同的威胁模型与场景，刻意并存：
+//
+//   - **Run（本族）**：通用托管。缺省继承父环境（可信场景），WithEnv 才进
+//     白名单；TERM→宽限(5s)→KILL，宽限可调；无 OnLine/stdin 面。
+//   - **RunDetailed（agent 族）**：spawn 用户工作目录里待执行的 CLI agent
+//     （claude/codex 类），环境**恒走** ChildEnv 白名单（req.Env 叠加放行）；
+//     超时/取消 TERM 整组→3s→SIGKILL（快速止损口径）；stdout 可按行回调
+//     （OnLine，panic 库层收编）、可喂 stdin、返回结构化 RunResult（含截断
+//     事实布尔）；错误语义带 [ErrTimeout]/[ErrCanceled] sentinel 与本地
+//     deadline 判据（runtime#63）。
+//
+// 两族共享同一环境纪律单源（[ChildEnv]/[InheritAllExcept]）与同一进程组
+// 落地（group_*.go）；差异只在装配与错误口径。选型：spawn「别人投递来待
+// 执行的代码」→ RunDetailed；托管「自己写的可信子进程」→ Run。
 package procx

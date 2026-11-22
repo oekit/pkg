@@ -84,13 +84,17 @@ func envAllowed(name string) bool {
 // 测试在非 windows 平台注入归一形态。
 var childEnvCaseFold = runtime.GOOS == "windows"
 
-func ChildEnv(extra []string) []string {
-	envName := func(name string) string {
-		if childEnvCaseFold {
-			return strings.ToUpper(name)
-		}
-		return name
+// envName 环境变量名归一（childEnvCaseFold 口径）：windows 环境变量名大小写
+// 不敏感，白名单/keep/literal/去重键统一按归一名比较，否则按名透传静默丢
+// 变量、同名双条目。非 windows 恒等映射。
+func envName(name string) string {
+	if childEnvCaseFold {
+		return strings.ToUpper(name)
 	}
+	return name
+}
+
+func ChildEnv(extra []string) []string {
 	keep := map[string]bool{}
 	literal := map[string]string{} // 归一名 → KEY=VALUE
 	var litOrder []string
@@ -137,6 +141,95 @@ func ChildEnv(extra []string) []string {
 			continue // 显式项在位：缺省值不得覆盖，也不得并列出第二项
 		}
 		seen[envName(name)] = true
+		out = append(out, kv)
+	}
+	return out
+}
+
+// InheritAllExcept 返回「继承当前进程环境、剔除 except 名单」的子进程环境
+// （自 oagentkit/runtime procx 下沉，runtime#26）：语义上等价于「用户在
+// 自己的 shell 里跑这条命令」。
+//
+// # 什么时候该用它，什么时候绝对不该
+//
+// 它与 [ChildEnv] 服务的是**两套威胁模型**，选错哪一边都出事：
+//
+//   - **ChildEnv（白名单）**：子进程会执行**不可信代码**（cli agent / MCP
+//     server 在用户工作目录里跑任务）。全量继承 = 把宿主凭证交给待执行任务，
+//     所以必须白名单。
+//   - **InheritAllExcept（继承）**：子进程是**用户主动发起的可信 CLI** 的
+//     替身——SDK 包装 git / ssh / docker / aws 这类命令，替用户操作他自己的
+//     仓库与账号。此时父进程环境**就是**用户的信任上下文，砍掉它才是不对的。
+//
+// 判断标准是「这段子进程代码是谁写的」：用户自己的工具 → 继承；别人投递来
+// 待执行的代码 → 白名单。混淆这条线是本节存在的唯一理由。
+//
+// # 为什么可信场景不能用白名单「补枚举」
+//
+// 按名枚举在这个场景里是**不可收敛**的清单，不是「多补几个就够」：
+//
+//   - `GIT_*` 是开放式命名空间（GIT_AUTHOR_* / GIT_COMMITTER_* / GIT_SSH_* /
+//     GIT_CONFIG_COUNT + GIT_CONFIG_KEY_n / GIT_TRACE*…），组合式配置靠约定
+//     命名，静态列不全；
+//   - `SSH_AUTH_SOCK`（agent 转发认证）与 `GIT_ASKPASS` / `SSH_ASKPASS` /
+//     桌面 credential helper（经 PATH 发现）——凭据助手链是活的；
+//   - locale 族（LC_* 逐项）影响编码与错误信息；
+//   - 各类 SDK 自己的代理/配置变量。
+//
+// 新 git 版本读新变量、用户装新助手，枚举就漏——而漏的形态是「认证莫名失败」
+// 或「读到别人的配置」，不是编译错误。
+//
+// # 失败方向声明（与 ChildEnv 相反）
+//
+// ChildEnv 的失败在安全侧（漏一个无害变量）；本函数的失败在**泄漏侧**——
+// except 漏列一个凭据名，它就进了子进程环境。except 名单务必从「这个子进程
+// 不该看到什么」出发逆向列举，而不是从「它需要什么」正举。
+//
+// # except 的口径
+//
+// except 是**变量名**名单（`[]string{"SSH_AUTH_SOCK"}`）；含 `=` 的项按
+// `=` 之前的部分取名（`"GIT_TERMINAL_PROMPT=1"` 同样剔除该项并抑制下方缺省
+// 追加），这样「我想剔掉它」与「我想改它的值」不会因为写法不同而行为不同。
+// 变量名匹配按 childEnvCaseFold 口径（windows 大小写不敏感）。
+//
+// 尾部纪律与 ChildEnv 一致，且**剔除优先于追加**：
+//
+//   - 追加 `GIT_TERMINAL_PROMPT=0`（git 弹终端提问会挂到超时）与 `CI=1`
+//     （对非 git 子进程无害）；
+//   - 但若某项被 except 剔除，或父进程已有同名项，则不再追加——父进程的
+//     值就是用户的值（`CI=0` 不该被悄悄改成 `CI=1`），且每个 key 至多出现
+//     一次（environ 同名多项会让子进程取值依 libc 实现而异，runtime#31）。
+//
+// except 传 nil 即「全量继承 + 两条纪律」，这是最常见的用法。
+func InheritAllExcept(except []string) []string {
+	drop := make(map[string]bool, len(except))
+	for _, k := range except {
+		name, _, _ := strings.Cut(k, "=")
+		if name != "" {
+			drop[envName(name)] = true
+		}
+	}
+	parent := os.Environ()
+	out := make([]string, 0, len(parent)+2)
+	seen := make(map[string]bool, len(parent)+2)
+	for _, kv := range parent {
+		name, _, _ := strings.Cut(kv, "=")
+		key := envName(name)
+		// drop 优先于 seen：被剔除的项不该因为「先到」而留下。
+		if drop[key] || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, kv)
+	}
+	// 缺省项按名去重后追加，口径与 ChildEnv 逐字一致（先到先得 + 剔除优先）。
+	for _, kv := range []string{"GIT_TERMINAL_PROMPT=0", "CI=1"} {
+		name, _, _ := strings.Cut(kv, "=")
+		key := envName(name)
+		if drop[key] || seen[key] {
+			continue
+		}
+		seen[key] = true
 		out = append(out, kv)
 	}
 	return out
