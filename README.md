@@ -1,6 +1,6 @@
 # pkg
 
-> 微工具集 30 合 1（零第三方依赖，仅标准库）——bloomx/bufiox/cache/cli/container/contextx/convert/ctxscope/encoding/enumx/errors/httpjson/jsonrepair/mathx/pack/pagination/pathx/procx/ptrx/resumable/secretx/shellx/singleflighttest/slicex/stringx/strmap/tarx/timex/urlguard/webhook
+> 微工具集 38 合 1（零第三方依赖，仅标准库）——errors/bloomx/contextx/ctxscope/container/distlock/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/reflectx/secretx/shellx/timex/cache/bufiox/strmap/singleflighttest/urlguard/webhook/cli/pack/procx/config/tarx/resumable/auditchain/canon/sse/pii/subhub
 
 > 🌐 项目主页：**https://oekit.github.io/** · 名称由来：**O**pen **E**asy **Kit**（开源 · 易用 · 工具集合）
 > 🤖 AI Agent：本仓规范与硬规则见 [AGENTS.md](AGENTS.md)；机器可读索引见 [llms.txt](https://oekit.github.io/llms.txt)（接口签名以源码为准）。
@@ -13,7 +13,7 @@ go get github.com/oekit/pkg@v0.59.0
 
 ## 这个仓库做什么
 
-`pkg` 是 oekit 的**基础工具集**：24 个经过生产验证的小工具包合成一个 module，
+`pkg` 是 oekit 的**基础工具集**：38 个经过生产验证的小工具包合成一个 module，
 覆盖错误处理、字符串/切片/类型转换、泛型容器、时间与 cron、JSON 修复、
 HTTP JSON 调用、分页、glob 匹配、进程内缓存、零拷贝缓冲 IO、GC 友好只读字典、
 CLI 子命令分发、迁移包容器等日常高频需求。标识与校验（uidgen/validator）已拆分至 [kitx](https://github.com/oekit/kitx)。
@@ -22,7 +22,7 @@ CLI 子命令分发、迁移包容器等日常高频需求。标识与校验（u
 
 - **按包编译**：import 哪个子包用哪个，go.mod 只多一条 require，二进制零冗余
 - **零第三方依赖（本仓硬规则，CI 强制）**：go.mod 永不出现 require——全部子包仅依赖标准库；需要三方能力的基础工具拆独立仓（先例：validator/uidgen → [kitx](https://github.com/oekit/kitx)）
-- **生产验证**：全部代码源自 enjoydream 后端服务多年共用积累，带完整单元测试（24/24 包）
+- **生产验证**：全部代码源自 enjoydream 后端服务多年共用积累，带完整单元测试（38/38 包）
 
 ## 包清单
 
@@ -54,6 +54,17 @@ CLI 子命令分发、迁移包容器等日常高频需求。标识与校验（u
 | `secretx` | 静态敏感凭证的信封加密原语（v0.34.0 起）——`ParseKey`（base64 + 16/24/32B 校验，错误带实际长度上下文）+ `NewBox` 构造期 fail-fast（缺钥 `ErrNoKey`，**不提供缺钥明文透传降级**）+ `Box.Seal/Open`（`"v1:"+base64(nonce‖ct)`，AES-GCM 必带认证、crypto/rand 随机 nonce、与 domain-manage 手搓形态逐字节兼容——存量数据零迁移）+ `SealWithAAD/OpenWithAAD` 绑定行 id/用途防密文挪用 + `ErrUnsupportedVersion` 版本前缀识别位（主密钥轮换缝线）+ `ErrBadCiphertext` 统一表述（密钥不匹配与密文损坏不可区分，不向日志泄露配钥关系）（#177）+ 内存态持有原语 `SecureString`/`SecureBytes`（v0.36.0 起，收编 zentao-mini/max 同源实现）——XOR 混淆存储防内存明文扫描 + Set/Clear 双向零化 + Get 副本隔离 + `EqualConstantTime`（crypto/subtle）；设计立场：内存扫描缓解而非加密，静态落库走 Box |
 | `urlguard` | 出站 URL 的 SSRF 防护原语：层 1 `CheckURL` 字面量校验（私网/loopback/链路本地含云元数据 169.254.169.254/CGNAT/ULA、`.internal`/`.local`/`localhost` 域名、scheme 白名单、IPv6 特殊用途段与 NAT64 段——`64:ff9b::/96`（`64:ff9b::7f00:1` 即 127.0.0.1 的 IPv6 写法）等可指向回环/内网、exotic IPv4 字面量形态 `0x7f000001`/`127.1`/`2130706433` 一律拒——标准库解析器不认、宽松解析器当地址）；层 2 `DialFunc` 拨号包装——解析出的每个 IP 预检 + 实际 RemoteAddr 端点核对（闭合重解析 TOCTOU 窗口，覆盖 Happy-Eyeballs）；IPv4-mapped IPv6 归一；构造态豁免 `WithAllowPrivate`/`WithAllowCIDRs`/`WithAllowDomains`；精确 host 白名单 `WithExactHosts`（host[:port] 必须完全相等——后缀豁免只能"放宽某域及其子域"，钉死到具体 host 需要这一档；与豁免维度独立，命中后仍走 scheme 与私网判定）；**自定义判定钩子** `WithCheckIPFunc`/`WithCheckHostFunc`（放行型模型表达不了限制型策略——IP 白/黑名单、域名白/黑名单；注入后消费方的策略成为单一判定源，且同时作用于「预检」与「建连后端点复核」两处，重解析窗口由消费方自己的策略闭合，不必在 urlguard 之外再叠一层自有端点判定；判定顺序内置在前、自定义在后，构造态豁免只豁免内置判定、不再跳过自定义判定，#91）；与 httpx `WithDialFunc` 一行组合 |
 | `procx` | 子进程治理原语（v0.38.2 起，pkg#284）：进程**树**终止（`Run`/`Command`，unix 进程组 + 跨组逃逸清扫、windows Job Object/taskkill）+ **最小环境** `WithEnv`/`ChildEnv`（白名单默认拒绝）+ 输出**封顶** `WithOutputLimit`（边读边截+继续排空，截断可判定）；v0.44.0 起子进程**内存上限**（#359）：`WithMemoryLimit`/`MemGroup`（cgroup v2 `memory.max` 创建·Attach·清理三步原语 + `MemoryLimitCapable` 问询面，换出面 `memory.swap.max` 一并封死）——兑现失败 fail closed **拒绝执行**不静默不限（手搓写错的失效形态正是「静默不限」），OOM-kill（信号杀）与自己非零退出可辨，非 Linux 如实降级不假装支持 |
+| `ctxscope` | 类型安全的请求级作用域传递原语（#201）：`Key[T]` 以命名空间 + 泛型参数双隔离（可作 map key / 结构体字段 / 包级变量），防跨包 key 碰撞 |
+| `distlock` | 后端中立分布式锁契约单源（etcdx#123 治本侧）：`Locker` 接口 + `ErrLockNotAcquired`/`ErrLockTimeout`/`ErrLockNotHeld` 哨兵 + `WithLock` 骨架；零依赖（redisx/etcdx 各自实现，消费方只认这一个 interface 类型，`errors.Is` 跨后端分类正确） |
+| `reflectx` | 反射共享原语单源（core#130 治本）：`DeepCopyValue` 深拷贝——指针环防护（按指针身份记忆、先注册再下探，环内结构共享关系原样保留） |
+| `tarx` | 目录 tar 传输三件套：同口径预扫 / 流式写出 / 防御式解包（逐项预扫并点名 Zip Slip 穿越条目）+ 可选 sha256 manifest 自证（#326） |
+| `webhook` | webhook 签约原语族：「收」（验签——HMAC 多算法多编码 / 时间戳防重放 / 静态令牌 / 回退组合 / per-platform 注册表）与「发」（签名）两侧字段约定单源 + 可选事件信封（类型 + 幂等 ID + 时间戳） |
+| `config` | 启动期静态配置加载管线：yaml → 环境变量覆盖 → 必填汇总校验 + 敏感字段脱敏 dump（`Load` 装配与汇总校验 / `Redact` 脱敏 dump 两面） |
+| `auditchain` | append-only 审计哈希链的纯计算内核：canonical 字段序单源 + sha256 链 + `Verify` 首断点即停，行源由宿主注入 |
+| `canon` | 策略/配置面规范形指纹原语：canonical → 版本哈希 + facet diff（差异面逐项可比对），schema 升格兜底 |
+| `sse` | SSE 游标回放内核与 net/http 应答器：游标窗口回放 + 「订阅先于回放」按事件 ID 去重 + 心跳注释帧 + 慢消费者断流自愈 |
+| `pii` | PII 价值模式检测与打码：大陆手机号 + 18 位居民身份证（GB/T 2260 省级码白名单 + 出生日期合法 + 顺序码非全零 + MOD 11-2 校验四重校验），键与值走同一条判定面；保守取舍——宁可漏打不可错打 |
+| `subhub` | 快照式订阅表的**唯一实现**（v0.57.0 起随 pii 自 goagent-kernel 上移）：通用并发数据结构，不止 PII 一处用 |
 | `resumable` | 分片上传/断点续传**会话面**原语（v0.44.0 起，#361）：`Manager` 状态机——`Init`（秒传钩子 `DedupResolver`）/`PutChunk`（幂等分片+进度 CAS+写后存活确认）/`Complete`（合并抢占 `ClaimForMerge` 0→1 原子 + 齐全双源对账 + `MergeFunc` 流式交付）/`ListParts`（断点查询 received/missing 双清单对账）/`Abort`（归属校验）/`Sweep`（孤儿清扫）；状态面 `SessionStore`（`MemSessionStore` 内存实现）与存储面 `ChunkStore` 接口化——CAS 进度/合并抢占/断点对账/孤儿清扫四类并发坑单点化（zeus 两仓各手搓一份 700+ 行的同构状态机），业务差异只在去重键与合并落存储 |
 
 ## 快速使用

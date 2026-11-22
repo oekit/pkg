@@ -2,6 +2,11 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.59.1] — 2026-11-23
+
+- docs: 注释层上游指代对齐真相——`agentkit llm/retryafter.go` → `oagentkit/llm`、`agentkit logredact` → `oagentkit/guardx/logredact`、`oagentkit/agentrun` → `oagentkit/agent/agentrun`、未标上游的 `sandbox.Capable` 补 `oagentkit/guardx/sandbox`、`oagentkit/runtime procx` 补全路径；`jsonrepair` 围栏单源的下游描述由「副本」改为「委托」（textx 实为委托本包，agentkit 已退役为墓碑仓）——纯注释，零行为变化
+- docs: README/AGENTS 声明面补齐——首行包数 30→38 合 1、基础工具集 24→38 个、单元测试口径 24/24→38/38、包清单补 11 个包（ctxscope/distlock/reflectx/tarx/webhook/config/auditchain/canon/sse/pii/subhub）、「本仓包含」补 6 个包（auditchain/canon/pii/shellx/sse/subhub）——纯文档，零行为变化
+
 ## [v0.59.0] — 2026-11-22
 
 ### breaking：删除废弃的 toolname 包（强制更换）
