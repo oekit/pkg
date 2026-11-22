@@ -1,5 +1,10 @@
 // Package toolname 工具名 → 程序内可用的标识符：一条**单一真相**。
 //
+// Deprecated: 本包已归位 github.com/oagentkit/toolname（v0.58.1 起标记）。
+// 概念域是工具治理而非纯基础设施——新家与 toolgate/guardx 同属 oagentkit
+// 家族。新代码请 import "github.com/oagentkit/toolname"；本包保留只为
+// 既有调用方兼容，不再演进。
+//
 // 生命周期: Stable（v0.33.0 定级）——只允许 additive 变更（新增导出符号 /
 // 新增方法且给零值默认实现 / 新增错误值）；改签名、改语义、改默认值、
 // 删导出符号都算 breaking，判定规则与变更流程见 docs/api-compat.md，
