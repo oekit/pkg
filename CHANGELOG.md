@@ -2,6 +2,14 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.58.2] — 2026-11-22
+
+- deprecate: toolname 归位 oagentkit/toolname（#581）——本仓 toolname 标记 Deprecated（子包仍在、DESC 口径 39 合 1 不变），迁移入口指向 oagentkit 侧
+
+## [v0.58.1] — 2026-11-22
+
+- docs: 版本引用对齐 v0.58.0 + AGENTS 首行 39 合 1 + CHANGELOG 补 v0.58.0 节（发布列车文档面，无代码变更）
+
 ## [v0.58.0] — 2026-11-22
 
 - feat: toolname 自 goagent-kernel 上移（#578）——与 pii/subhub（v0.57.0）同源，DESC 单源同步 39 合 1（matrix-tools 投影）
