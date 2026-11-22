@@ -4,7 +4,7 @@
 > 当前版本：`v0.59.0` · module：`github.com/oekit/pkg` · org：[oekit = Open Easy Kit](https://oekit.github.io)
 
 ## 本仓包含
-`bloomx/`、`bufiox/`、`cache/`、`cache/cachetest/`、`cli/`、`config/`、`container/`、`contextx/`、`convert/`、`ctxscope/`、`distlock/`、`encoding/`、`enumx/`、`errors/`、`httpjson/`、`internal/logkv/`、`internal/singleflight/`、`jsonrepair/`、`mathx/`、`pack/`、`pagination/`、`pathx/`、`ptrx/`、`procx/`、`reflectx/`、`resumable/`、`singleflighttest/`、`slicex/`、`secretx/`、`stringx/`、`strmap/`、`tarx/`、`timex/`、`urlguard/`、`webhook/`、`timex/cron/`
+`auditchain/`、`bloomx/`、`bufiox/`、`cache/`、`cache/cachetest/`、`canon/`、`cli/`、`config/`、`container/`、`contextx/`、`convert/`、`ctxscope/`、`distlock/`、`encoding/`、`enumx/`、`errors/`、`httpjson/`、`internal/logkv/`、`internal/singleflight/`、`jsonrepair/`、`mathx/`、`pack/`、`pagination/`、`pathx/`、`pii/`、`ptrx/`、`procx/`、`reflectx/`、`resumable/`、`secretx/`、`shellx/`、`singleflighttest/`、`slicex/`、`sse/`、`stringx/`、`strmap/`、`subhub/`、`tarx/`、`timex/`、`timex/cron/`、`urlguard/`、`webhook/`
 
 ## 硬规则速览（全矩阵适用）
 

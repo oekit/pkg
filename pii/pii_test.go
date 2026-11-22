@@ -142,7 +142,7 @@ func TestRedactValueStructures(t *testing.T) {
 	restore(t)
 	in := map[string]any{
 		"contact": "13812345678",
-		// agentkit logredact 的值面下探不下探 map[string]string（结构盲区）——本包收口。
+		// oagentkit/guardx/logredact 的值面下探不下探 map[string]string（结构盲区）——本包收口。
 		"tags":  map[string]string{"owner": "13912345678"},
 		"list":  []any{"id 11010519491231002X"},
 		"strs":  []string{"13712345678"},

@@ -3,11 +3,12 @@
 // UTF-8）→ JSON 解码（out 非 nil 时；out==nil 跳过解码，只判状态码），外加
 // 可选的指数退避重试与服务端 Retry-After 建议捕获。
 //
-// 与 network/httpx 的分工（同名不同物）：那侧是 Hertz 底座的服务间调用基础
+// 与 oekit/httpx 的分工（同名不同物）：那侧是 Hertz 底座的服务间调用基础
 // 设施（服务发现/熔断/指标/追踪，编译期即拉 hertz+prometheus+gobreaker+otel
 // 依赖链）；本包纯函数、调用方注入 *http.Client——被嵌入的 SDK 与外部 API
 // 调用方（LLM 网关、第三方开放平台）复用，不把微服务全家桶拖进依赖树。
-// 收编自 agentkit/httpx（v0.10.41 起单源在此，agentkit 侧消费本包）。
+// 收编自旧单仓 agentkit/httpx（v0.10.41 起单源在此；旧单仓已拆为 oagentkit/*，
+// 现由 oagentkit/llm 消费本包）。
 package httpjson
 
 import (

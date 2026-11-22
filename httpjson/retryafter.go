@@ -11,7 +11,7 @@ package httpjson
 //      取舍——建议 >0 且（≤5min 或 < 本地曲线值）才取代本地退避。
 //
 // 隐私与内存：sink 只存一个时长；未安装 sink 的请求零开销。
-// 收编自 agentkit llm/retryafter.go（v0.10.41 起单源在此）。
+// 收编自 oagentkit/llm 的 retryafter.go（v0.10.41 起单源在此）。
 
 import (
 	"context"
@@ -71,7 +71,7 @@ func RetryAfterFrom(ctx context.Context) time.Duration {
 // 上一轮的旧窗口，陈旧建议被当成「本轮也是限流」的证据采信。正确姿势是
 // **每次物理调用前 Clear**（或读完建议后立即 Clear）：本轮确为限流且带
 // 响应头时传输层会重新写入；不带则读到 0，退避回落本地曲线。
-// agentkit/llm 的重试环（每轮注入全新 sink）不受影响；本 API 是同一纪律
+// oagentkit/llm 的重试环（每轮注入全新 sink）不受影响；本 API 是同一纪律
 // 在「复用 sink」形态下的替身。
 func ClearRetryAfter(ctx context.Context) time.Duration {
 	if h, ok := ctx.Value(retryAfterKey{}).(*retryAfterHolder); ok {
@@ -131,7 +131,7 @@ func (t RetryAfterTransport) RoundTrip(req *http.Request) (*http.Response, error
 // 才采信，否则本地曲线」——两者的前提都是「超钳制的建议值存在、在取舍层
 // 被降级」。parse 层若把超钳制值折叠成 0，秒数形态的超钳制建议永远到不了
 // 取舍层（SelectRetryDelay 超钳制分支不可达），且下游无法区分「无建议」与
-// 「建议超钳制」（oagentkit/agentrun 的 Retry-After 门控实测被此盲掉）。
+// 「建议超钳制」（oagentkit/agent/agentrun 的 Retry-After 门控实测被此盲掉）。
 // 故这里只拦「无法表示的荒谬值」，可表示的值一律原样捕获，采信与否交回
 // SelectRetryDelay（捕获不改写、取舍才钳制）。
 const maxSafeParseSecs = 9223372036 // int64 纳秒上界 9223372036854775807 ÷ 1e9 向下取整；更大的秒数必然回绕
