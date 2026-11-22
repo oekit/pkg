@@ -4,9 +4,9 @@ import "testing"
 
 // TestStripCodeFence 锁定导出原语 StripCodeFence 的行为（pkg#74）。
 //
-// 该函数是围栏语义的单源——下游 oagentkit/agentkit、agentkit-bisect、textx
-// 各自的 textutil.StripCodeFence 是它的副本。本用例是副本漂移的哨兵：
-// 语义一旦要改（多块取哪块、是否识别 json 变体等），副本方必须跟着改。
+// 该函数是围栏语义的单源——下游 oagentkit/textx/textutil.StripCodeFence 直接
+// 委托本包实现（单源，非副本）。本用例是围栏口径的哨兵：语义一旦要改
+// （多块取哪块、是否识别 json 变体等），本用例必须同步更新以锁住新口径。
 func TestStripCodeFence(t *testing.T) {
 	cases := []struct {
 		name string

@@ -77,9 +77,9 @@ func inlineFenceRun(line string) (run int, rest string, ok bool) {
 //     若把散文后内容当块剥出会吞掉正文；v0.37.1 的正则同样要求闭栏才成块，
 //     行首开栏「漏闭栏也返回其后全部」的宽容只保留给行首形态。
 //
-// 本函数是**围栏语义的单源**（下游 oagentkit/agentkit、agentkit-bisect、
-// textx 各自的 textutil.StripCodeFence 均为此语义的副本，pkg#74 起因）：
-// 围栏口径（多块取哪块、是否识别 json 变体等）要改只改此处，副本会漂移。
+// 本函数是**围栏语义的单源**（下游 oagentkit/textx/textutil.StripCodeFence 直接
+// 委托本包实现——不是副本；pkg#74 起因）：围栏口径（多块取哪块、是否识别 json
+// 变体等）要改只改此处，下游无须跟着改。
 //
 // 只剥围栏、不做 JSON 切片——需要「提取 JSON 文本」请用 ExtractJSON，
 // 需要「宽容解析」请用 Unmarshal / ParseLenient。

@@ -1,6 +1,6 @@
 package httpjson
 
-// Retry-After 捕获/解析/取舍单测（收编自 agentkit llm/retryafter_test.go）。
+// Retry-After 捕获/解析/取舍单测（收编自 oagentkit/llm 的 retryafter_test.go）。
 
 import (
 	"context"
@@ -135,7 +135,7 @@ func TestRetryAfterOverflowNotAdopted(t *testing.T) {
 // 直接采信」与 SelectRetryDelay「≤5min 或 < 本地曲线才采信，否则本地曲线」
 // 两处声明都以「超钳制的建议值存在、在取舍层被降级」为前提；parse 层把超钳制
 // 折叠成 0 后秒数形态的超钳制建议永远到不了取舍层，且下游无法区分「无建议」
-// 与「建议超钳制」（oagentkit/agentrun 的 Retry-After 门控实测被此盲掉，
+// 与「建议超钳制」（oagentkit/agent/agentrun 的 Retry-After 门控实测被此盲掉，
 // 其 TestWithRetryStillSkipsRerunOnHugeRateLimitHint 跟版转红）。
 // 双判据缺一不可：可观测 + 不被采信（#343 的安全目标不回退）。
 func TestRetryAfterOverCapObservableNotAdopted(t *testing.T) {

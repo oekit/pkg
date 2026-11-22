@@ -5,9 +5,9 @@
 // 删导出符号都算 breaking，判定规则与变更流程见 docs/api-compat.md，
 // 逐包理由见 api-lifecycle.yaml。
 //
-// PIIMiddleware 的价值面检测）：在 logredact（agentkit，凭据类值模式：
-// key=xxx/Authorization/JWT/sk- 前缀等）之外补「个人信息价值面」——大陆手机号与
-// 18 位居民身份证。凭据脱敏按形态命中，个人信息没有键名可依（批266「logredact
+// PIIMiddleware 的价值面检测）：在 logredact（oagentkit/guardx/logredact，凭据类
+// 值模式：key=xxx/Authorization/JWT/sk- 前缀等）之外补「个人信息价值面」——大陆手机号
+// 与 18 位居民身份证。凭据脱敏按形态命中，个人信息没有键名可依（批266「logredact
 // 键名盲区」教训的價值面延伸：审计链永久留存+SIEM 外发，工单摘要外发 Jira，
 // 值本身即敏感，与键名无关——键位上出现的同类值走同一条判定面，见下）。
 //
@@ -21,9 +21,9 @@
 // 宿主注入的 StrategyKind 决定（见 policy.go）。
 //
 // 结构面：ApplyValue（按敏感面）递归下探 map[string]any /
-// map[string]string / []any / []string——其中 map[string]string 是 agentkit
-// logredact.RedactValue 的已知结构盲区（alert_svc redactMap 绕行注释在案），
-// 本包一并收口。**键与值走同一条判定面**：以手机号为键的载荷（手机号 → 订单/
+// map[string]string / []any / []string——其中 map[string]string 是
+// oagentkit/guardx/logredact.RedactValue 的已知结构盲区（alert_svc redactMap
+// 绕行注释在案），本包一并收口。**键与值走同一条判定面**：以手机号为键的载荷（手机号 → 订单/
 // 客户资料，中文业务系统的一等形态）不再整键明文外泄，键命中与值命中同样产出
 // span 级处置与 blocked 信号；普通键逐字不变；不同原键处置出同一形态时按原键
 // 字典序加 "#n" 消解——不丢条目，也不依赖 map 的随机迭代序。nil 容器原样保留：

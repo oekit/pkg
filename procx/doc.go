@@ -1,6 +1,6 @@
 // Package procx 子进程治理三件套：进程**树**终止、子进程**最小环境**、输出
-// **封顶**。stdlib-only（pkg 零第三方依赖红线），原语下沉自 oagentkit/runtime
-// procx 同款纪律（pkg#284：下游 pigeonbox/core 直接依赖 oagentkit 会新增跨
+// **封顶**。stdlib-only（pkg 零第三方依赖红线），原语下沉自 oagentkit/runtime/procx
+// 同款纪律（pkg#284：下游 pigeonbox/core 直接依赖 oagentkit 会新增跨
 // org 依赖边，决策记录 pigeonbox/core#71）。三件套对应 pkg#294 的承诺：
 // 树终止先行落地（v0.38.2/v0.39.0），最小环境与输出封顶由 pkg#314 补齐——
 // 下游预览子系统的匿名访客可控输入喂 ffmpeg/ffprobe，三面缺口都撞在同一处：

@@ -112,7 +112,7 @@ func (g *MemGroup) Close(ctx context.Context) error {
 	return g.closeErr
 }
 
-// MemoryLimitCapable 是内存上限的**问询面**（sandbox.Capable 同款口径）：
+// MemoryLimitCapable 是内存上限的**问询面**（oagentkit/guardx/sandbox.Capable 同款口径）：
 // nil = 当前宿主能兑现（cgroup v2 可用、memory 控制器可启用、memory.max
 // 可写）；非 nil = 不能兑现及原因。建不出组 / 写不进 memory.max 的环境
 // （无权限、cgroup v1、非 Linux）在执行前就问得出来，调用方据此拒绝执行
