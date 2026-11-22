@@ -193,6 +193,9 @@ func applyValue(v any, fn, fk func(string) (string, bool)) (any, bool) {
 		return fn(t)
 	case map[string]any:
 		if t == nil {
+			//nolint:gocritic // nilValReturn 不适用：此处必须返回**带类型的 nil**
+			// （调用方依赖 map/slice 类型信息做断言，无类型 nil 会让断言失效——
+			// TestApplyValueKeepsNilContainers 钉着这个语义）。
 			return t, false
 		}
 		keys := make([]string, 0, len(t))
@@ -208,6 +211,9 @@ func applyValue(v any, fn, fk func(string) (string, bool)) (any, bool) {
 		return out, blocked
 	case map[string]string:
 		if t == nil {
+			//nolint:gocritic // nilValReturn 不适用：此处必须返回**带类型的 nil**
+			// （调用方依赖 map/slice 类型信息做断言，无类型 nil 会让断言失效——
+			// TestApplyValueKeepsNilContainers 钉着这个语义）。
 			return t, false
 		}
 		keys := make([]string, 0, len(t))
@@ -223,6 +229,9 @@ func applyValue(v any, fn, fk func(string) (string, bool)) (any, bool) {
 		return out, blocked
 	case []any:
 		if t == nil {
+			//nolint:gocritic // nilValReturn 不适用：此处必须返回**带类型的 nil**
+			// （调用方依赖 map/slice 类型信息做断言，无类型 nil 会让断言失效——
+			// TestApplyValueKeepsNilContainers 钉着这个语义）。
 			return t, false
 		}
 		out := make([]any, len(t))
@@ -234,6 +243,9 @@ func applyValue(v any, fn, fk func(string) (string, bool)) (any, bool) {
 		return out, blocked
 	case []string:
 		if t == nil {
+			//nolint:gocritic // nilValReturn 不适用：此处必须返回**带类型的 nil**
+			// （调用方依赖 map/slice 类型信息做断言，无类型 nil 会让断言失效——
+			// TestApplyValueKeepsNilContainers 钉着这个语义）。
 			return t, false
 		}
 		out := make([]string, len(t))

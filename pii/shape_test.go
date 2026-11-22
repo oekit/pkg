@@ -174,7 +174,8 @@ func TestValidateShapeCatchesUnsupported(t *testing.T) {
 	}
 
 	// 支持面放行：四种容器 + 标量 + nil + 嵌套。
-	ok := []any{
+	ok := make([]any, 0, 12)
+	ok = append(ok,
 		"plain",
 		map[string]any{"a": "x", "b": []string{"y"}, "c": 42, "d": nil},
 		map[string]string{"k": "v"},
@@ -184,7 +185,7 @@ func TestValidateShapeCatchesUnsupported(t *testing.T) {
 		json.Number("13800001234"),
 		shapeTestStr(synMobile),
 		nil,
-	}
+	)
 	var nilBytes []byte
 	ok = append(ok, nilBytes) // 带类型 nil：运行期原样保留，接线期放行
 	for i, v := range ok {
