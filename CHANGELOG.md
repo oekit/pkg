@@ -2,6 +2,13 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.58.0] — 2026-11-22
+
+- feat: toolname 自 goagent-kernel 上移（#578）——与 pii/subhub（v0.57.0）同源，DESC 单源同步 39 合 1（matrix-tools 投影）
+- docs: AGENTS.md 首行对齐 DESC 38→39 合 1（#577/#578 投影链）
+
+（本节为按发布事实补记：tag v0.58.0 先发、CHANGELOG 节事后补齐——tag 快照不可变，补记进当前文档。）
+
 ## [v0.57.1] — 2026-11-22
 
 - 版本倒挂收敛（v0.56.1 与并发会话 v0.57.0 时序倒挂）：
