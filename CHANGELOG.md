@@ -2,6 +2,13 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.57.1] — 2026-11-22
+
+- 版本倒挂收敛（v0.56.1 与并发会话 v0.57.0 时序倒挂）：
+
+- perf(cache): LRU 读命中提升改 TryLock 非阻塞——拿不到写锁跳过本次提升，读路径不再为 LRU 序串行化；无竞争时语义与原实现逐位一致；并发读实测 126ns/op → 90ns/op（-28.5%），0 allocs、-race 全绿（#572，即 v0.56.1 内容，本版补正式版本号）
+- 说明：v0.57.0（#571 pii/subhub 上移）为并发会话裸 tag 先发、v0.56.1 随后发布——数字倒挂致 @latest 落后于实际内容，本版收敛；v0.57.0 的 Release 由 gen_releases 按发布事实补记
+
 ## [v0.56.1] — 2026-11-22
 
 - - perf(cache): LocalCache EvictLRU 读命中提升改 TryLock 非阻塞——拿不到写锁跳过本次提升，读路径不再为 LRU 序串行化；无竞争时 TryLock 必成功+锁内二次校验，单线程语义与原实现逐位一致；并发读实测 126ns/op → 90ns/op（-28.5%，12 goroutine×64 键），0 allocs、-race 全绿（新增 local_bench_test.go 钉住基线）
