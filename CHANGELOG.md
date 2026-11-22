@@ -2,6 +2,10 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.60.0] — 2026-11-23
+
+- feat(procx): 收编 oagentkit/runtime procx 执行族为单源（RunDetailed/lineWriter/进程组托管/InheritAllExcept）——跨 org procx 双源收敛 P0 落地；runtime 侧退化为兼容壳。两份自称单源的白名单已实质分歧（runtime 缺 TZ+windows 必需组、pkg 缺 agent 配置目录键），按 pigeonbox/core#71 机制下沉方向合流：RunDetailed(ctx, RunRequest) agent CLI 执行族整族迁入（进程组托管/stdout 按行回调 lineWriter+panic 库层收编/classifyWait 本地 deadline 判据/ErrTimeout+ErrCanceled sentinel/截断事实结构化）；InheritAllExcept(except) 继承式环境入口随迁（失败方向声明：继承=泄漏侧，windows 大小写归一统一 envName）；零依赖红线保持（引擎内 async.GoSafe→包内 goSafe，concurrency 反向依赖本仓不能引）；行为测试全族随迁钉死语义；doc.go 声明 Run（可信托管，缺省继承）vs RunDetailed（不可信 agent CLI，恒白名单）双执行族分工
+
 ## [v0.59.1] — 2026-11-23
 
 - docs: 注释层上游指代对齐真相——`agentkit llm/retryafter.go` → `oagentkit/llm`、`agentkit logredact` → `oagentkit/guardx/logredact`、`oagentkit/agentrun` → `oagentkit/agent/agentrun`、未标上游的 `sandbox.Capable` 补 `oagentkit/guardx/sandbox`、`oagentkit/runtime procx` 补全路径；`jsonrepair` 围栏单源的下游描述由「副本」改为「委托」（textx 实为委托本包，agentkit 已退役为墓碑仓）——纯注释，零行为变化
