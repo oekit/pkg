@@ -2,6 +2,14 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.59.0] — 2026-11-22
+
+### breaking：删除废弃的 toolname 包（强制更换）
+
+v0.58.2 起标记 Deprecated 的 toolname 包**本版删除**——不再保留兼容壳。理由：归位公告（v0.58.2）已给出明确替代（github.com/oagentkit/toolname，API 逐字一致），兼容壳多留一天，「新代码该写哪个 import」的歧义就多一天。
+
+**下游要做什么**：import "github.com/oekit/pkg/toolname" 全部改指 "github.com/oagentkit/toolname"（v0.1.0+，API 逐字一致，仅 import 路径变化）。编译即红、改完即绿，无运行时行为变化。
+
 ## [v0.58.2] — 2026-11-22
 
 - deprecate: toolname 归位 oagentkit/toolname（#581）——本仓 toolname 标记 Deprecated（子包仍在、DESC 口径 39 合 1 不变），迁移入口指向 oagentkit 侧
