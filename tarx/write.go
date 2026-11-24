@@ -9,10 +9,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"hash"
 	"io"
 	"io/fs"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -22,6 +24,8 @@ type WriteOption func(*writeConfig)
 type writeConfig struct {
 	manifest bool
 	symlinks bool
+	// manifestName 清单条目名（空 = 用 ManifestName 常量）。
+	manifestName string
 }
 
 // WithManifest 流尾夹带逐文件 sha256 清单（ManifestName 条目，sha256sum
@@ -48,6 +52,21 @@ func WithSymlinks() WriteOption {
 	return func(cfg *writeConfig) { cfg.symlinks = true }
 }
 
+// WithManifestName 自定义清单条目名（与 WithManifest 配对使用）。
+//
+// **为什么需要**：默认名 ManifestName 是固定串，落在接收端的目录里可能与
+// 用户自己的文件撞名（撞了 ⇒ 清单覆盖用户文件，或用户文件覆盖清单——
+// 两种都让自证失去意义）。需要「绝不撞名」的调用方（如远端用
+// `ls -1t <dir>/<前缀>*` 找清单的那种协议）可传一个带唯一后缀的名字。
+//
+// 名字必须是**单层**相对名（不含 `/`、不含 `..`）——它会被原样写进 tar
+// 条目名，非法值在构造期就报错（写入期才发现会留下一半流）。
+//
+// 不传时用 ManifestName 常量（既有行为不变）。
+func WithManifestName(name string) WriteOption {
+	return func(cfg *writeConfig) { cfg.manifestName = name }
+}
+
 // Write 流式写出 root 目录树为 tar 流，返回与 Scan 同口径的 Stats。
 //
 // 行走为字典序（与 Scan 同序同分类，奇偶测试钉住）；常规文件写 TypeReg
@@ -70,6 +89,15 @@ func Write(w io.Writer, root string, opts ...WriteOption) (Stats, error) {
 	var st Stats
 	var manifest bytes.Buffer // WithManifest 时的逐文件清单（hex  <name>\n）
 	tw := tar.NewWriter(w)
+
+	// 清单条目名：自定义名优先，否则用常量。非法名在**写入任何内容前**
+	// 判掉——半截流比没有流更坏（接收端会以为传输完成）。
+	manifestName := cfg.manifestName
+	if manifestName == "" {
+		manifestName = ManifestName
+	} else if !validManifestName(manifestName) {
+		return st, fmt.Errorf("tarx: 清单条目名非法 %q（须是单层相对名：不含 / 与 ..）", manifestName)
+	}
 
 	err := walkRel(root, func(rel, path string, d fs.DirEntry) error {
 		// symlink 优先于常规分类：开启链接语义时它是独立的一类，
@@ -111,7 +139,7 @@ func Write(w io.Writer, root string, opts ...WriteOption) (Stats, error) {
 	}
 
 	if cfg.manifest {
-		if err := writeManifestEntry(tw, manifest.Bytes()); err != nil {
+		if err := writeManifestEntry(tw, manifest.Bytes(), manifestName); err != nil {
 			return st, err
 		}
 	}
@@ -192,10 +220,10 @@ func writeSymlinkEntry(tw *tar.Writer, rel, target string, d fs.DirEntry) error 
 }
 
 // writeManifestEntry 流尾写 manifest 条目（常规文件，sha256sum 文本格式）。
-func writeManifestEntry(tw *tar.Writer, data []byte) error {
+func writeManifestEntry(tw *tar.Writer, data []byte, name string) error {
 	hdr := &tar.Header{
 		Typeflag: tar.TypeReg,
-		Name:     ManifestName,
+		Name:     name,
 		Size:     int64(len(data)),
 		Mode:     0o644,
 		ModTime:  time.Now(),
@@ -205,4 +233,20 @@ func writeManifestEntry(tw *tar.Writer, data []byte) error {
 	}
 	_, err := tw.Write(data)
 	return err
+}
+
+// validManifestName 清单条目名是否合法：单层相对名（不含路径分隔符、不含
+// .. 前缀、非空）。它会被原样写进 tar 条目名 ⇒ 含分隔符会变成多层级条目
+// （落到子目录，远端按单层名找不到），含 .. 会是穿越条目。
+func validManifestName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if strings.ContainsAny(name, "/\\\\") {
+		return false
+	}
+	if strings.HasPrefix(name, "..") {
+		return false
+	}
+	return true
 }
