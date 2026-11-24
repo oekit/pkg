@@ -63,7 +63,8 @@ func makeTree(t *testing.T) (root string, want Stats) {
 // assertStatsEqual Stats 逐字段比较（含 SkippedNames 序）。
 func assertStatsEqual(t *testing.T, label string, got, want Stats) {
 	t.Helper()
-	if got.Files != want.Files || got.Dirs != want.Dirs || got.Bytes != want.Bytes ||
+	if got.Files != want.Files || got.Dirs != want.Dirs || got.Symlinks != want.Symlinks ||
+		got.Bytes != want.Bytes ||
 		got.Skipped != want.Skipped || !equalStrings(got.SkippedNames, want.SkippedNames) {
 		t.Fatalf("%s: Stats 不符\n got %+v\nwant %+v", label, got, want)
 	}

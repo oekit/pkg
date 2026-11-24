@@ -19,6 +19,7 @@ const skippedNameCap = 3
 type Stats struct {
 	Files        int      // 常规文件数
 	Dirs         int      // 目录数（不含 root 本身）
+	Symlinks     int      // 符号链接数（仅 WithSymlinks 开启时可能非零）
 	Bytes        int64    // 常规文件内容字节合计
 	Skipped      int      // 流会丢下/解包会拒收的条目数（非常规类型、穿越条目）
 	SkippedNames []string // 前 3 个被跳过条目的点名样本（穿越条目/非常规类型混排，按遇序）
@@ -33,10 +34,18 @@ func (s *Stats) skip(name string) {
 }
 
 // classify 流式写入器的分类口径（单源）：常规文件 / 目录 / 其余跳过。
-// symlink、设备、socket、fifo 一律归「流会丢下的」——符号链接不传输，
-// 链接目标逃逸 root 的整类问题面随之消失（需要链接语义的调用方自行处理）。
+// symlink、设备、socket、fifo 默认归「流会丢下的」——符号链接默认不传输，
+// 链接目标逃逸 root 的整类问题面随之消失。
+//
+// **开启链接语义时**（WithSymlinks）symlink 单独归类，由写侧写 TypeSymlink
+// 条目承载——设备/socket/fifo 仍然跳过（它们跨 tar 流没有合法形态）。
 func classify(d fs.DirEntry) (regular, dir bool) {
 	return d.Type().IsRegular(), d.Type().IsDir()
+}
+
+// isSymlink 条目是否为符号链接（Linkname 形态的载体）。
+func isSymlink(d fs.DirEntry) bool {
+	return d.Type()&fs.ModeSymlink != 0
 }
 
 // walkRel 以 root 为基准行走并回调（相对名 rel 恒为 `/` 分隔的斜杠路径，

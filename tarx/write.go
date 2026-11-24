@@ -21,6 +21,7 @@ type WriteOption func(*writeConfig)
 
 type writeConfig struct {
 	manifest bool
+	symlinks bool
 }
 
 // WithManifest 流尾夹带逐文件 sha256 清单（ManifestName 条目，sha256sum
@@ -29,6 +30,22 @@ type writeConfig struct {
 // 化核对用 VerifyManifest。
 func WithManifest() WriteOption {
 	return func(cfg *writeConfig) { cfg.manifest = true }
+}
+
+// WithSymlinks 传输符号链接（写侧写 TypeSymlink 条目，承载 Linkname）。
+//
+// **默认不传输**：链接语义带来两个面——链接目标可能逃逸 root（归档里一个
+// 指向 /etc/passwd 的链接，落地后就是一个随时可读的入口），以及链接本身
+// 指向何处对接收方是隐式的（收件人拿到的是「一个链接」而不是「一份数据」）。
+// 默认关闭 ⇒ 这两个面不出现。
+//
+// 开启后**必须配对开启解包侧的 WithSymlinks**（Extract 的同名选项）——
+// 只写不收会让链接在流里存在、在落地时被跳过，两侧口径分裂。
+//
+// 开启后的安全承诺：链接目标的逃逸校验在**解包侧**做（Extract）——写侧
+// 只负责如实记录「源树里这个链接指向哪」，不替接收方做判断。
+func WithSymlinks() WriteOption {
+	return func(cfg *writeConfig) { cfg.symlinks = true }
 }
 
 // Write 流式写出 root 目录树为 tar 流，返回与 Scan 同口径的 Stats。
@@ -55,6 +72,19 @@ func Write(w io.Writer, root string, opts ...WriteOption) (Stats, error) {
 	tw := tar.NewWriter(w)
 
 	err := walkRel(root, func(rel, path string, d fs.DirEntry) error {
+		// symlink 优先于常规分类：开启链接语义时它是独立的一类，
+		// 不走 countEntry 的「其余跳过」分支（那会把链接记成 Skipped）。
+		if cfg.symlinks && isSymlink(d) {
+			target, lerr := os.Readlink(path)
+			if lerr != nil {
+				return lerr
+			}
+			if werr := writeSymlinkEntry(tw, rel, target, d); werr != nil {
+				return werr
+			}
+			st.Symlinks++
+			return nil
+		}
 		regular, isDir := countEntry(&st, rel, d)
 		if isDir {
 			return writeDirEntry(tw, rel, d)
@@ -140,6 +170,25 @@ func writeFileEntry(tw *tar.Writer, rel, path string, fi fs.FileInfo, wantHash b
 		return "", nil
 	}
 	return hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+// writeSymlinkEntry 写单个符号链接条目（TypeSymlink，Linkname 承载目标）。
+//
+// 目标按源树里的**原样**记录（相对链接记相对、绝对链接记绝对）——写侧不
+// 替接收方判断「这个链接能不能落在这儿」，那是解包侧的事（Extract 的
+// 逃逸校验）。写侧只保证「如实记录」。
+func writeSymlinkEntry(tw *tar.Writer, rel, target string, d fs.DirEntry) error {
+	fi, err := d.Info()
+	if err != nil {
+		return err
+	}
+	return tw.WriteHeader(&tar.Header{
+		Typeflag: tar.TypeSymlink,
+		Name:     rel,
+		Linkname: target,
+		Mode:     int64(fi.Mode().Perm()),
+		ModTime:  fi.ModTime(),
+	})
 }
 
 // writeManifestEntry 流尾写 manifest 条目（常规文件，sha256sum 文本格式）。

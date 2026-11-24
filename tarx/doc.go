@@ -6,7 +6,13 @@
 //   - **防御式解包** Extract：绝对路径与 `..` 穿越条目**跳过并计数、点名
 //     前三个**（SkippedNames），绝不写 root 之外——Zip Slip 是所有解包不
 //     可信归档的工具的共同威胁；非常规条目（symlink/设备/socket/fifo）
-//     同样跳过并计数（链接目标逃逸 root 的问题面整类消失）；
+//     默认同样跳过并计数（链接目标逃逸 root 的问题面整类消失）；
+//   - **可选的链接语义**（Write 的 WithSymlinks + Extract 的
+//     WithSymlinkExtract）：默认**不传**符号链接——链接目标可能逃逸 root，
+//     且收件人拿到的是「一个链接」而非「一份数据」。需要链接语义的调用方
+//     显式开启后，写侧如实记录 Linkname，解包侧追加**链接目标逃逸校验**
+//     （绝对目标与解析后落在 root 之外的相对目标一律拒收并点名）——
+//     其余防线（条目名穿越、既有 symlink 链、非常规类型）一条不减；
 //   - **同口径预扫** Scan：本地行走，按「流式写入器会怎么分类」数
 //     files/bytes/skipped，给演练答复与流截止时间放大当底数——口径漂移
 //     的坑（预扫与写入器各走各的分类，演练就在对它要预演的那次运行撒
@@ -22,6 +28,11 @@
 //	st, _ := tarx.Write(w, root, tarx.WithManifest()) // 流式写出 + 自证清单
 //	st, _ := tarx.Extract(r, root)      // 防御式解包（SkippedNames 点名恶意条目）
 //	err := tarx.VerifyManifest(root)    // 另一端核对（ErrMismatch 指名文件）
+//
+// 需要传输符号链接时（两侧成对开启，否则口径分裂）：
+//
+//	st, _ := tarx.Write(w, root, tarx.WithSymlinks())
+//	st, _ := tarx.Extract(r, root, tarx.WithSymlinkExtract())
 //
 // # 边界声明
 //
