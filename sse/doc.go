@@ -101,4 +101,6 @@
 //
 //	// 自带跨进程总线的宿主实现 Source 即可接入同一应答器：
 //	// type MyBus struct{...}; func (b *MyBus) Subscribe() (<-chan sse.Event, func())
+//
+// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
 package sse

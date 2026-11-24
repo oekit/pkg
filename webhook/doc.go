@@ -98,4 +98,6 @@
 // /不解析事件类型/不做重试退避——时间戳防重放窗的判定在收端（发出端只按
 // 约定打时间戳与幂等 ID，消费端按 DefaultDeliveryHeader 去重），转发面的
 // 轮询节奏与告警归宿主。
+//
+// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
 package webhook

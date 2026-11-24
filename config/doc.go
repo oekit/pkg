@@ -55,4 +55,5 @@
 // 隐私立场：WithSensitive 声明的字段在 Redact 输出中恒为 "<redacted>"——
 // 配置 dump 场景的泄密面在库侧关掉；与 logredact 的「凭据形状识别」互补：
 // 配置加载期字段名已知，可以精确到路径。
+// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
 package config

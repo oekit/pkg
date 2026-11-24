@@ -65,4 +65,5 @@
 //
 // 写入与读取都做文件名净化：含路径分隔符、含 ".."、绝对路径（含 Windows 盘符）、
 // 控制字符的条目名一律拒绝，读取时记入问题清单——防 zip slip 路径穿越。
+// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
 package pack

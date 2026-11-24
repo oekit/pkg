@@ -4,4 +4,5 @@
 // pkg/internal/singleflight fork，fork 因 pkg 零依赖约束而保留）。本包把
 // 关键语义固化为可复用的 Run，双方 CI 各自调用，任一侧语义漂移立刻双红。
 // 先例：pkg/cache/cachetest。
+// 生命周期: Stable——只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；改签名、改语义、改默认值、删导出符号都算 breaking，判定规则与变更流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml。
 package singleflighttest
