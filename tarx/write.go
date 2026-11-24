@@ -130,7 +130,9 @@ func Write(w io.Writer, root string, opts ...WriteOption) (Stats, error) {
 		}
 		st.Bytes += fi.Size()
 		if cfg.manifest {
-			manifest.WriteString(hashHex + "  " + rel + "\n")
+			line := hashHex + "  " + rel
+			manifest.WriteString(line + "\n")
+			st.ManifestLines = append(st.ManifestLines, line)
 		}
 		return nil
 	})

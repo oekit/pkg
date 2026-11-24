@@ -23,6 +23,11 @@ type Stats struct {
 	Bytes        int64    // 常规文件内容字节合计
 	Skipped      int      // 流会丢下/解包会拒收的条目数（非常规类型、穿越条目）
 	SkippedNames []string // 前 3 个被跳过条目的点名样本（穿越条目/非常规类型混排，按遇序）
+	// ManifestLines 逐文件 sha256 清单行（`<hex>  <name>`，仅 Write 开启
+	// WithManifest 时非空）。暴露给调用方是为了让它能**独立地**核对清单
+	// （远端 `sha256sum -c` 之外还要报告「校验了几个文件」这类事实）——
+	// 清单本身已随流走到接收端，这里给的是发送侧的同一份内容。
+	ManifestLines []string
 }
 
 // skip 计一条跳过并留点名样本（封顶 skippedNameCap）。
