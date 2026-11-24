@@ -1,6 +1,6 @@
 // Package subhub 是「快照式订阅表」的**唯一实现**（原 goagent-kernel 内部件，随 pii 上移公开——快照式订阅表是通用并发数据结构，不止 PII 一处用）。
 //
-// 生命周期: Experimental（v0.33.0 定级）——本包仍会改、删、拆，不承诺任何
+// 生命周期: Experimental（v0.57.0 定级）——本包仍会改、删、拆，不承诺任何
 // 兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见
 // docs/api-compat.md。
 //

@@ -19,4 +19,6 @@
 //     消费前过 64 位 finalizer 补 FNV 低位雪崩），每元素只算两次 FNV
 //     派生 k 个位置
 //   - 并发安全（sync.RWMutex）：Add/Reset 走写锁，Test 走读锁
+//
+// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
 package bloomx

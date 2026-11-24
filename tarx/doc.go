@@ -41,4 +41,5 @@
 // 开销、不算源树内容，不计入 Stats。SkippedNames 只留**前 3 个**点名样本
 // （恶意归档动辄上百条穿越，全量名单是调用方日志的事，库只负责给出足够
 // 排查的头几个）。
+// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
 package tarx

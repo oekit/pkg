@@ -9,6 +9,7 @@
 //
 // 值由 logx.ErrKey 单向约定（逐字一致），改动任一侧必须同步另一侧——
 // 不一致会把两矩阵的日志字段劈成两个，Loki/ES 的聚合查询双双失明。
+// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
 package logkv
 
 // ErrKey 是结构化日志错误字段的键名——logx.ErrKey（值 "err"）的上游镜像

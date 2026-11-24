@@ -1,5 +1,6 @@
 // Package jsonrepair LLM 输出宽容 JSON 修复骨架：栅栏剥离 → 散文抽对象/抽数组 →
 // 语法级修复 → 标量归一。报告/领域 schema 由调用方持有；本包只做格式宽容。
+// 生命周期: Stable——只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；改签名、改语义、改默认值、删导出符号都算 breaking，判定规则与变更流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml。
 package jsonrepair
 
 import (

@@ -9,4 +9,5 @@
 // SleepContext 的 nil ctx 兜底因此是 contextx.OrBackground 的同口径内联
 // 而非引用——改动 OrBackground 语义时此处需人工同步。cron 子包不受本纪律
 // 约束（已依赖 pkg/errors）。
+// 生命周期: Stable——只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；改签名、改语义、改默认值、删导出符号都算 breaking，判定规则与变更流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml。
 package timex

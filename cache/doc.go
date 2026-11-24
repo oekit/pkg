@@ -26,4 +26,5 @@
 // 新增后端（etcd/consul/...）实现 CacheAside[T] 后必须通过
 // github.com/oekit/pkg/cache/cachetest 契约测试套件（Run 全绿，含 -race）
 // 方可接入。
+// 生命周期: Stable——只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；改签名、改语义、改默认值、删导出符号都算 breaking，判定规则与变更流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml。
 package cache
