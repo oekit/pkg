@@ -2,6 +2,15 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.61.1] — 2026-11-24
+
+- feat(tarx): Scan 侧加链接语义选项（WithScanSymlinks）——预扫口径必须与写侧对称。预扫的承诺是「这次传输会带多少东西」：若写侧开了链接传输而预扫仍把链接算成「流会丢下的」，两个数字就对不上（演练说 3 个文件，真跑下来多出 2 个链接，调用方按预扫做的分片决策就错了）。口径一致由**测试**钉住，不靠「两边都这么写」的人肉约定。不开选项时行为不变（链接仍计入 Skipped）。
+
+## [v0.61.0] — 2026-11-24
+
+- feat(tarx): 加可选的符号链接传输（写侧 WithSymlinks / 解包侧 WithSymlinkExtract）——tarx 默认**不传**符号链接（链接目标可能逃逸 root，且收件人拿到的是「一个链接」而非「一份数据」）；需要链接语义的调用方显式开启。解包侧追加**链接目标逃逸校验**（绝对目标与解析后落在 root 之外的相对目标一律拒收并点名），其余防线（条目名穿越、既有 symlink 链、非常规类型）一条不减。另补 `WithManifestName`（清单条目名可配——默认固定名可能与接收端用户文件撞名，撞了会让自证失去意义）与 `Stats.ManifestLines`（Write 暴露清单行内容，供调用方独立核对清单）。默认口径下与改动前逐字一致。
+- feat: 建 API 生命周期机制（清单 + 包注释标记 + 兼容口径书）——新增 `api-lifecycle.yaml`（42 个生产包逐个定级 + 定级理由 + 定级版本）、各包 package doc 的 `// 生命周期: <级别>` 标记、`docs/api-compat.md` 口径书。定级逐包核过「实测下游消费方计数 + 历史 breaking 次数」两把尺：实测 0 消费的「已上架待取货」件定 Experimental（先标明不承诺兼容，有下游接手时再转 Stable）。门禁判据住治理仓 matrix-tools（pkg 是零第三方依赖仓，解析 YAML 需 pyyaml 会破其红线），pkg 仓只留声明面，消费方依赖图不受影响。零行为变化。
+
 ## [v0.60.0] — 2026-11-23
 
 - feat(procx): 收编 oagentkit/runtime procx 执行族为单源（RunDetailed/lineWriter/进程组托管/InheritAllExcept）——跨 org procx 双源收敛 P0 落地；runtime 侧退化为兼容壳。两份自称单源的白名单已实质分歧（runtime 缺 TZ+windows 必需组、pkg 缺 agent 配置目录键），按 pigeonbox/core#71 机制下沉方向合流：RunDetailed(ctx, RunRequest) agent CLI 执行族整族迁入（进程组托管/stdout 按行回调 lineWriter+panic 库层收编/classifyWait 本地 deadline 判据/ErrTimeout+ErrCanceled sentinel/截断事实结构化）；InheritAllExcept(except) 继承式环境入口随迁（失败方向声明：继承=泄漏侧，windows 大小写归一统一 envName）；零依赖红线保持（引擎内 async.GoSafe→包内 goSafe，concurrency 反向依赖本仓不能引）；行为测试全族随迁钉死语义；doc.go 声明 Run（可信托管，缺省继承）vs RunDetailed（不可信 agent CLI，恒白名单）双执行族分工
