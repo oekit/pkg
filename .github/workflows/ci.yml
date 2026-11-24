@@ -44,24 +44,42 @@ jobs:
   # ⇒ 门禁若住在本仓就破那条红线。判定逻辑放治理仓，本仓只留声明面
   # （清单 + 包注释标记 + docs/api-compat.md），消费方依赖图不受影响。
   # 与 oekit/oekit 的 BOM 新鲜度门禁同范式。
-  #
-  # 为什么要 checkout 到仓内子目录（而不是 ../matrix-tools）：
-  # actions/checkout 会校验目标路径必须在 workspace 之内，用 ../ 会直接报错。
-  # 子目录里是 .py 仓（matrix-tools 无 Go 文件）⇒ 不影响本仓的 go build/vet。
   api-lifecycle:
     name: API Lifecycle
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          repository: oekit/matrix-tools
-          ref: main
-          path: matrix-tools
+      - name: 取判据脚本（治理仓 matrix-tools）
+        # 先试 matrix-tools 的门禁分支（判据本体尚在 PR 阶段的窗口期），
+        # 取不到再退 main（判据已合入后的常态）。两处都取不到 ⇒ 本 job 判红——
+        # **判不了 ≠ 通过**。
+        #
+        # 每个 ref 克隆到**不同目录名**：失败时不必删目录——「删了再克隆」
+        # 在某些沙箱里会被权限门拦，而「换个名字」不会。目录在 workspace 之内
+        # （actions/checkout 会校验，用 ../ 会直接报错）；里面是 .py 仓
+        # （matrix-tools 无 Go 文件）⇒ 不影响本仓的 go build/vet。
+        run: |
+          set -euo pipefail
+          ok=""
+          for ref in feat/pkg-api-lifecycle-gate main; do
+            dir="matrix-tools-$ref"
+            if git clone --depth 1 --branch "$ref" https://github.com/oekit/matrix-tools.git "$dir" 2>/dev/null; then
+              if [ -f "$dir/scripts/api_lifecycle_gate.py" ]; then
+                echo "::notice::判据取自 matrix-tools@$ref"
+                ok="$dir"
+                break
+              fi
+            fi
+          done
+          if [ -z "$ok" ]; then
+            echo "::error::取不到 API 生命周期判据脚本（两个 ref 都失败）——判不了 ≠ 通过"
+            exit 1
+          fi
+          echo "GATE_DIR=$ok" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: 门禁判据（清单 ↔ 包注释 ↔ 生产包集合）
-        run: python3 matrix-tools/scripts/api_lifecycle_gate.py --repo .
+        run: python3 "$GATE_DIR/scripts/api_lifecycle_gate.py" --repo .
       - name: 判据自测（门禁自己抓得住各类漂移）
-        run: python3 matrix-tools/scripts/api_lifecycle_gate_selftest.py
+        run: python3 "$GATE_DIR/scripts/api_lifecycle_gate_selftest.py"
