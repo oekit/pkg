@@ -63,3 +63,5 @@ jobs:
           python-version: '3.12'
       - name: 门禁判据（清单 ↔ 包注释 ↔ 生产包集合）
         run: python3 matrix-tools/scripts/api_lifecycle_gate.py --repo .
+      - name: 判据自测（门禁自己抓得住各类漂移）
+        run: python3 matrix-tools/scripts/api_lifecycle_gate_selftest.py
