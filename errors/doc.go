@@ -47,4 +47,5 @@
 // 消费方已同步迁移 fmt.Errorf。v0.52.0 修订：全矩阵 fmt.Errorf 调用点
 // 1068 处实测（#520），以「错误处理单 import」收口为由新增 Newf/Wrapf
 // 双形态——构造与包装分开命名，非 Errorf 单函数双形态的复活。）
+// 生命周期: Stable——只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；改签名、改语义、改默认值、删导出符号都算 breaking，判定规则与变更流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml。
 package errors

@@ -111,6 +111,28 @@ name, ok := canon.Get("content-type") // "Content-Type", true
 - 需要日志 → [logx](https://github.com/oekit/logx)；需要数据库 → [gormx](https://github.com/oekit/gormx)
 - 本仓不依赖矩阵内任何其他模块（validator→errors、httpjson→stringx、bloomx→encoding 三条内部边除外）
 
+## API 兼容性
+
+每个包有明确的稳定性级别（Experimental / Stable / Deprecated），级别、
+定级理由与定级版本登记在 [`api-lifecycle.yaml`](./api-lifecycle.yaml)，
+口径书见 [`docs/api-compat.md`](./docs/api-compat.md)，各包 godoc 里也带
+一行 `// 生命周期: <级别>` 标记。
+
+- **Stable**：只允许 additive（新增导出符号 / 新增方法且给零值默认实现 /
+  新增错误值）。改签名、改语义、改默认值、删导出符号都算 breaking。
+- **Experimental**：可随时改、删、拆，**不承诺任何兼容**，升级风险自负。
+- **Deprecated**：仍按 Stable 兼容，但必须给替代符号与迁移路径。
+
+本仓处于 0.x，SemVer 允许 minor 内 breaking——分级承诺的是「什么时候可以改」，
+不是「永远不能改」。降级（Stable → Experimental）是合法动作，但要走完
+口径书里的降级流程并公告。
+
+查某个包的级别：
+
+```bash
+grep -A3 'pkg: <包名>' api-lifecycle.yaml
+```
+
 
 ## 矩阵总览（23 活跃模块，自动生成）
 

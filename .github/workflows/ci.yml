@@ -35,3 +35,31 @@ jobs:
             GOWORK=off go list -m all
             exit 1
           fi
+
+  # API 生命周期门禁：api-lifecycle.yaml 清单 ↔ 包注释标记 ↔ 生产包集合，
+  # 三处一致才绿（新增包未登记 / level 与标记不一致 / 标记缺失或重复 ⇒ 红）。
+  #
+  # 为什么判据脚本住在 matrix-tools 而不是本仓：pkg 是**零第三方依赖仓**
+  # （上面 zero-dep job 强制 go list -m all 只 1 行），解析 YAML 需要 pyyaml
+  # ⇒ 门禁若住在本仓就破那条红线。判定逻辑放治理仓，本仓只留声明面
+  # （清单 + 包注释标记 + docs/api-compat.md），消费方依赖图不受影响。
+  # 与 oekit/oekit 的 BOM 新鲜度门禁同范式。
+  #
+  # 为什么要 checkout 到仓内子目录（而不是 ../matrix-tools）：
+  # actions/checkout 会校验目标路径必须在 workspace 之内，用 ../ 会直接报错。
+  # 子目录里是 .py 仓（matrix-tools 无 Go 文件）⇒ 不影响本仓的 go build/vet。
+  api-lifecycle:
+    name: API Lifecycle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: oekit/matrix-tools
+          ref: main
+          path: matrix-tools
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: 门禁判据（清单 ↔ 包注释 ↔ 生产包集合）
+        run: python3 matrix-tools/scripts/api_lifecycle_gate.py --repo .

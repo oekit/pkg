@@ -17,4 +17,5 @@
 // 与 contextx.ValueOnlyFrom 的关系：正交并存——ValueOnlyFrom 是「从已有
 // ctx 取值」的适配（剥离取消传播），本包是「类型安全地写入 + 命名空间
 // key」的原语。
+// 生命周期: Stable——只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；改签名、改语义、改默认值、删导出符号都算 breaking，判定规则与变更流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml。
 package ctxscope

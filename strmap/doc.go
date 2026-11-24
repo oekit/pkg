@@ -18,4 +18,5 @@
 // （MIT，oekit/pkg）：哈希表定容、打包键、零拷贝视图思路一致；去掉了对
 // unsafex 的依赖（Go 1.20+ 直接用 unsafe.String/Slice），长度前缀改用
 // binary.NativeEndian，并在空表 Get、重复键等边界上给出确定性错误。
+// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
 package strmap

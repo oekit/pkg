@@ -25,4 +25,6 @@
 //	// 使用
 //	status := StatusRegistry.MustGet(1) // StatusActive
 //	label := StatusRegistry.Label(1)    // "启用"
+//
+// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
 package enumx

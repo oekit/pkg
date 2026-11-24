@@ -1,0 +1,212 @@
+# pkg API 生命周期清单
+#
+# 双面设计（口径与 goagent-kernel 的 api-lifecycle.yaml 同源，但**独立成册**）：
+# 本文件既是「声明面」（每个生产包的稳定性分级 + 定级理由，供消费方与 AI
+# 对齐），也是「可执行面」（由 matrix-tools 的门禁脚本逐条校验，违反即红）。
+#
+#   1. 清单里登记的每个包，其**包注释标记**必须与本清单的 level 一致——
+#      「文档里写了但代码里没改」的漂移在门禁处变红；
+#   2. 清单必须覆盖**全部生产包**（新增包不登记 = 门禁报「未登记」）；
+#   3. Deprecated 条目必须给 replacement（完整符号路径），且该符号
+#      必须真实存在——替代指向指到不存在的符号等于没有迁移路径。
+#
+# 为什么清单住本仓、门禁住 matrix-tools：
+#   pkg 是**零第三方依赖仓**（CI 强制 go list -m all 只 1 行），门禁若用
+#   yaml.v3 解析本文件就会破这条红线（kernel 侧可以，它有 go.mod 依赖）。
+#   ⇒ 解析与判定放治理仓 matrix-tools（Python + pyyaml），本仓只留声明面，
+#      消费方零依赖不受影响。这是 oekit/oekit 的 BOM 门禁同一范式：
+#      「判据脚本住在治理仓，本仓只有产物」。
+#
+# 分级判定规则（什么算 breaking，全文见 docs/api-compat.md）：
+#
+#   breaking = 改已有导出符号的签名 / 改可观测语义 / 改默认值 / 删导出符号。
+#   - Experimental：可随时改、删、拆，不承诺任何兼容；升级风险自负。
+#   - Stable：只允许 additive（新增导出符号、新增方法且给零值默认实现、
+#     新增错误值）；上述四类 breaking 一律不得发生。
+#   - Deprecated：本身仍按 Stable 兼容，但必须给替代符号与迁移路径；
+#     删除只发生在 minor 版本边界，且 CHANGELOG 必须带 BREAKING 段。
+#
+# 纪律：
+#   - 新增生产包 ⇒ 本清单同步登记 + 包注释打标记；
+#   - reason 每条必填——定级是一份承诺，没有理由的承诺无从复核；
+#   - **定级不靠拍脑袋**：本轮逐包核过「实测下游消费方计数 + 历史 breaking
+#     次数」两把尺（消费方口径见 reason 内注），消费方为零且无承诺的包
+#     一律 Experimental——「已上架待取货」的件先标明不承诺兼容，有下游
+#     接手时再转 Stable。
+
+version: 1
+
+packages:
+  # ── 零依赖小判据（Stable：判据已冻结的单一真相）──
+  - pkg: errors
+    level: Stable
+    since: v0.60.0
+    reason: New/As/Is/Unwrap 与 stdlib 同型透传，下游哨兵/As 判定单 import 即可。实测消费方 oekit 矩阵 56 处 + oagentkit/yi-nology 侧 421 处引用，是全矩阵最广的依赖面——类型同一性红线必须可执行。
+  - pkg: convert
+    level: Stable
+    since: v0.60.0
+    reason: 基础类型转换原语，判据是「转换语义只增不改」，消费方 oagentkit 侧 42 处。
+  - pkg: encoding
+    level: Stable
+    since: v0.60.0
+    reason: JSON 编解码门面，auditchain 的 Sha256Hex 等下游单源依赖它。实测消费方 14 处。注意 v0.56.0 起五入口分族（float64 vs json.Number）——该轮 breaking 已完成对外公告，判据面此后冻结。
+  - pkg: stringx
+    level: Stable
+    since: v0.60.0
+    reason: 字符串工具集（trie 替换器 / Masker 正则脱敏），实测消费方 32 处。Masker 的「保留首尾各 ≤4 字符、不可复原」是脱敏语义承诺的一部分。
+  - pkg: slicex
+    level: Stable
+    since: v0.60.0
+    reason: 切片工具集，实测消费方 42 处，判据面多年未变。
+  - pkg: mathx
+    level: Stable
+    since: v0.60.0
+    reason: 数值原语（Unstable 单边向上抖动等），实测消费方 11 处。
+  - pkg: pathx
+    level: Stable
+    since: v0.60.0
+    reason: 路径判据原语，实测消费方 oekit 3 处 + 跨 org 9 处；filepath 语义归一后长期未改。
+  - pkg: jsonrepair
+    level: Stable
+    since: v0.60.0
+    reason: 宽容 JSON 解析 + 围栏剥离单源（StripCodeFence），实测消费方 17 处。v0.23.1 起围栏口径单源化后「四处各抄一份」的问题已收敛。
+  - pkg: httpjson
+    level: Stable
+    since: v0.60.0
+    reason: HTTP 语义 JSON 工具（含 Retry-After 门控），实测消费方 12 处。
+  - pkg: procx
+    level: Stable
+    since: v0.60.0
+    reason: 子进程治理三件套（进程树终止 / 最小环境 / 输出封顶），实测消费方 17 处，含 oagentkit/runtime 同款纪律。SIGTERM→宽限→SIGKILL 的收场语义与 Windows 降级路径是对外承诺。
+  - pkg: shellx
+    level: Stable
+    since: v0.60.0
+    reason: Shell 词法事实面（Analyze 三类事实分离），实测消费方 16 处。v0.44.0 起「判不了就报错不尽力解析」是安全取向承诺。
+  - pkg: urlguard
+    level: Stable
+    since: v0.60.0
+    reason: 出站 SSRF 防护原语（CheckURL + DialFunc TOCTOU 闭合），实测消费方 oekit 5 处 + 跨 org 2 处，httpx 的 WithDialFunc 一行组合依赖它。
+  - pkg: cache
+    level: Stable
+    since: v0.60.0
+    reason: 缓存接口面（CacheAside + LocalCache + SingleFlightCache + Checker），实测消费方 oekit 16 处 + 跨 org 7 处。v0.43.0 起 Checker 构造期 fail-fast 与 failTTL 不传染的语义是对外承诺。
+  - pkg: pagination
+    level: Stable
+    since: v0.60.0
+    reason: 分页换算 + 服务级 Policy 口径 + Walk/WalkEach 翻页聚合，实测消费方 oekit 14 处 + 跨 org 6 处。v0.39.0 的 WalkEach 形参带 ctx 是已公告的 breaking，此后判据冻结。
+  - pkg: distlock
+    level: Stable
+    since: v0.60.0
+    reason: 后端中立分布式锁契约单源（Locker 接口 + 哨兵错误），实测消费方 oekit 8 处；redisx/etcdx 的 distlock 都改为消费本包，跨后端 errors.Is 分类正确性靠这里的接口同一性保证。
+  - pkg: reflectx
+    level: Stable
+    since: v0.60.0
+    reason: 反射共享原语单源（DeepCopyValue 深拷贝 + 指针环防护），实测消费方 oekit 1 处。core/config 与 pkg/pagination 两侧平行实现已收敛于此，判据面冻结。
+  - pkg: timex
+    level: Stable
+    since: v0.60.0
+    reason: 时间段边界七对 + 多模式替换器，判据面长期未变。
+  - pkg: timex/cron
+    level: Stable
+    since: v0.60.0
+    reason: cron 表达式判据子包，实测消费方 oekit 3 处；表达式语义与 timex 主包口径同源。
+  - pkg: container
+    level: Stable
+    since: v0.60.0
+    reason: 泛型容器（Set/Ring/Queue/SafeMap），v0.43.0 起 Ring 逻辑序归基（32 位平台不回绕负下标）是对外承诺。
+  - pkg: contextx
+    level: Stable
+    since: v0.60.0
+    reason: 上下文原语，判据面未变。
+  - pkg: ctxscope
+    level: Stable
+    since: v0.60.0
+    reason: 作用域判据原语，v0.37.0 起立包后判据冻结。
+  - pkg: singleflighttest
+    level: Stable
+    since: v0.60.0
+    reason: singleflight 共享契约测试套件，internal 与 concurrency 双侧引用；套件判定口径是下游实现方的验收依据。
+  - pkg: ptrx
+    level: Stable
+    since: v0.60.0
+    reason: 指针泛型工具（Of / Deref 等），实测消费方 oagentkit 侧 19 处。零值语义冻结。
+  - pkg: secretx
+    level: Stable
+    since: v0.60.0
+    reason: 静态凭证信封加密原语（ParseKey / NewBox / Seal-Open）。设计立场明确：缺钥 fail-fast 不降级、密文与密钥错误不可区分——这两条是安全语义承诺。
+
+  # ── 仍在演进的包（Experimental：理由必填，升级风险自负）──
+  - pkg: pii
+    level: Stable
+    since: v0.60.0
+    reason: PII 价值面检测与打码（大陆手机号 + 18 位居民身份证四重校验），键与值走同一条判定面。判据已定型：宁可漏打不可错打、身份证四重校验、缺省 mask 保长度。实测消费方 oekit 侧 argus-service（internal/argusctx/pii_mask.go）+ 跨 org 4 处（goagent-kernel 亦 import）——不是零消费件。
+  - pkg: subhub
+    level: Experimental
+    since: v0.60.0
+    reason: 快照式订阅表的唯一实现（pii/guardset/eventbus/netguard 共用）。判据面（copy-on-write 发布 / 句柄单调 / 通知在锁外 / 回调 panic 隔离）是并发正确性承诺，但并发数据结构本身仍会改；实测消费方 oekit 侧 argus-service + 跨 org 4 处（guardx/netguard、goagent-kernel）。
+  - pkg: auditchain
+    level: Experimental
+    since: v0.60.0
+    reason: append-only 审计哈希链纯计算内核（canonical 字段序单源 + sha256 链 + verify 首断点即停），v0.49.0 起立包。当前无 pkg 侧下游消费方（实测 0），等待 bianque 接手——先标不承诺兼容，接手后再转 Stable。
+  - pkg: canon
+    level: Experimental
+    since: v0.60.0
+    reason: 策略面规范形指纹（canonical→版本哈希 + facet diff），v0.50.0 起立包。当前无下游消费方（实测 0）——「已上架待取货」的件，先标不承诺兼容。
+  - pkg: tarx
+    level: Experimental
+    since: v0.60.0
+    reason: 目录 tar 传输三件套（Scan/Write/Extract + sha256 manifest），v0.42.0 起立包。Zip Slip 穿越条目「跳过并点名、绝不写 root 之外」是对外安全承诺，故不因无消费方而降级其安全语义；但接口面仍在等 jumpserver-exec 切换收口，先标 Experimental。
+  - pkg: bloomx
+    level: Experimental
+    since: v0.60.0
+    reason: 进程内布隆过滤器（Test 返回 false 表示一定不存在），实测无下游消费方（0）——预投放件，先标不承诺兼容。
+  - pkg: strmap
+    level: Experimental
+    since: v0.60.0
+    reason: GC 友好的只读字符串 map（键打包 + int32 槽位索引 + maphash 种子），实测无下游消费方（0）——预投放件，先标不承诺兼容。
+  - pkg: enumx
+    level: Experimental
+    since: v0.60.0
+    reason: 枚举注册表（确定性顺序的 All/Values/解析），实测无下游消费方（0）——预投放件，先标不承诺兼容。
+  - pkg: cli
+    level: Experimental
+    since: v0.60.0
+    reason: 框架无关子命令分发原语（不读 os.Args、不调 os.Exit），实测消费方 oagentkit 侧 11 处。接口面仍随宿主接入反馈调整（输出流给法、退出码约定），先标 Experimental。
+  - pkg: config
+    level: Experimental
+    since: v0.60.0
+    reason: 启动期静态配置加载管线（yaml+env 覆盖+必填汇总校验+敏感字段脱敏 dump），实测消费方 oekit 2 处。加载形态随宿主配置源扩展还会变。
+  - pkg: pack
+    level: Experimental
+    since: v0.60.0
+    reason: 迁移包容器原语（zip + manifest + JSONL 流式读写 + Inspect 体检），实测无下游消费方（0）；格式版本还会随真实迁移场景增补。
+  - pkg: resumable
+    level: Experimental
+    since: v0.60.0
+    reason: 分片上传/断点续传会话面（CAS 进度 + 合并抢占 + 双源对账 + 孤儿清扫），v0.44.0 起立包。ChunkStore 存储后端接口面待第二个实现验证。
+  - pkg: sse
+    level: Experimental
+    since: v0.60.0
+    reason: 游标回放应答器（订阅先于回放去重 + 心跳注释帧 + 慢消费者断流自愈），v0.49.0 起立包。当前无下游消费方（0），帧协议面还会随宿主接入调整。
+  - pkg: webhook
+    level: Experimental
+    since: v0.60.0
+    reason: webhook 签约原语族（收侧验签 + 发侧签名的字段约定单源），v0.38.0 起立包。实测无下游消费方（0）——预投放件，先标不承诺兼容。
+  - pkg: bufiox
+    level: Experimental
+    since: v0.60.0
+    reason: 缓冲 I/O 原语，实测无下游消费方（0）——预投放件，先标不承诺兼容。
+
+  # ── internal 内部件（Experimental：无对外兼容承诺，登记以保覆盖完整）──
+  - pkg: internal/logkv
+    level: Experimental
+    since: v0.60.0
+    reason: internal 内部件，Go 可见性规则已挡住外部引用，无对外承诺；登记只为「清单覆盖全部生产包」判据不留暗角。
+  - pkg: internal/singleflight
+    level: Experimental
+    since: v0.60.0
+    reason: internal 内部件（singleflight 契约实现），Go 可见性规则已挡住外部引用，无对外承诺；登记只为「清单覆盖全部生产包」判据不留暗角。
+  - pkg: cache/cachetest
+    level: Experimental
+    since: v0.60.0
+    reason: cache 的契约测试套件（Run 真实时间 + RunWithClock 假时钟确定性 TTL 边界），随场景扩展；是对下游实现方的验收依据但场景集本身只增不减。

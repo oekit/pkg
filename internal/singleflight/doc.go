@@ -39,4 +39,6 @@
 //	 2. caller 执行 fn，完成后 close(ready) 广播通知
 //	 3. 其他 goroutine (waiter) 通过 <-ready 等待，读取共享结果
 //	 4. close 提供 happens-before 保证，字段读取无 data race
+//
+// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
 package singleflight

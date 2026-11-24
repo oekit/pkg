@@ -69,4 +69,6 @@
 //     Stat 是最终一致的字节数；最终一致存储上「写后存活确认」可能把
 //     读旧值判成残缺（ErrChunkSize）——分片幂等重传即可修复，不影响
 //     状态机正确性。
+//
+// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
 package resumable

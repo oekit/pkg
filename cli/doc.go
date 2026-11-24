@@ -67,4 +67,6 @@
 //   - App.Run 在「缺少子命令」或「未知子命令」时把用法写到 stderr 并返回
 //     ExitUsage（错误路径的诊断信息一律走 stderr，stdout 只留给命令体的
 //     正常输出，便于管道）
+//
+// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
 package cli
