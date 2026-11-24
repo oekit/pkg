@@ -292,3 +292,49 @@ func TestSymlinkExtractWithoutOptionSkipped(t *testing.T) {
 		t.Fatalf("应点名 link.txt，实为 %v", st.SkippedNames)
 	}
 }
+
+// TestScanSymlinkOption 预扫的链接口径与写侧对称（不开=跳过，开=计入链接）。
+func TestScanSymlinkOption(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows 无符号链接语义")
+	}
+	root := symlinkTree(t)
+	if err := os.Symlink("a.txt", filepath.Join(root, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	// 不开选项：链接算 Skipped
+	st, err := Scan(root)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if st.Symlinks != 0 {
+		t.Fatalf("不开选项时 Symlinks 应为 0，实为 %d", st.Symlinks)
+	}
+	if st.Skipped != 1 {
+		t.Fatalf("不开选项时链接应计入 Skipped（=1），实为 %d", st.Skipped)
+	}
+
+	// 开选项：链接计入 Symlinks，且不再计入 Skipped
+	st2, err := Scan(root, WithScanSymlinks())
+	if err != nil {
+		t.Fatalf("Scan with opts: %v", err)
+	}
+	if st2.Symlinks != 1 {
+		t.Fatalf("开选项时 Symlinks 应为 1，实为 %d", st2.Symlinks)
+	}
+	if st2.Skipped != 0 {
+		t.Fatalf("开选项时链接不应再计入 Skipped，实为 %d", st2.Skipped)
+	}
+
+	// 关键：开选项的预扫口径必须与开选项的写侧一致（预扫说传，写侧就真传）
+	var buf bytes.Buffer
+	ws, err := Write(&buf, root, WithSymlinks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws.Symlinks != st2.Symlinks || ws.Skipped != st2.Skipped ||
+		ws.Files != st2.Files || ws.Bytes != st2.Bytes {
+		t.Fatalf("预扫与写侧口径不一致：scan=%+v write=%+v", st2, ws)
+	}
+}
