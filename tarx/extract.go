@@ -17,6 +17,30 @@ import (
 	"github.com/oekit/pkg/errors"
 )
 
+// ExtractOption Extract 的构造选项（仓规禁裸 Option）。
+type ExtractOption func(*extractConfig)
+
+type extractConfig struct {
+	symlinks bool
+}
+
+// WithSymlinkExtract 落地符号链接条目（TypeSymlink）。
+//
+// **默认不落地**：符号链接默认跳过并计数（见 Extract 的防线清单）。开启后
+// 除「链接目标逃逸 root」的判定外，其余防线（条目名穿越、既有 symlink 链、
+// 非常规类型）一条不减。
+//
+// 逃逸判定（开启链接语义后新增的面）：链接目标按**相对链接解析到 root 内**
+// 的口径校验——绝对路径目标与解析后落在 root 之外的相对目标一律拒收
+// （Skipped 计数 + 点名）。理由：归档里的一个指向 /etc/passwd 的链接落地后
+// 就是「一个随时可读系统文件的入口」，而收件人拿到的是链接不是数据。
+//
+// ⚠️ 开启后**配对开启写侧的 WithSymlinks**——只收不写没有意义，只写不收
+// 会让链接在流里存在、落地时被跳过，两侧口径分裂。
+func WithSymlinkExtract() ExtractOption {
+	return func(cfg *extractConfig) { cfg.symlinks = true }
+}
+
 // Extract 从 tar 流解包到 root 目录，返回落地口径的 Stats。
 //
 // 防线（按遇序逐条目判定）：
@@ -36,7 +60,9 @@ import (
 //   - 常规文件 create-or-truncate 写入（mode 取 header，umask 照常生效）；
 //     父目录缺失时按需补建（合法流可能子先于父出现）；
 //   - 目录条目 MkdirAll（`.` 条目视作 root 本身，不计数不报错）；
-//   - 其余类型（symlink/hardlink/char/block/fifo/未知）跳过并计数点名。
+//   - 符号链接条目默认跳过并计数点名；**开启 WithSymlinks 后**按链接目标
+//     的逃逸校验判定（见 WithSymlinks 的说明）；
+//   - 其余类型（hardlink/char/block/fifo/未知）跳过并计数点名。
 //
 // 错误语义：tar 流损坏/截断（含 Write 出错未写结束块的流）原样上抛——
 // 已落地的条目保留（调用方按 staging 策略处置），Stats 反映死前落地量；
@@ -45,7 +71,14 @@ import (
 // 已知边界：symlink 链检查（Lstat）与实际写入之间存在检查窗口——解包期间
 // **并发修改 root 内容**的场景超出防线范围（威胁模型是「归档不可信」，不是
 // 「目标目录同时被本地进程改写」）；每轮新建 staging 目录是既有建议。
-func Extract(r io.Reader, root string) (Stats, error) {
+func Extract(r io.Reader, root string, opts ...ExtractOption) (Stats, error) {
+	var cfg extractConfig
+	for _, opt := range opts {
+		if opt == nil {
+			panic("tarx: ExtractOption 为 nil（fail-fast，仓规总则①）")
+		}
+		opt(&cfg)
+	}
 	var st Stats
 	root = filepath.Clean(root)
 	tr := tar.NewReader(r)
@@ -86,11 +119,67 @@ func Extract(r io.Reader, root string) (Stats, error) {
 			if err := extractFile(tr, target, fs.FileMode(hdr.Mode)&os.ModePerm, &st); err != nil {
 				return st, err
 			}
+		case tar.TypeSymlink:
+			// 符号链接：默认拒收；开启 WithSymlinks 后按链接目标逃逸判定。
+			if !cfg.symlinks {
+				st.skip(name)
+				continue
+			}
+			if !linkTargetWithinRoot(root, target, hdr.Linkname) {
+				st.skip(name)
+				continue
+			}
+			if err := extractSymlink(target, hdr.Linkname); err != nil {
+				return st, err
+			}
+			st.Symlinks++
 		default:
-			// symlink/hardlink/char/block/fifo/未知类型：一律拒收
+			// hardlink/char/block/fifo/未知类型：一律拒收
 			st.skip(name)
 		}
 	}
+}
+
+// linkTargetWithinRoot 判定「落在 target 处的符号链接、指向 linkname」
+// 是否安全——链接目标不得逃逸 root。
+//
+// 口径：链接目标按**相对链接语义**解析（相对链接相对于链接自身所在目录
+// target 的父目录；绝对链接按绝对路径判）。
+//
+//   - 绝对路径目标（/etc/passwd）⇒ 一律逃逸 ⇒ 拒收。理由：落地后就是
+//     一个随时可读系统文件的入口，而收件人拿到的是链接不是数据；
+//   - 相对目标解析后落在 root 之外（../../etc/passwd）⇒ 逃逸 ⇒ 拒收；
+//   - 相对目标解析后落在 root 之内 ⇒ 放行（含「指向尚不存在的路径」——
+//     悬空链接是合法形态，不因目标缺失而拒收）。
+//
+// ⚠️ 只判**词法**逃逸，不解析目标路径里的中间 symlink（那需要遍历 root
+// 之外的文件系统，超出「归档不可信」的威胁模型——不可信的是归档内容，
+// 不是目标机上的文件系统）。
+func linkTargetWithinRoot(root, target, linkname string) bool {
+	if linkname == "" {
+		return false
+	}
+	if filepath.IsAbs(linkname) {
+		return false // 绝对目标一律逃逸
+	}
+	resolved := filepath.Clean(filepath.Join(filepath.Dir(target), linkname))
+	return withinDir(root, resolved)
+}
+
+// extractSymlink 落地单个符号链接（父目录按需补建；已存在的同名条目先移除
+// ——覆盖式升级场景下目标处可能残留旧文件或旧链接，直接建会失败）。
+//
+// 用 os.Symlink（不走 Lstat 解析）——创建时若父目录里已有 symlink，内核会
+// 沿它解析，可能写到 root 之外。父目录的 symlink 检查由 symlinkInChain 在
+// 条目层做（同一道防线，位置在写入之前）。
+func extractSymlink(target, linkname string) error {
+	if err := osEnsureDir(filepath.Dir(target)); err != nil {
+		return err
+	}
+	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Symlink(linkname, target)
 }
 
 // symlinkInChain 报告 target 相对 root 的路径链上是否混入 symlink（#417），
