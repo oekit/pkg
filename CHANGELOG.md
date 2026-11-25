@@ -2,6 +2,10 @@
 
 > 本文件由 `matrix-tools/scripts/gen_changelogs.py` 从 git 历史生成，按 tag 切段、取每段内的 conventional commit 渲染。
 
+## [v0.61.5] — 2026-11-26
+
+- 修(procx): Windows 编译修复——procCloseHandle.Call 三值赋值 / errors.Join→Append（org 一套 errors 包纪律）/ stdlib errors 误 import。该文件自 procx 收编（#592）起只在 windows 构建面编译，本仓 CI 不跑 GOOS=windows ⇒ 静默存在至今；kernel 的 crossbuild 门禁（GOOS=windows）是第一个踩中它的门禁。api 零变化（patch）。
+
 ## [v0.61.4] — 2026-11-24
 
 - docs: CHANGELOG 补齐 v0.61.2/v0.61.3 版本节（tag 快照不可变，本版补上）——并把该节措辞彻底避开矩阵版本索引的触发词表，否则整条会被误判成变更影响条目 ⇒ BOM 快照多出一条不存在的记录（且随各仓 tag 快照的 CHANGELOG 版本不同而时绿时红）。
