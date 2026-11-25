@@ -9,7 +9,7 @@
 // 调用方（LLM 网关、第三方开放平台）复用，不把微服务全家桶拖进依赖树。
 // 收编自旧单仓 agentkit/httpx（v0.10.41 起单源在此；旧单仓已拆为 oagentkit/*，
 // 现由 oagentkit/llm 消费本包）。
-// 生命周期: Stable——只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；改签名、改语义、改默认值、删导出符号都算 breaking，判定规则与变更流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml。
+// 生命周期: Stable——同一 minor 线内只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；跨 minor 的破坏性变更须先降级并公告（判定规则与流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml）。
 package httpjson
 
 import (

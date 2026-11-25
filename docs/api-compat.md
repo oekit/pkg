@@ -60,7 +60,7 @@ pkg 是**零第三方依赖仓**（CI 强制 `go list -m all` 只允许本模块
 
 | 级别 | 允许什么 | 承诺什么 |
 |---|---|---|
-| **Stable** | 只允许 additive：新增导出符号、新增方法（且给零值默认实现）、新增错误值 | 上面四类 breaking 一律不得发生。改既有导出面 ⇒ 先在本文件与清单里降级为 Experimental，并在 CHANGELOG 写 BREAKING 段 |
+| **Stable** | 同一 minor 线内只允许 additive：新增导出符号、新增方法（且给零值默认实现）、新增错误值 | 同一 minor 线内不得出现上面四类 breaking。跨 minor 需要破坏性变更时 ⇒ 先在本文件与清单里降级为 Experimental 并公告，再改 |
 | **Experimental** | 可随时改、删、拆 | **不承诺任何兼容**，升级风险自负 |
 | **Deprecated** | 本身仍按 Stable 兼容 | 必须给替代符号与迁移路径；删除只发生在 minor 版本边界，且 CHANGELOG 必须带 BREAKING 段 |
 
@@ -68,15 +68,48 @@ pkg 是**零第三方依赖仓**（CI 强制 `go list -m all` 只允许本模块
 
 每一档定级背后有两把尺：
 
-1. **实测下游消费方计数**——该包在 oekit 矩阵与跨 org 仓里被 import 的处数。
+1. **实测下游消费方计数**——该包在 oekit 矩阵与跨 org 仓里被 import 的
+   **消费方仓数 + import 文件数**（两个数都写进清单 reason）。
    消费方为零的包没有「必须兼容」的既成事实，先标 Experimental，
-   有下游接手时再转 Stable（这正是「已上架待取货」件的处置口径）；
+   有下游接手时再转 Stable（这正是「已上架待取货」件的处置口径）。
+
+   ⚠ **计数必须含私有仓**：只列公开仓会把私有消费方整体漏掉——yi-nology/bianque
+   是私有仓，匿名列举看不见它，⇒「实测 0 消费」可能是「没扫到」而不是
+   「真没有」。换算方法写在 `api-lifecycle.yaml` 头部（候选集 = go.mod 里
+   require 了本包的仓 ⇒ 逐仓扫 HEAD 源码的 import），可复算。
 2. **历史 breaking 次数与判据成熟度**——判据还在随宿主反馈调整的包，
    标 Stable 就是给自己套一个兑现不了的枷锁。
 
-**注意**：本仓处于 0.x，SemVer 允许 minor 内 breaking。分级承诺的是
-「什么时候可以改」，不是「永远不能改」——降级（Stable → Experimental）
-本身是允许的合法动作，前提是走完本文件的降级流程并公告。
+**注意**：本仓处于 0.x，SemVer 允许 minor 内 breaking——**但那是仓库级的
+默认口径，Stable 级是本仓自己加的更严承诺**：Stable 包在 minor 线内不得
+breaking，跨 minor 要改就先降级并公告。两者不矛盾——0.x 的宽容度只对
+Experimental / Deprecated 生效；Stable 的兑现方式是**先降级**，降级
+（Stable → Experimental）本身是允许的合法动作，前提是走完本文件的降级流程
+并公告。分级承诺的是「什么时候可以改」，不是「永远不能改」。
+
+## 清单字段口径（api-lifecycle.yaml）
+
+| 字段 | 含义 |
+|---|---|
+| `pkg` | 包路径（相对仓根；嵌套包用 `/` 分隔） |
+| `level` | 三档级别之一；必须与该包 package doc 的 `// 生命周期: <级别>` 标记一致 |
+| `since` | **当前级别**的承诺自哪一版起生效（消费者视角：这个包的兼容承诺从哪个版本开始算数）。机制本身落地于 v0.61.0；此前已在承诺中的包按其原定级版本记；新晋升的包记晋升版本 |
+| `reason` | 定级理由，每条必填——没有理由的承诺无从复核 |
+| `replacement` | 仅 Deprecated 条目可带；形态 `github.com/oekit/pkg/<包>.<符号>`，且该符号必须真实存在（门禁校验） |
+
+## 晋升流程（Experimental → Stable）
+
+1. 清单里该包的 `level` 改 Stable，`since` 记**当前级别生效的版本**，
+   `reason` 写明「凭什么」（通常是「已有真实下游接手」，并点名消费方）；
+2. 包注释标记同步改（门禁会校验两者一致）；
+3. 本文件补一段该包的晋升说明；
+4. CHANGELOG 写明晋升版本与影响面。
+
+**晋升门槛**（与「定级不靠拍脑袋」的两把尺同源，缺一不可）：
+
+- 有**真实下游消费方**——实测 import 计数 ≥ 1，且是**生产代码**消费
+  （只在 `_test.go` 里出现不算宿主接入）；
+- 判据面**已定型**——清单 reason 里不再有「还会随…调整 / 增补」这类自述。
 
 ## 降级流程（Stable → Experimental）
 
@@ -88,6 +121,17 @@ pkg 是**零第三方依赖仓**（CI 强制 `go list -m all` 只允许本模块
 
 **降级不是甩锅**——降级后仍要尽量给消费方留迁移窗口；只有在判据本身
 正在重构、任何中间态都会误导调用方时，才允许直接改行为并公告。
+
+## 已发生的级别变更（留痕）
+
+| 版本 | 包 | 变更 | 依据 |
+|---|---|---|---|
+| v0.61.0 | 全部 42 个生产包 | 首次定级（机制落地） | 逐包核「实测下游消费方 + 历史 breaking 次数」两把尺 |
+| v0.61.5 | auditchain | Experimental → Stable | 下游 yi-nology/bianque 已切本包并合入（bianque#6） |
+| v0.61.5 | tarx | Experimental → Stable | 下游 yi-nology/jumpserver-exec 与 yi-nology/git-ferry-core 已切本包并合入（jumpserver-exec#34） |
+| v0.61.5 | sse | Experimental → Stable | oekit/hertz 的 SSE 端点已复用本包——实测消费方，原记「0 消费」有误 |
+| v0.61.5 | webhook | Experimental → Stable | yi-nology/go-git-platform 与 yi-nology/gopkg 已消费本包——实测消费方，原记「0 消费」有误 |
+| v0.61.5 | bufiox | Experimental → Stable | yi-nology/go-git-platform 已消费本包——实测消费方，原记「0 消费」有误 |
 
 ## 新增包的定级纪律
 

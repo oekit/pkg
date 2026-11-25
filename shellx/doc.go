@@ -38,5 +38,5 @@
 // 与 pathx 的关系是两个不同的问题：pathx 问「这个路径合法吗」（越界即拒绝），
 // shellx 问「这个字符串怎么写进命令行才不会被 shell 解释」。两者互补，
 // 路径类输入通常两道都要过。
-// 生命周期: Stable——只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；改签名、改语义、改默认值、删导出符号都算 breaking，判定规则与变更流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml。
+// 生命周期: Stable——同一 minor 线内只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；跨 minor 的破坏性变更须先降级并公告（判定规则与流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml）。
 package shellx
