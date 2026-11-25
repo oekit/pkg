@@ -17,5 +17,5 @@
 // 设计参考 cloudwego/gopkg/bufiox（Apache-2.0），本实现为独立重写（MIT，
 // oekit/pkg）：接口语义一致；去掉了对 bytedance/gopkg mcache/dirtmake 的依赖，
 // 缓冲改用普通分配（GC 回收，无池化归还需要跟踪）。
-// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
+// 生命周期: Stable——同一 minor 线内只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；跨 minor 的破坏性变更须先降级并公告（判定规则与流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml）。
 package bufiox

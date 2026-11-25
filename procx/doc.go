@@ -130,5 +130,5 @@
 // 两族共享同一环境纪律单源（[ChildEnv]/[InheritAllExcept]）与同一进程组
 // 落地（group_*.go）；差异只在装配与错误口径。选型：spawn「别人投递来待
 // 执行的代码」→ RunDetailed；托管「自己写的可信子进程」→ Run。
-// 生命周期: Stable——只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；改签名、改语义、改默认值、删导出符号都算 breaking，判定规则与变更流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml。
+// 生命周期: Stable——同一 minor 线内只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；跨 minor 的破坏性变更须先降级并公告（判定规则与流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml）。
 package procx

@@ -13,7 +13,7 @@
 # 为什么清单住本仓、门禁住 matrix-tools：
 #   pkg 是**零第三方依赖仓**（CI 强制 go list -m all 只 1 行），门禁若用
 #   yaml.v3 解析本文件就会破这条红线（kernel 侧可以，它有 go.mod 依赖）。
-#   ⇒ 解析与判定放治理仓 matrix-tools（Python + pyyaml），本仓只留声明面，
+#   ⇒ 解析与判定放治理仓 matrix-tools（Python + 行解析），本仓只留声明面，
 #      消费方零依赖不受影响。这是 oekit/oekit 的 BOM 门禁同一范式：
 #      「判据脚本住在治理仓，本仓只有产物」。
 #
@@ -21,192 +21,209 @@
 #
 #   breaking = 改已有导出符号的签名 / 改可观测语义 / 改默认值 / 删导出符号。
 #   - Experimental：可随时改、删、拆，不承诺任何兼容；升级风险自负。
-#   - Stable：只允许 additive（新增导出符号、新增方法且给零值默认实现、
-#     新增错误值）；上述四类 breaking 一律不得发生。
+#   - Stable：**同一 minor 线内**只允许 additive（新增导出符号、新增方法且给
+#     零值默认实现、新增错误值）；跨 minor 需要破坏性变更时，先走降级流程
+#     （降为 Experimental + 公告）再改——**降级是承诺的兑现方式，不是违约**。
 #   - Deprecated：本身仍按 Stable 兼容，但必须给替代符号与迁移路径；
 #     删除只发生在 minor 版本边界，且 CHANGELOG 必须带 BREAKING 段。
 #
+# 字段口径：
+#   - pkg：包路径（相对仓根；嵌套包用 / 分隔）。
+#   - level：三档级别之一，必须与该包 package doc 的「// 生命周期: <级别>」标记一致。
+#   - since：**当前级别**的承诺自哪一版起生效（消费者视角：这个包的兼容承诺
+#     从哪个版本开始算数）。机制整体落地于 v0.61.0；此前已在承诺中的包按其
+#     原定级版本记（pii / subhub 的 v0.57.0）；新晋升的包记晋升版本。
+#     ⚠ 该版本必须是**已发布或本次修订即将发布**的版本——本次修订的五个晋升包
+#     记 v0.61.5（下一个 pkg 发布版携带本次修订）；若下一个发布版不是 v0.61.5，
+#     须同步改这 5 条 since（门禁只校形态不校存在性 ⇒ 这一条靠发版时的人盯）。
+#   - reason：定级理由，每条必填——定级是一份承诺，没有理由的承诺无从复核。
+#   - replacement：仅 Deprecated 条目可带；形态 github.com/oekit/pkg/<包>.<符号>，
+#     且该符号必须真实存在（门禁校验，判据对齐 kernel 的 checkReplacements）。
+#
 # 纪律：
 #   - 新增生产包 ⇒ 本清单同步登记 + 包注释打标记；
-#   - reason 每条必填——定级是一份承诺，没有理由的承诺无从复核；
-#   - **定级不靠拍脑袋**：本轮逐包核过「实测下游消费方计数 + 历史 breaking
-#     次数」两把尺（消费方口径见 reason 内注），消费方为零且无承诺的包
-#     一律 Experimental——「已上架待取货」的件先标明不承诺兼容，有下游
-#     接手时再转 Stable。
+#   - **定级不靠拍脑袋**：逐包核「实测下游消费方 + 历史 breaking 次数」两把尺，
+#     消费方为零且无承诺的包一律 Experimental——「已上架待取货」的件先标明不
+#     承诺兼容，有下游接手时再转 Stable。
+#
+# 「实测消费方」的口径（v0.61.5 起固化，**换算方法写在下面，可复算**）：
+#   - 候选集 = go.mod 里 require 了 github.com/oekit/pkg 的仓（import 的必要
+#     条件）——列举用 GitHub API 且 type=all（**含私有仓**；只列公开仓会把私有
+#     消费方整体漏掉：yi-nology/bianque 是私有仓，匿名列举看不见它）；
+#   - 逐仓扫 HEAD 源码里 github.com/oekit/pkg/<子包> 的 import ⇒ 包级消费面；
+#   - 计数单位是「消费方仓数」+「import 文件数」，两个数都写进 reason。
 
 version: 1
 
 packages:
-  # ── 零依赖小判据（Stable：判据已冻结的单一真相）──
+  # ── Stable（30 个）：有真实下游 + 判据面已定型 ──
   - pkg: errors
     level: Stable
-    since: v0.60.0
-    reason: New/As/Is/Unwrap 与 stdlib 同型透传，下游哨兵/As 判定单 import 即可。实测消费方 oekit 矩阵 56 处 + oagentkit/yi-nology 侧 421 处引用，是全矩阵最广的依赖面——类型同一性红线必须可执行。
+    since: v0.61.0
+    reason: New/As/Is/Unwrap 与 stdlib 同型透传，下游哨兵/As 判定单 import 即可。实测消费方 33 个仓（864 处 import）——全矩阵最广的依赖面（yi-nology/goagent-kernel 一仓 287 处、yi-nology/goagent-runtime 105 处）。类型同一性红线必须可执行。
   - pkg: convert
     level: Stable
-    since: v0.60.0
-    reason: 基础类型转换原语，判据是「转换语义只增不改」，消费方 oagentkit 侧 42 处。
+    since: v0.61.0
+    reason: 基础类型转换原语，判据是「转换语义只增不改」。实测消费方 8 个仓（57 处 import；yi-nology/jumpserver-mgmt 23 处、yi-nology/code-review-service 15 处、yi-nology/git-ferry 6 处）。
   - pkg: encoding
     level: Stable
-    since: v0.60.0
-    reason: JSON 编解码门面，auditchain 的 Sha256Hex 等下游单源依赖它。实测消费方 14 处。注意 v0.56.0 起五入口分族（float64 vs json.Number）——该轮 breaking 已完成对外公告，判据面此后冻结。
+    since: v0.61.0
+    reason: JSON 编解码门面，auditchain 的 Sha256Hex 等下游单源依赖它。实测消费方 11 个仓（33 处 import；yi-nology/bianque 10 处、yi-nology/goagent-kernel 8 处）。注意 v0.56.0 起五入口分族（float64 vs json.Number）——该轮 breaking 已完成对外公告，判据面此后冻结。
   - pkg: stringx
     level: Stable
-    since: v0.60.0
-    reason: 字符串工具集（trie 替换器 / Masker 正则脱敏），实测消费方 32 处。Masker 的「保留首尾各 ≤4 字符、不可复原」是脱敏语义承诺的一部分。
+    since: v0.61.0
+    reason: 字符串工具集（trie 替换器 / Masker 正则脱敏），实测消费方 19 个仓（70 处 import）——消费面广度仅次于 errors。Masker 的「保留首尾各 ≤4 字符、不可复原」是脱敏语义承诺的一部分。
   - pkg: slicex
     level: Stable
-    since: v0.60.0
-    reason: 切片工具集，实测消费方 42 处，判据面多年未变。
+    since: v0.61.0
+    reason: 切片工具集，实测消费方 9 个仓（51 处 import；yi-nology/code-review-service 19 处、yi-nology/jumpserver-mgmt 10 处、yi-nology/goagent-kernel 8 处），判据面多年未变。
   - pkg: mathx
     level: Stable
-    since: v0.60.0
-    reason: 数值原语（Unstable 单边向上抖动等），实测消费方 11 处。
+    since: v0.61.0
+    reason: 数值原语（Unstable 单边向上抖动等），实测消费方 6 个仓（12 处 import；oagentkit/llm 3 处）。
   - pkg: pathx
     level: Stable
-    since: v0.60.0
-    reason: 路径判据原语，实测消费方 oekit 3 处 + 跨 org 9 处；filepath 语义归一后长期未改。
+    since: v0.61.0
+    reason: 路径判据原语，实测消费方 11 个仓（30 处 import；yi-nology/git-ferry-core 8 处、yi-nology/git-ferry 5 处、oekit/middleware 5 处）；filepath 语义归一后长期未改。
   - pkg: jsonrepair
     level: Stable
-    since: v0.60.0
-    reason: 宽容 JSON 解析 + 围栏剥离单源（StripCodeFence），实测消费方 17 处。v0.23.1 起围栏口径单源化后「四处各抄一份」的问题已收敛。
+    since: v0.61.0
+    reason: 宽容 JSON 解析 + 围栏剥离单源（StripCodeFence），实测消费方 8 个仓（25 处 import；yi-nology/argus-service 8 处）。v0.23.1 起围栏口径单源化后「四处各抄一份」的问题已收敛。
   - pkg: httpjson
     level: Stable
-    since: v0.60.0
-    reason: HTTP 语义 JSON 工具（含 Retry-After 门控），实测消费方 12 处。
+    since: v0.61.0
+    reason: HTTP 语义 JSON 工具（含 Retry-After 门控），实测消费方 10 个仓（19 处 import；oagentkit/llm 5 处、yi-nology/argus-service 3 处）。
   - pkg: procx
     level: Stable
-    since: v0.60.0
-    reason: 子进程治理三件套（进程树终止 / 最小环境 / 输出封顶），实测消费方 17 处，含 oagentkit/runtime 同款纪律。SIGTERM→宽限→SIGKILL 的收场语义与 Windows 降级路径是对外承诺。
+    since: v0.61.0
+    reason: 子进程治理三件套（进程树终止 / 最小环境 / 输出封顶），实测消费方 5 个仓（19 处 import；oagentkit/tools 10 处、oagentkit/runtime 与 oagentkit/mcpkit 各 3 处）。SIGTERM→宽限→SIGKILL 的收场语义与 Windows 降级路径是对外承诺。
   - pkg: shellx
     level: Stable
-    since: v0.60.0
-    reason: Shell 词法事实面（Analyze 三类事实分离），实测消费方 16 处。v0.44.0 起「判不了就报错不尽力解析」是安全取向承诺。
+    since: v0.61.0
+    reason: Shell 词法事实面（Analyze 三类事实分离），实测消费方 6 个仓（25 处 import；yi-nology/jumpserver-exec 7 处、yi-nology/go-git-platform 6 处）。v0.44.0 起「判不了就报错不尽力解析」是安全取向承诺。
   - pkg: urlguard
     level: Stable
-    since: v0.60.0
-    reason: 出站 SSRF 防护原语（CheckURL + DialFunc TOCTOU 闭合），实测消费方 oekit 5 处 + 跨 org 2 处，httpx 的 WithDialFunc 一行组合依赖它。
+    since: v0.61.0
+    reason: 出站 SSRF 防护原语（CheckURL + DialFunc TOCTOU 闭合），实测消费方 3 个仓（7 处 import；oekit/httpx 3 处、oagentkit/guardx 与 oekit/core 各 2 处），httpx 的 WithDialFunc 一行组合依赖它。
   - pkg: cache
     level: Stable
-    since: v0.60.0
-    reason: 缓存接口面（CacheAside + LocalCache + SingleFlightCache + Checker），实测消费方 oekit 16 处 + 跨 org 7 处。v0.43.0 起 Checker 构造期 fail-fast 与 failTTL 不传染的语义是对外承诺。
+    since: v0.61.0
+    reason: 缓存接口面（CacheAside + LocalCache + SingleFlightCache + Checker），实测消费方 11 个仓（37 处 import；oekit/data 14 处、yi-nology/bianque 5 处、oekit/redisx 4 处）。v0.43.0 起 Checker 构造期 fail-fast 与 failTTL 不传染的语义是对外承诺。
   - pkg: pagination
     level: Stable
-    since: v0.60.0
-    reason: 分页换算 + 服务级 Policy 口径 + Walk/WalkEach 翻页聚合，实测消费方 oekit 14 处 + 跨 org 6 处。v0.39.0 的 WalkEach 形参带 ctx 是已公告的 breaking，此后判据冻结。
+    since: v0.61.0
+    reason: 分页换算 + 服务级 Policy 口径 + Walk/WalkEach 翻页聚合，实测消费方 11 个仓（33 处 import；oekit/gormx 9 处、oekit/data 与 yi-nology/code-review-service 各 4 处）。v0.39.0 的 WalkEach 形参带 ctx 是已公告的 breaking，此后判据冻结。
   - pkg: distlock
     level: Stable
-    since: v0.60.0
-    reason: 后端中立分布式锁契约单源（Locker 接口 + 哨兵错误），实测消费方 oekit 8 处；redisx/etcdx 的 distlock 都改为消费本包，跨后端 errors.Is 分类正确性靠这里的接口同一性保证。
+    since: v0.61.0
+    reason: 后端中立分布式锁契约单源（Locker 接口 + 哨兵错误），实测消费方 3 个仓（12 处 import；oekit/redisx 6 处、oekit/etcdx 5 处）；redisx/etcdx 的 distlock 都改为消费本包，跨后端 errors.Is 分类正确性靠这里的接口同一性保证。
   - pkg: reflectx
     level: Stable
-    since: v0.60.0
-    reason: 反射共享原语单源（DeepCopyValue 深拷贝 + 指针环防护），实测消费方 oekit 1 处。core/config 与 pkg/pagination 两侧平行实现已收敛于此，判据面冻结。
+    since: v0.61.0
+    reason: 反射共享原语单源（DeepCopyValue 深拷贝 + 指针环防护），实测消费方 2 个仓（2 处 import；oekit/core 与 oekit/registry 各 1 处）。core/config 与 pkg/pagination 两侧平行实现已收敛于此，判据面冻结。
   - pkg: timex
     level: Stable
-    since: v0.60.0
-    reason: 时间段边界七对 + 多模式替换器，判据面长期未变。
+    since: v0.61.0
+    reason: 时间段边界七对 + 多模式替换器，实测消费方 7 个仓（17 处 import；yi-nology/bianque 4 处、oekit/timertask 3 处），判据面长期未变。
   - pkg: timex/cron
     level: Stable
-    since: v0.60.0
-    reason: cron 表达式判据子包，实测消费方 oekit 3 处；表达式语义与 timex 主包口径同源。
+    since: v0.61.0
+    reason: cron 表达式判据子包，实测消费方 3 个仓（6 处 import；oekit/timertask 3 处、yi-nology/git-ferry-core 2 处）；表达式语义与 timex 主包口径同源。
   - pkg: container
     level: Stable
-    since: v0.60.0
-    reason: 泛型容器（Set/Ring/Queue/SafeMap），v0.43.0 起 Ring 逻辑序归基（32 位平台不回绕负下标）是对外承诺。
+    since: v0.61.0
+    reason: 泛型容器（Set/Ring/Queue/SafeMap），实测消费方 5 个仓（15 处 import；yi-nology/go-git-platform 8 处、yi-nology/agent-memory 3 处）。v0.43.0 起 Ring 逻辑序归基（32 位平台不回绕负下标）是对外承诺。
   - pkg: contextx
     level: Stable
-    since: v0.60.0
-    reason: 上下文原语，判据面未变。
+    since: v0.61.0
+    reason: 上下文原语，实测消费方 11 个仓（40 处 import；oekit/concurrency 17 处、oekit/registry 6 处、oekit/network 5 处），判据面未变。
   - pkg: ctxscope
     level: Stable
-    since: v0.60.0
-    reason: 作用域判据原语，v0.37.0 起立包后判据冻结。
+    since: v0.61.0
+    reason: 作用域判据原语，实测消费方 1 个仓（4 处 import；yi-nology/git-ferry）。v0.37.0 起立包后判据冻结。
   - pkg: singleflighttest
     level: Stable
-    since: v0.60.0
-    reason: singleflight 共享契约测试套件，internal 与 concurrency 双侧引用；套件判定口径是下游实现方的验收依据。
+    since: v0.61.0
+    reason: singleflight 共享契约测试套件，internal 与 concurrency 双侧引用；实测消费方 1 个仓（1 处 import；oekit/concurrency）；套件判定口径是下游实现方的验收依据。
   - pkg: ptrx
     level: Stable
-    since: v0.60.0
-    reason: 指针泛型工具（Of / Deref 等），实测消费方 oagentkit 侧 19 处。零值语义冻结。
+    since: v0.61.0
+    reason: 指针泛型工具（Of / Deref 等），实测消费方 6 个仓（40 处 import；yi-nology/code-review-service 与 yi-nology/git-ferry 各 16 处）。零值语义冻结。
   - pkg: secretx
     level: Stable
-    since: v0.60.0
-    reason: 静态凭证信封加密原语（ParseKey / NewBox / Seal-Open）。设计立场明确：缺钥 fail-fast 不降级、密文与密钥错误不可区分——这两条是安全语义承诺。
-
-  # ── 仍在演进的包（Experimental：理由必填，升级风险自负）──
+    since: v0.61.0
+    reason: 静态凭证信封加密原语（ParseKey / NewBox / Seal-Open），实测消费方 4 个仓（5 处 import；yi-nology/zentao-max 2 处）。设计立场明确：缺钥 fail-fast 不降级、密文与密钥错误不可区分——这两条是安全语义承诺。
   - pkg: pii
     level: Stable
-    since: v0.60.0
-    reason: PII 价值面检测与打码（大陆手机号 + 18 位居民身份证四重校验），键与值走同一条判定面。判据已定型：宁可漏打不可错打、身份证四重校验、缺省 mask 保长度。实测消费方 oekit 侧 argus-service（internal/argusctx/pii_mask.go）+ 跨 org 4 处（goagent-kernel 亦 import）——不是零消费件。
+    since: v0.57.0
+    reason: PII 价值面检测与打码（大陆手机号 + 18 位居民身份证四重校验），键与值走同一条判定面。判据已定型：宁可漏打不可错打、身份证四重校验、缺省 mask 保长度。实测消费方 1 个仓（4 处 import；yi-nology/argus-service 的 internal/argusctx/pii_mask.go 与 internal/bootstrap/subsys.go）——不是零消费件。
+  - pkg: auditchain
+    level: Stable
+    since: v0.61.5
+    reason: append-only 审计哈希链纯计算内核（canonical 字段序单源 + sha256 链 + verify 首断点即停），v0.49.0 起立包。v0.61.0 首版清单定级 Experimental（当时实测 0 消费）；v0.61.5 起下游已接手——yi-nology/bianque 的 internal/repo/repo_auditlog.go 切本包并合入（bianque#6）——按本清单的晋升规则（「有下游接手时再转 Stable」）转 Stable。
+  - pkg: tarx
+    level: Stable
+    since: v0.61.5
+    reason: 目录 tar 传输三件套（Scan/Write/Extract + sha256 manifest），v0.42.0 起立包。Zip Slip 穿越条目「跳过并点名、绝不写 root 之外」是对外安全承诺，故不因消费面窄而降级其安全语义。v0.61.0 首版清单定级 Experimental（接口面等下游切换收口）；v0.61.5 起 yi-nology/jumpserver-exec（internal/repository/koko/transfer.go）与 yi-nology/git-ferry-core（executor/bundle.go）均已切本包并合入（jumpserver-exec#34）——接口面收口，转 Stable。
+  - pkg: sse
+    level: Stable
+    since: v0.61.5
+    reason: 游标回放应答器（订阅先于回放去重 + 心跳注释帧 + 慢消费者断流自愈），v0.49.0 起立包。v0.61.0 首版清单记「无下游消费方」有误——实测 oekit/hertz 的 SSE 端点（sse/responder.go、sse/sse.go）已复用本包（ParseCursor/ReplaySince/Cursor 自 v0.51.0 起为 hertz 导出），宿主接入已跑过一轮且判据面未再变，故转 Stable。
+  - pkg: webhook
+    level: Stable
+    since: v0.61.5
+    reason: webhook 签约原语族（收侧验签 + 发侧签名的字段约定单源），v0.38.0 起立包。v0.61.0 首版清单记「无下游消费方」有误——实测消费方 2 个仓（4 处 import；yi-nology/go-git-platform 的 runtime/webhook.go、yi-nology/gopkg 的 eventsrc/service.go），字段约定已在两套宿主里跑通，转 Stable。
+  - pkg: bufiox
+    level: Stable
+    since: v0.61.5
+    reason: 缓冲 I/O 原语。v0.61.0 首版清单记「无下游消费方」有误——实测消费方 1 个仓（1 处 import；yi-nology/go-git-platform 的 adapter/internal/backendutil/logtail.go），已在宿主里跑通，转 Stable。
+
+  # ── Experimental（12 个）：理由必填，升级风险自负 ──
   - pkg: subhub
     level: Experimental
-    since: v0.60.0
-    reason: 快照式订阅表的唯一实现（pii/guardset/eventbus/netguard 共用）。判据面（copy-on-write 发布 / 句柄单调 / 通知在锁外 / 回调 panic 隔离）是并发正确性承诺，但并发数据结构本身仍会改；实测消费方 oekit 侧 argus-service + 跨 org 4 处（guardx/netguard、goagent-kernel）。
-  - pkg: auditchain
-    level: Experimental
-    since: v0.60.0
-    reason: append-only 审计哈希链纯计算内核（canonical 字段序单源 + sha256 链 + verify 首断点即停），v0.49.0 起立包。当前无 pkg 侧下游消费方（实测 0），等待 bianque 接手——先标不承诺兼容，接手后再转 Stable。
+    since: v0.57.0
+    reason: 快照式订阅表的唯一实现（pii/guardset/eventbus/netguard 共用）。判据面（copy-on-write 发布 / 句柄单调 / 通知在锁外 / 回调 panic 隔离）是并发正确性承诺，但并发数据结构本身仍会改。实测消费方 2 个仓（4 处 import；yi-nology/goagent-kernel 的 eventbus/durable.go、guardset/assembly.go、guardset/assembly_subscribe.go 与 oagentkit/guardx 的 netguard/subscribe.go）。
   - pkg: canon
     level: Experimental
-    since: v0.60.0
-    reason: 策略面规范形指纹（canonical→版本哈希 + facet diff），v0.50.0 起立包。当前无下游消费方（实测 0）——「已上架待取货」的件，先标不承诺兼容。
-  - pkg: tarx
-    level: Experimental
-    since: v0.60.0
-    reason: 目录 tar 传输三件套（Scan/Write/Extract + sha256 manifest），v0.42.0 起立包。Zip Slip 穿越条目「跳过并点名、绝不写 root 之外」是对外安全承诺，故不因无消费方而降级其安全语义；但接口面仍在等 jumpserver-exec 切换收口，先标 Experimental。
+    since: v0.61.0
+    reason: 策略面规范形指纹（canonical→版本哈希 + facet diff），v0.50.0 起立包。实测无下游消费方（0 个仓）——「已上架待取货」的件，先标不承诺兼容。
   - pkg: bloomx
     level: Experimental
-    since: v0.60.0
-    reason: 进程内布隆过滤器（Test 返回 false 表示一定不存在），实测无下游消费方（0）——预投放件，先标不承诺兼容。
+    since: v0.61.0
+    reason: 进程内布隆过滤器（Test 返回 false 表示一定不存在），实测无下游消费方（0 个仓）——预投放件，先标不承诺兼容。
   - pkg: strmap
     level: Experimental
-    since: v0.60.0
-    reason: GC 友好的只读字符串 map（键打包 + int32 槽位索引 + maphash 种子），实测无下游消费方（0）——预投放件，先标不承诺兼容。
+    since: v0.61.0
+    reason: GC 友好的只读字符串 map（键打包 + int32 槽位索引 + maphash 种子），实测无下游消费方（0 个仓）——预投放件，先标不承诺兼容。
   - pkg: enumx
     level: Experimental
-    since: v0.60.0
-    reason: 枚举注册表（确定性顺序的 All/Values/解析），实测无下游消费方（0）——预投放件，先标不承诺兼容。
+    since: v0.61.0
+    reason: 枚举注册表（确定性顺序的 All/Values/解析），实测无下游消费方（0 个仓）——预投放件，先标不承诺兼容。
   - pkg: cli
     level: Experimental
-    since: v0.60.0
-    reason: 框架无关子命令分发原语（不读 os.Args、不调 os.Exit），实测消费方 oagentkit 侧 11 处。接口面仍随宿主接入反馈调整（输出流给法、退出码约定），先标 Experimental。
+    since: v0.61.0
+    reason: 框架无关子命令分发原语（不读 os.Args、不调 os.Exit），实测消费方 4 个仓（11 处 import；yi-nology/jumpserver-exec 与 yi-nology/jumpserver-mgmt 各 4 处、yi-nology/argus-service 2 处、yi-nology/jumpserver-kit 1 处）。接口面仍随宿主接入反馈调整（输出流给法、退出码约定），先标 Experimental。
   - pkg: config
     level: Experimental
-    since: v0.60.0
-    reason: 启动期静态配置加载管线（yaml+env 覆盖+必填汇总校验+敏感字段脱敏 dump），实测消费方 oekit 2 处。加载形态随宿主配置源扩展还会变。
+    since: v0.61.0
+    reason: 启动期静态配置加载管线（yaml+env 覆盖+必填汇总校验+敏感字段脱敏 dump），实测消费方 1 个仓（2 处 import；oekit/core）。加载形态随宿主配置源扩展还会变。
   - pkg: pack
     level: Experimental
-    since: v0.60.0
-    reason: 迁移包容器原语（zip + manifest + JSONL 流式读写 + Inspect 体检），实测无下游消费方（0）；格式版本还会随真实迁移场景增补。
+    since: v0.61.0
+    reason: 迁移包容器原语（zip + manifest + JSONL 流式读写 + Inspect 体检），实测消费方 1 个仓（2 处 import；yi-nology/agent-memory 的 operations/portable/portable.go）——v0.61.0 首版清单记「无消费方」有误，本次按实测更正；格式版本还会随真实迁移场景增补，故仍标 Experimental。
   - pkg: resumable
     level: Experimental
-    since: v0.60.0
-    reason: 分片上传/断点续传会话面（CAS 进度 + 合并抢占 + 双源对账 + 孤儿清扫），v0.44.0 起立包。ChunkStore 存储后端接口面待第二个实现验证。
-  - pkg: sse
-    level: Experimental
-    since: v0.60.0
-    reason: 游标回放应答器（订阅先于回放去重 + 心跳注释帧 + 慢消费者断流自愈），v0.49.0 起立包。当前无下游消费方（0），帧协议面还会随宿主接入调整。
-  - pkg: webhook
-    level: Experimental
-    since: v0.60.0
-    reason: webhook 签约原语族（收侧验签 + 发侧签名的字段约定单源），v0.38.0 起立包。实测无下游消费方（0）——预投放件，先标不承诺兼容。
-  - pkg: bufiox
-    level: Experimental
-    since: v0.60.0
-    reason: 缓冲 I/O 原语，实测无下游消费方（0）——预投放件，先标不承诺兼容。
-
-  # ── internal 内部件（Experimental：无对外兼容承诺，登记以保覆盖完整）──
+    since: v0.61.0
+    reason: 分片上传/断点续传会话面（CAS 进度 + 合并抢占 + 双源对账 + 孤儿清扫），v0.44.0 起立包。实测无下游消费方（0 个仓）；ChunkStore 存储后端接口面待第二个实现验证。
   - pkg: internal/logkv
     level: Experimental
-    since: v0.60.0
-    reason: internal 内部件，Go 可见性规则已挡住外部引用，无对外承诺；登记只为「清单覆盖全部生产包」判据不留暗角。
+    since: v0.61.0
+    reason: internal 内部件，Go 可见性规则已挡住外部引用，无对外承诺；实测无外部消费方（0 个仓）；登记只为「清单覆盖全部生产包」判据不留暗角。
   - pkg: internal/singleflight
     level: Experimental
-    since: v0.60.0
-    reason: internal 内部件（singleflight 契约实现），Go 可见性规则已挡住外部引用，无对外承诺；登记只为「清单覆盖全部生产包」判据不留暗角。
+    since: v0.61.0
+    reason: internal 内部件（singleflight 契约实现），Go 可见性规则已挡住外部引用，无对外承诺；实测无外部消费方（0 个仓）；登记只为「清单覆盖全部生产包」判据不留暗角。
   - pkg: cache/cachetest
     level: Experimental
-    since: v0.60.0
-    reason: cache 的契约测试套件（Run 真实时间 + RunWithClock 假时钟确定性 TTL 边界），随场景扩展；是对下游实现方的验收依据但场景集本身只增不减。
+    since: v0.61.0
+    reason: cache 的契约测试套件（Run 真实时间 + RunWithClock 假时钟确定性 TTL 边界），实测消费方 3 个仓（6 处 import；oekit/redisx 3 处、oekit/data 2 处、yi-nology/go-git-platform 1 处）。是对下游实现方的验收依据，但套件随场景扩展、接口面仍在长——测试件不必背兼容承诺，先标 Experimental。

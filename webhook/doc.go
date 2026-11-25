@@ -99,5 +99,5 @@
 // 约定打时间戳与幂等 ID，消费端按 DefaultDeliveryHeader 去重），转发面的
 // 轮询节奏与告警归宿主。
 //
-// 生命周期: Experimental——本包仍会改、删、拆，不承诺任何兼容，升级风险自负；定级理由见 api-lifecycle.yaml，分级规则见 docs/api-compat.md。
+// 生命周期: Stable——同一 minor 线内只允许 additive 变更（新增导出符号 / 新增方法且给零值默认实现 / 新增错误值）；跨 minor 的破坏性变更须先降级并公告（判定规则与流程见 docs/api-compat.md，逐包理由见 api-lifecycle.yaml）。
 package webhook

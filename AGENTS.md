@@ -32,6 +32,9 @@
 - 共享状态 mutex / atomic 保护；包级全局可变状态用 `atomic.Pointer[T]`
 
 ### 生命周期
+- 本节的「生命周期」指**组件资源生命周期**（Close 语义）；包的 **API 生命周期分级**
+  （Stable / Experimental / Deprecated）是另一套机制，判定面以
+  `docs/api-compat.md` + `api-lifecycle.yaml` 为准，两者不要混谈
 - 组件 Close 统一 `Close(ctx) error` 签名 + sync.Once 幂等
 - 应用骨架用 `github.com/oekit/bootstrap/bootstrap.Run`；**userFn 返回即服务结束，
   长驻服务必须 `<-app.Context().Done()` 阻塞**
@@ -46,7 +49,8 @@
 - 探测类 ≤10s、治理类 ≤60s、后台任务 ≤10min；跨区间取值须在包文档声明理由
 
 ### 版本与发版
-- SemVer；0.x 阶段 minor 允许 breaking
+- SemVer；0.x 阶段 minor 允许 breaking——**但 Stable 级包是本仓自加的更严承诺**：
+  同一 minor 线内不得 breaking，跨 minor 要改先降级并公告（见 `docs/api-compat.md`）
 - **main 受分支保护，改动一律走 PR，管理员也不例外**（`enforce_admins=true`，
   直推会被 `GH006 Changes must be made through a pull request` 拒掉）
 - 发版流程：建分支 → 提交 → 开 PR → CI（`Lint & Test / Lint` + `Lint & Test / Test`）
