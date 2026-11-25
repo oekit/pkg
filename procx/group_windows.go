@@ -28,10 +28,10 @@ package procx
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/exec"
-	"syscall"
+
+	"github.com/oekit/pkg/errors"
 )
 
 // windowsGroup 用 Job Object 表达「一棵树」。
@@ -78,12 +78,12 @@ func (g *windowsGroup) attach() error {
 	}
 	job, err := newJobObject()
 	if err != nil {
-		return errors.Join(errors.New("procx: CreateJobObject 失败"), err)
+		return errors.Append(errors.New("procx: CreateJobObject 失败"), err)
 	}
 	ph, err := openProcessHandle(g.cmd.Process.Pid)
 	if err != nil {
 		procCloseHandle.Call(job)
-		return errors.Join(errors.New("procx: OpenProcess 失败"), err)
+		return errors.Append(errors.New("procx: OpenProcess 失败"), err)
 	}
 	defer procCloseHandle.Call(ph)
 	r, _, aerr := procAssignProcessToJobObject.Call(job, ph)
@@ -116,6 +116,6 @@ func (g *windowsGroup) close() {
 		return
 	}
 	_, _, _ = procTerminateJobObject.Call(g.job, windowsTerminateExitCode)
-	_ = procCloseHandle.Call(g.job)
+	_, _, _ = procCloseHandle.Call(g.job)
 	g.job = 0
 }
